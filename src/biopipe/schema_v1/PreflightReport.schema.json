@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "CoreArtifactHashes": {
+      "additionalProperties": false,
+      "description": "Core immutable inputs that preflight must attest.",
+      "properties": {
+        "dataset_manifest": {
+          "title": "Dataset Manifest",
+          "type": "string"
+        },
+        "execution_plan": {
+          "title": "Execution Plan",
+          "type": "string"
+        },
+        "execution_profile": {
+          "title": "Execution Profile",
+          "type": "string"
+        },
+        "pipeline_spec": {
+          "title": "Pipeline Spec",
+          "type": "string"
+        },
+        "software_lock": {
+          "title": "Software Lock",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_manifest",
+        "pipeline_spec",
+        "execution_plan",
+        "software_lock",
+        "execution_profile"
+      ],
+      "title": "CoreArtifactHashes",
+      "type": "object"
+    },
+    "PreflightCheck": {
+      "additionalProperties": false,
+      "description": "One sanitized remote check; it deliberately carries no checked path.",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "PreflightCheck",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/PreflightReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete machine-readable preflight report consumed by the approval gate.",
+  "properties": {
+    "artifact_hashes": {
+      "$ref": "#/$defs/CoreArtifactHashes"
+    },
+    "checked_at": {
+      "format": "date-time",
+      "title": "Checked At",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/PreflightCheck"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Checks",
+      "type": "array"
+    },
+    "execution_host": {
+      "title": "Execution Host",
+      "type": "string"
+    },
+    "input_count": {
+      "maximum": 10000000,
+      "minimum": 1,
+      "title": "Input Count",
+      "type": "integer"
+    },
+    "input_set_hash": {
+      "title": "Input Set Hash",
+      "type": "string"
+    },
+    "preflight_id": {
+      "title": "Preflight Id",
+      "type": "string"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "project_hash": {
+      "title": "Project Hash",
+      "type": "string"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "source_host": {
+      "title": "Source Host",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "degraded"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "checked_at",
+    "profile_id",
+    "source_host",
+    "execution_host",
+    "artifact_hashes",
+    "preflight_id",
+    "project_hash",
+    "input_count",
+    "input_set_hash",
+    "checks"
+  ],
+  "title": "PreflightReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "WorkflowCheck": {
+      "additionalProperties": false,
+      "description": "One bounded command or structural assertion without raw command output.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/WorkflowTestCode"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "remediation": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Remediation",
+          "type": "array"
+        },
+        "return_code": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": -255,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Return Code"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkflowTestStatus"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "code",
+        "message"
+      ],
+      "title": "WorkflowCheck",
+      "type": "object"
+    },
+    "WorkflowTestCode": {
+      "description": "Stable additive codes for M4 validation and synthetic execution.",
+      "enum": [
+        "OK",
+        "PROJECT_INVALID",
+        "FIXTURE_INVALID",
+        "FIXTURE_LAYOUT_MISMATCH",
+        "RUNTIME_DIRECTORY_CONFLICT",
+        "NEXTFLOW_NOT_FOUND",
+        "TOOL_NOT_FOUND",
+        "TOOL_VERSION_CHECK_FAILED",
+        "TOOL_VERSION_MISMATCH",
+        "NF_TEST_NOT_FOUND",
+        "NF_TEST_SUITE_NOT_FOUND",
+        "COMMAND_TIMEOUT",
+        "COMMAND_OUTPUT_LIMIT",
+        "CONFIG_CHECK_FAILED",
+        "LINT_CHECK_FAILED",
+        "SYNTAX_CHECK_FAILED",
+        "STUB_RUN_FAILED",
+        "E2E_RUN_FAILED",
+        "NF_TEST_FAILED",
+        "OUTPUT_ASSERTION_FAILED"
+      ],
+      "title": "WorkflowTestCode",
+      "type": "string"
+    },
+    "WorkflowTestStatus": {
+      "description": "Terminal status of a workflow test or one of its checks.",
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "degraded"
+      ],
+      "title": "WorkflowTestStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/WorkflowTestReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic report for config, syntax, stub, or synthetic E2E checks.",
+  "properties": {
+    "checks": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkflowCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "code": {
+      "$ref": "#/$defs/WorkflowTestCode"
+    },
+    "layout": {
+      "anyOf": [
+        {
+          "enum": [
+            "single_end",
+            "paired_end"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Layout"
+    },
+    "mode": {
+      "enum": [
+        "validate",
+        "stub",
+        "e2e"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "outputs": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Outputs",
+      "type": "array"
+    },
+    "remediation": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Remediation",
+      "type": "array"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/WorkflowTestStatus"
+    },
+    "synthetic_data_only": {
+      "const": true,
+      "default": true,
+      "title": "Synthetic Data Only",
+      "type": "boolean"
+    },
+    "trimming_enabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trimming Enabled"
+    }
+  },
+  "required": [
+    "mode",
+    "status",
+    "code"
+  ],
+  "title": "WorkflowTestReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

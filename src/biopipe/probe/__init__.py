@@ -10,10 +10,12 @@ from biopipe.probe.client import (
     ProbeTransportError,
     RemoteProbeError,
     SubprocessRunner,
+    build_list_tree_request,
     detect_formats,
     list_tree,
     stat_files,
     summarize_fastq,
+    validate_probe_request,
     verify,
 )
 from biopipe.probe.results import (
@@ -57,9 +59,11 @@ __all__ = [
     "StatFilesResult",
     "SubprocessRunner",
     "SummarizeFastqResult",
+    "build_list_tree_request",
     "detect_formats",
     "list_tree",
     "stat_files",
     "summarize_fastq",
+    "validate_probe_request",
     "verify",
 ]

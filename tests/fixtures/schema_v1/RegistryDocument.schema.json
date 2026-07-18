@@ -1,0 +1,246 @@
+{
+  "$defs": {
+    "ComponentContainer": {
+      "additionalProperties": false,
+      "description": "A tagged image plus its immutable registry digest.",
+      "properties": {
+        "digest": {
+          "title": "Digest",
+          "type": "string"
+        },
+        "image": {
+          "title": "Image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "digest"
+      ],
+      "title": "ComponentContainer",
+      "type": "object"
+    },
+    "ComponentDefinition": {
+      "additionalProperties": false,
+      "description": "A reviewed, versioned component that cannot accept arbitrary CLI text.",
+      "properties": {
+        "accepts": {
+          "items": {
+            "enum": [
+              "single_fastq",
+              "paired_fastq",
+              "trimmed_single_fastq",
+              "trimmed_paired_fastq",
+              "fastqc_reports",
+              "fastp_reports",
+              "multiqc_report"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Accepts",
+          "type": "array"
+        },
+        "component_id": {
+          "title": "Component Id",
+          "type": "string"
+        },
+        "component_schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Component Schema Version",
+          "type": "string"
+        },
+        "container": {
+          "$ref": "#/$defs/ComponentContainer"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ControlledIntegerParameter"
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "produces": {
+          "additionalProperties": {
+            "enum": [
+              "single_fastq",
+              "paired_fastq",
+              "trimmed_single_fastq",
+              "trimmed_paired_fastq",
+              "fastqc_reports",
+              "fastp_reports",
+              "multiqc_report"
+            ],
+            "type": "string"
+          },
+          "minProperties": 1,
+          "title": "Produces",
+          "type": "object"
+        },
+        "resources": {
+          "$ref": "#/$defs/ComponentResources"
+        },
+        "template": {
+          "$ref": "#/$defs/ComponentTemplate"
+        },
+        "tool": {
+          "$ref": "#/$defs/ComponentTool"
+        }
+      },
+      "required": [
+        "component_id",
+        "tool",
+        "accepts",
+        "produces",
+        "resources",
+        "container",
+        "template"
+      ],
+      "title": "ComponentDefinition",
+      "type": "object"
+    },
+    "ComponentResources": {
+      "additionalProperties": false,
+      "description": "Reviewed default resource request for a component.",
+      "properties": {
+        "cpus": {
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Cpus",
+          "type": "integer"
+        },
+        "memory_gb": {
+          "maximum": 16384,
+          "minimum": 1,
+          "title": "Memory Gb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpus",
+        "memory_gb"
+      ],
+      "title": "ComponentResources",
+      "type": "object"
+    },
+    "ComponentTemplate": {
+      "additionalProperties": false,
+      "description": "Allowlisted compiler template identity and repository-relative path.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "nextflow": {
+          "title": "Nextflow",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "nextflow"
+      ],
+      "title": "ComponentTemplate",
+      "type": "object"
+    },
+    "ComponentTool": {
+      "additionalProperties": false,
+      "description": "Pinned, reviewed software identity used by one or more components.",
+      "properties": {
+        "license": {
+          "title": "License",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "license"
+      ],
+      "title": "ComponentTool",
+      "type": "object"
+    },
+    "ControlledIntegerParameter": {
+      "additionalProperties": false,
+      "description": "One allowlisted integer mapped to a single reviewed CLI flag.",
+      "properties": {
+        "cli_flag": {
+          "title": "Cli Flag",
+          "type": "string"
+        },
+        "default": {
+          "title": "Default",
+          "type": "integer"
+        },
+        "maximum": {
+          "title": "Maximum",
+          "type": "integer"
+        },
+        "minimum": {
+          "title": "Minimum",
+          "type": "integer"
+        },
+        "type": {
+          "const": "integer",
+          "default": "integer",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cli_flag",
+        "default",
+        "minimum",
+        "maximum"
+      ],
+      "title": "ControlledIntegerParameter",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RegistryDocument.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The complete reviewed component registry loaded from one artifact.",
+  "properties": {
+    "components": {
+      "items": {
+        "$ref": "#/$defs/ComponentDefinition"
+      },
+      "minItems": 1,
+      "title": "Components",
+      "type": "array"
+    },
+    "registry_schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Registry Schema Version",
+      "type": "string"
+    },
+    "registry_version": {
+      "title": "Registry Version",
+      "type": "string"
+    },
+    "released_at": {
+      "format": "date-time",
+      "title": "Released At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "registry_version",
+    "released_at",
+    "components"
+  ],
+  "title": "RegistryDocument",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

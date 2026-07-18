@@ -549,7 +549,10 @@ def test_deployment_bundle_is_deterministic_and_excludes_all_synthetic_reads(
     assert all(
         not item.path.endswith((".fastq", ".fastq.gz", ".bam", ".cram")) for item in first.files
     )
-    assert "assets/samplesheet.csv" in {item.path for item in first.files}
+    contents = {item.path: item.content for item in first.files}
+    assert "assets/samplesheet.csv" in contents
+    repository_license = Path(__file__).resolve().parents[2] / "LICENSE"
+    assert contents["LICENSE"] == repository_license.read_bytes()
 
 
 def test_optional_run_report_reader_returns_none_for_a_bound_missing_path(tmp_path: Path) -> None:

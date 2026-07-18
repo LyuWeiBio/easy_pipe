@@ -1,0 +1,76 @@
+{
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/OverrideDiff.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Auditable summary linking one override to original and resolved manifests.",
+  "properties": {
+    "approved_by": {
+      "title": "Approved By",
+      "type": "string"
+    },
+    "diff_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Diff Version",
+      "type": "string"
+    },
+    "excluded_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Excluded Files",
+      "type": "array"
+    },
+    "manual_pair_count": {
+      "minimum": 0,
+      "title": "Manual Pair Count",
+      "type": "integer"
+    },
+    "original_manifest_sha256": {
+      "title": "Original Manifest Sha256",
+      "type": "string"
+    },
+    "override_sha256": {
+      "title": "Override Sha256",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "renamed_samples": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Renamed Samples",
+      "type": "object"
+    },
+    "resolved_manifest_sha256": {
+      "title": "Resolved Manifest Sha256",
+      "type": "string"
+    },
+    "sample_count_after": {
+      "minimum": 0,
+      "title": "Sample Count After",
+      "type": "integer"
+    },
+    "sample_count_before": {
+      "minimum": 0,
+      "title": "Sample Count Before",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "original_manifest_sha256",
+    "override_sha256",
+    "resolved_manifest_sha256",
+    "reason",
+    "approved_by",
+    "manual_pair_count",
+    "sample_count_before",
+    "sample_count_after"
+  ],
+  "title": "OverrideDiff",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

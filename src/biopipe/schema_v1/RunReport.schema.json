@@ -1,0 +1,103 @@
+{
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RunReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Sanitized durable result of one submission or resume request.",
+  "properties": {
+    "authorization_id": {
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "bundle_hash": {
+      "title": "Bundle Hash",
+      "type": "string"
+    },
+    "command_hash": {
+      "title": "Command Hash",
+      "type": "string"
+    },
+    "deployment_id": {
+      "title": "Deployment Id",
+      "type": "string"
+    },
+    "environment_hash": {
+      "title": "Environment Hash",
+      "type": "string"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "project_hash": {
+      "title": "Project Hash",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "remote_work_dir": {
+      "title": "Remote Work Dir",
+      "type": "string"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "result_dir": {
+      "title": "Result Dir",
+      "type": "string"
+    },
+    "resume_from": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resume From"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "submitted",
+        "running",
+        "succeeded",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "run_id",
+    "project_id",
+    "profile_id",
+    "authorization_id",
+    "deployment_id",
+    "remote_work_dir",
+    "result_dir",
+    "project_hash",
+    "bundle_hash",
+    "submitted_at",
+    "command_hash",
+    "environment_hash"
+  ],
+  "title": "RunReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

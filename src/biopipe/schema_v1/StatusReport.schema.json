@@ -1,0 +1,65 @@
+{
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/StatusReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Path-free persisted response to a safe status query.",
+  "properties": {
+    "checked_at": {
+      "format": "date-time",
+      "title": "Checked At",
+      "type": "string"
+    },
+    "command_hash": {
+      "title": "Command Hash",
+      "type": "string"
+    },
+    "environment_hash": {
+      "title": "Environment Hash",
+      "type": "string"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "return_code": {
+      "anyOf": [
+        {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Return Code"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "submitted",
+        "running",
+        "succeeded",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "status",
+    "command_hash",
+    "environment_hash",
+    "checked_at"
+  ],
+  "title": "StatusReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

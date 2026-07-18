@@ -4,13 +4,19 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
+import time
+import zipfile
 from pathlib import Path
 
 from bioexec.config import AgentConfig
 
 from .conftest import config_json, write_config
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+LICENSE_FILE = REPOSITORY_ROOT / "LICENSE"
 
 
 def _builder_module() -> object:
@@ -34,6 +40,11 @@ def test_zipapp_build_is_byte_reproducible_and_health_is_one_json_line(
     assert (
         hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(second.read_bytes()).digest()
     )
+    with zipfile.ZipFile(first) as archive:
+        license_info = archive.getinfo("LICENSE")
+        assert archive.read("LICENSE") == LICENSE_FILE.read_bytes()
+        assert stat.S_IMODE(license_info.external_attr >> 16) == 0o644
+        assert license_info.date_time == time.gmtime(315_532_800)[:6]
     config_path = tmp_path / ".config" / "bioexec" / "config.json"
     config_path.parent.mkdir(parents=True)
     write_config(config_path, config_json(agent_config))

@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "AuthorizationArtifactHashes": {
+      "additionalProperties": false,
+      "description": "Every artifact bound into a real-data authorization.",
+      "properties": {
+        "dataset_manifest": {
+          "title": "Dataset Manifest",
+          "type": "string"
+        },
+        "execution_plan": {
+          "title": "Execution Plan",
+          "type": "string"
+        },
+        "execution_profile": {
+          "title": "Execution Profile",
+          "type": "string"
+        },
+        "pipeline_spec": {
+          "title": "Pipeline Spec",
+          "type": "string"
+        },
+        "preflight_report": {
+          "title": "Preflight Report",
+          "type": "string"
+        },
+        "software_lock": {
+          "title": "Software Lock",
+          "type": "string"
+        },
+        "test_report": {
+          "title": "Test Report",
+          "type": "string"
+        },
+        "validation_report": {
+          "title": "Validation Report",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_manifest",
+        "pipeline_spec",
+        "execution_plan",
+        "software_lock",
+        "execution_profile",
+        "validation_report",
+        "test_report",
+        "preflight_report"
+      ],
+      "title": "AuthorizationArtifactHashes",
+      "type": "object"
+    },
+    "RunPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit real-data overlay; generated M3 artifacts remain unchanged.",
+      "properties": {
+        "require_approval": {
+          "const": true,
+          "title": "Require Approval",
+          "type": "boolean"
+        },
+        "resume": {
+          "default": false,
+          "title": "Resume",
+          "type": "boolean"
+        },
+        "run_real_data": {
+          "const": true,
+          "title": "Run Real Data",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_real_data",
+        "require_approval"
+      ],
+      "title": "RunPolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RunAuthorization.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable authorization overlay bound to exact reviewed evidence.",
+  "properties": {
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "approved_at": {
+      "format": "date-time",
+      "title": "Approved At",
+      "type": "string"
+    },
+    "artifact_hashes": {
+      "$ref": "#/$defs/AuthorizationArtifactHashes"
+    },
+    "authorization_id": {
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "authorization_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Authorization Version",
+      "type": "string"
+    },
+    "bundle_hash": {
+      "title": "Bundle Hash",
+      "type": "string"
+    },
+    "cli_approved": {
+      "const": true,
+      "title": "Cli Approved",
+      "type": "boolean"
+    },
+    "compatibility_hash": {
+      "title": "Compatibility Hash",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/RunPolicy"
+    },
+    "preflight_checked_at": {
+      "format": "date-time",
+      "title": "Preflight Checked At",
+      "type": "string"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "authorization_id",
+    "project_id",
+    "profile_id",
+    "actor",
+    "approved_at",
+    "cli_approved",
+    "policy",
+    "artifact_hashes",
+    "bundle_hash",
+    "preflight_checked_at",
+    "compatibility_hash"
+  ],
+  "title": "RunAuthorization",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

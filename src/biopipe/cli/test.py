@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import typer
 
-from biopipe.cli.common import emit, fail
+from biopipe.cli.common import ExitCode, dry_run_result, emit, fail
 from biopipe.cli.reports import reportable_project_root, write_project_report_atomic
 from biopipe.cli.validate import (
     _default_fixture_root,
@@ -16,10 +15,16 @@ from biopipe.cli.validate import (
     _unique,
 )
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.report_models import ReportCode, TestCommandReport
 from biopipe.validation import ValidationReport, validate_generated_project
-from biopipe.workflow_test import WorkflowTestReport, WorkflowTestRunner, WorkflowTestStatus
+from biopipe.workflow_test import (
+    WorkflowTestCode,
+    WorkflowTestReport,
+    WorkflowTestRunner,
+    WorkflowTestStatus,
+)
 
-_FAILURE_EXIT_CODE = 2
+_FAILURE_EXIT_CODE = ExitCode.COMMAND_FAILED
 _DEFAULT_TIMEOUT_SECONDS = 300.0
 _DEFAULT_OUTPUT_LIMIT_BYTES = 256 * 1024
 
@@ -56,6 +61,11 @@ def test_command(
         max=16 * 1024 * 1024,
         help="Maximum captured output per external test command.",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Run static checks only; do not execute tools or write a report.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit compact machine-readable JSON."),
 ) -> None:
     """Run stub and pinned-tool E2E checks against synthetic FASTQ fixtures only."""
@@ -71,6 +81,26 @@ def test_command(
         )
 
     static_report = validate_generated_project(project_directory)
+    if dry_run:
+        emit(
+            dry_run_result(
+                "test",
+                "would_test" if static_report.status == "valid" else "blocked",
+                would_write=[
+                    str(project_directory.expanduser().absolute() / "reports" / "test.json")
+                ],
+                details={
+                    "external_commands": ["nextflow -stub-run", "nextflow run", "nf-test"],
+                    "profile": profile,
+                    "static_status": static_report.status,
+                    "synthetic_data_only": True,
+                },
+            ),
+            as_json=as_json,
+        )
+        if static_report.status != "valid":
+            raise typer.Exit(code=_FAILURE_EXIT_CODE)
+        return
     runs: list[WorkflowTestReport] = []
     if static_report.status == "valid":
         try:
@@ -85,10 +115,9 @@ def test_command(
         except BioPipeError as error:
             fail(error)
 
-    result = _test_result(static_report, runs)
-    _persist_if_possible(project_directory, result)
+    result = _persist_if_possible(project_directory, _test_result(static_report, runs))
     emit(result, as_json=as_json)
-    if result["status"] != WorkflowTestStatus.PASSED.value:
+    if result.status != WorkflowTestStatus.PASSED:
         raise typer.Exit(code=_FAILURE_EXIT_CODE)
 
 
@@ -133,34 +162,31 @@ def _run_synthetic_tests(
 def _test_result(
     static_report: ValidationReport,
     runs: list[WorkflowTestReport],
-) -> dict[str, Any]:
+) -> TestCommandReport:
+    code: ReportCode
     if static_report.status != "valid":
         findings = static_report.findings
         status = WorkflowTestStatus.FAILED
-        code = findings[0].code.value if findings else "PROJECT_INVALID"
+        code = findings[0].code if findings else WorkflowTestCode.PROJECT_INVALID
         remediation = _unique(item for finding in findings for item in finding.remediation)
     elif not runs:
         status = WorkflowTestStatus.FAILED
-        code = "PROJECT_INVALID"
+        code = WorkflowTestCode.PROJECT_INVALID
         remediation = ["Retry testing with the complete generated project."]
     else:
         status = _aggregate_status(runs)
         selected = next((report for report in runs if report.status == status), runs[0])
-        code = selected.code.value
+        code = selected.code
         remediation = _unique(item for report in runs for item in report.remediation)
-    return {
-        "report_version": "1.0",
-        "command": "test",
-        "profile": "test",
-        "status": status.value,
-        "code": code,
-        "project_directory": static_report.project_directory,
-        "report_path": "reports/test.json",
-        "synthetic_data_only": True,
-        "static_validation": static_report.to_dict(),
-        "runs": {report.mode: report.model_dump(mode="json") for report in runs},
-        "remediation": remediation,
-    }
+    return TestCommandReport(
+        status=status,
+        code=code,
+        project_directory=static_report.project_directory,
+        report_path="reports/test.json",
+        static_validation=static_report,
+        runs={report.mode: report for report in runs},
+        remediation=tuple(remediation),
+    )
 
 
 def _aggregate_status(runs: list[WorkflowTestReport]) -> WorkflowTestStatus:
@@ -176,14 +202,23 @@ def _aggregate_status(runs: list[WorkflowTestReport]) -> WorkflowTestStatus:
     return WorkflowTestStatus.FAILED
 
 
-def _persist_if_possible(project_directory: Path, result: dict[str, Any]) -> None:
+def _persist_if_possible(
+    project_directory: Path,
+    result: TestCommandReport,
+) -> TestCommandReport:
     if not reportable_project_root(project_directory):
-        result["report_path"] = None
-        return
+        return TestCommandReport.model_validate(
+            {**result.model_dump(mode="json"), "report_path": None}
+        )
     try:
-        write_project_report_atomic(project_directory, "test.json", result)
+        write_project_report_atomic(
+            project_directory,
+            "test.json",
+            result.model_dump(mode="json"),
+        )
     except BioPipeError as error:
         fail(error)
+    return result
 
 
 __all__ = ["test_command"]

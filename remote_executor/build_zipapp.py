@@ -12,7 +12,9 @@ import zipfile
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = PROJECT_DIR.parent
 SOURCE_DIR = PROJECT_DIR / "src" / "bioexec"
+LICENSE_FILE = REPOSITORY_ROOT / "LICENSE"
 DEFAULT_OUTPUT = PROJECT_DIR / "dist" / "bioexec.pyz"
 DEFAULT_EPOCH = 315_532_800
 SHEBANG = b"#!/usr/bin/env python3\n"
@@ -24,6 +26,8 @@ def build(output: Path, source_date_epoch: int) -> Path:
 
     if not SOURCE_DIR.is_dir():
         raise RuntimeError(f"missing source package: {SOURCE_DIR}")
+    if not LICENSE_FILE.is_file():
+        raise RuntimeError(f"missing repository license: {LICENSE_FILE}")
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.tmp")
@@ -34,6 +38,7 @@ def build(output: Path, source_date_epoch: int) -> Path:
             raw_output.write(SHEBANG)
         with zipfile.ZipFile(temporary, mode="a", compression=zipfile.ZIP_STORED) as archive:
             _write_entry(archive, "__main__.py", ARCHIVE_MAIN, timestamp)
+            _write_entry(archive, "LICENSE", LICENSE_FILE.read_bytes(), timestamp)
             for source in sources:
                 archive_name = (Path("bioexec") / source.relative_to(SOURCE_DIR)).as_posix()
                 _write_entry(archive, archive_name, source.read_bytes(), timestamp)

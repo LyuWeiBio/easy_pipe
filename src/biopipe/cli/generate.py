@@ -6,10 +6,11 @@ from pathlib import Path
 
 import typer
 
-from biopipe.cli.common import emit, fail
+from biopipe.cli.common import dry_run_result, emit, fail
 from biopipe.compiler import compile_nextflow_project
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.io import read_model
+from biopipe.manifests import require_valid_manifest
 from biopipe.models import DatasetManifest, ExecutionPlan, PipelineSpec, SoftwareLock
 from biopipe.planner import reconstruct_planned_pipeline
 from biopipe.registry import RegistryValidationError, load_default_registry
@@ -48,6 +49,11 @@ def generate_command(
         dir_okay=False,
         readable=True,
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate inputs without rendering or creating a project directory.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Compile the fixed graph after revalidating every planning artifact."""
@@ -68,6 +74,30 @@ def generate_command(
             software_lock,
             registry=registry,
         )
+        if dry_run:
+            require_valid_manifest(manifest)
+            selected_output = output.expanduser().absolute()
+            if selected_output.exists():
+                raise BioPipeError(
+                    ErrorCode.ARTIFACT_WRITE_FAILED,
+                    "The generated-project destination already exists.",
+                    context={"output_directory": str(selected_output)},
+                    remediation=["Choose a new output directory."],
+                )
+            emit(
+                dry_run_result(
+                    "generate",
+                    "would_generate",
+                    would_write=[str(selected_output)],
+                    details={
+                        "components": list(planned.component_ids),
+                        "output_directory": str(selected_output),
+                        "registry_version": planned.registry_version,
+                    },
+                ),
+                as_json=as_json,
+            )
+            return
         generated = compile_nextflow_project(
             output,
             manifest=manifest,

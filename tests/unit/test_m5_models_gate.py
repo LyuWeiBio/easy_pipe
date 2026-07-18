@@ -370,6 +370,20 @@ def test_gate_rejects_report_or_preflight_hash_tampering(tmp_path: Path) -> None
     assert caught.value.code is ErrorCode.APPROVAL_ARTIFACT_MISMATCH
 
 
+def test_gate_rejects_public_report_that_is_not_persisted_success_evidence(
+    tmp_path: Path,
+) -> None:
+    fixture = _setup(tmp_path)
+    payload = json.loads(fixture.paths.validation_report.read_text(encoding="utf-8"))
+    payload["report_path"] = None
+    _write_json(fixture.paths.validation_report, payload)
+
+    with pytest.raises(BioPipeError) as caught:
+        _authorize(fixture)
+
+    assert caught.value.code is ErrorCode.APPROVAL_ARTIFACT_MISMATCH
+
+
 def test_gate_rejects_duplicate_json_keys_and_symlink_artifacts(tmp_path: Path) -> None:
     fixture = _setup(tmp_path)
     fixture.paths.test_report.write_text('{"status":"passed","status":"passed"}\n')

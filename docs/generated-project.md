@@ -63,11 +63,14 @@ The generated project contains:
 - fixed FastQC, optional fastp, post-trim FastQC, and MultiQC modules;
 - `assets/samplesheet.csv` with execution-host paths;
 - the resolved manifest, spec, execution plan, and software lock;
-- a generated-project README and deterministic audit event.
+- a generated-project README, the repository MIT `LICENSE`, and a deterministic
+  audit event.
 
 Container tags and versions remain in `software.lock.yaml` for provenance, but
 Nextflow process configuration uses immutable `repository@sha256:...`
 references. The Slurm profile is deliberately a site-specific placeholder.
+The license is included in the generation fingerprint, static validation, and
+the deployment allowlist; removing or changing it invalidates the project.
 
 The generated samplesheet references FASTQ files in place. Original filenames
 are never inserted into task scripts: processes stage reads under fixed aliases.
@@ -78,10 +81,11 @@ local review boundary.
 
 ## Execution boundary
 
-M3 generation is not permission to run real data. The spec and execution plan
-remain default-deny, and the README records that task network policy still has
-to be enforced by validation/preflight before a real-data run. M4 adds static,
-stub, and synthetic-data validation; M5 adds execution-host preflight and the
-explicit approval gate. See the [M4 validation and synthetic testing
-guide](m4-validation-testing.md) for the pinned mamba environment, command
-sequence, report contracts, and degraded-mode semantics.
+Generation is not permission to run real data. The spec and execution plan
+remain default-deny, and the generated README records that task network policy
+must be enforced by validation and preflight. The implemented M4 layer provides
+static, stub, and synthetic-data validation; the implemented M5 layer provides
+execution-host preflight and the explicit approval gate. See the
+[M4 validation and synthetic testing guide](m4-validation-testing.md) for the
+pinned environment and report semantics, then the
+[remote deployment guide](remote-deployment.md) for M5.

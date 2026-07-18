@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "ExecutionApproval": {
+      "additionalProperties": false,
+      "description": "Default-deny real-data approval state.",
+      "properties": {
+        "approved": {
+          "default": false,
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "approved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approved At"
+        },
+        "approved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approved By"
+        },
+        "artifact_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Artifact Hashes",
+          "type": "object"
+        },
+        "real_data_execution_required": {
+          "default": true,
+          "title": "Real Data Execution Required",
+          "type": "boolean"
+        }
+      },
+      "title": "ExecutionApproval",
+      "type": "object"
+    },
+    "ExecutionPaths": {
+      "additionalProperties": false,
+      "description": "Source and execution locations, including optional shared-path mapping.",
+      "properties": {
+        "container_cache": {
+          "title": "Container Cache",
+          "type": "string"
+        },
+        "execution_root": {
+          "title": "Execution Root",
+          "type": "string"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "source_root": {
+          "title": "Source Root",
+          "type": "string"
+        },
+        "work_dir": {
+          "title": "Work Dir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_root",
+        "execution_root",
+        "work_dir",
+        "output_dir",
+        "container_cache"
+      ],
+      "title": "ExecutionPaths",
+      "type": "object"
+    },
+    "PathMapping": {
+      "additionalProperties": false,
+      "description": "An explicit shared-filesystem prefix translation.",
+      "properties": {
+        "execution_prefix": {
+          "title": "Execution Prefix",
+          "type": "string"
+        },
+        "source_prefix": {
+          "title": "Source Prefix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_prefix",
+        "execution_prefix"
+      ],
+      "title": "PathMapping",
+      "type": "object"
+    },
+    "PreflightRequirements": {
+      "additionalProperties": false,
+      "description": "Checks that must pass before an execution may be approved.",
+      "properties": {
+        "require_container_runtime": {
+          "default": true,
+          "title": "Require Container Runtime",
+          "type": "boolean"
+        },
+        "require_output_dir_writable": {
+          "default": true,
+          "title": "Require Output Dir Writable",
+          "type": "boolean"
+        },
+        "require_rawdata_not_writable": {
+          "default": false,
+          "title": "Require Rawdata Not Writable",
+          "type": "boolean"
+        },
+        "require_rawdata_readable": {
+          "default": true,
+          "title": "Require Rawdata Readable",
+          "type": "boolean"
+        },
+        "require_workdir_writable": {
+          "default": true,
+          "title": "Require Workdir Writable",
+          "type": "boolean"
+        }
+      },
+      "title": "PreflightRequirements",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ExecutionPlan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Host, path, preflight, and approval contract for a future run.",
+  "properties": {
+    "approval": {
+      "$ref": "#/$defs/ExecutionApproval"
+    },
+    "execution_host": {
+      "title": "Execution Host",
+      "type": "string"
+    },
+    "executor": {
+      "default": "local",
+      "enum": [
+        "local",
+        "slurm"
+      ],
+      "title": "Executor",
+      "type": "string"
+    },
+    "path_mapping": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PathMapping"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Path Mapping"
+    },
+    "paths": {
+      "$ref": "#/$defs/ExecutionPaths"
+    },
+    "plan_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Plan Version",
+      "type": "string"
+    },
+    "preflight": {
+      "$ref": "#/$defs/PreflightRequirements"
+    },
+    "source_host": {
+      "title": "Source Host",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_host",
+    "execution_host",
+    "paths"
+  ],
+  "title": "ExecutionPlan",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

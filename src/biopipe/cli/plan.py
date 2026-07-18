@@ -10,7 +10,7 @@ import typer
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from biopipe.cli.common import emit, fail, validation_error
+from biopipe.cli.common import dry_run_result, emit, fail, validation_error
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.io import read_model
 from biopipe.manifests import ManifestArtifactStore
@@ -71,6 +71,11 @@ def plan_command(
     container_cache: str | None = typer.Option(None, "--container-cache"),
     max_cpus: int = typer.Option(4, "--max-cpus", min=1, max=1_024),
     max_memory_gb: int = typer.Option(16, "--max-memory-gb", min=1, max=16_384),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate and plan in memory without creating artifacts.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Plan the only supported M3 target and create immutable review artifacts."""
@@ -104,6 +109,29 @@ def plan_command(
         )
         registry = load_default_registry()
         planned = plan_fastq_qc(manifest, options, registry)
+        if dry_run:
+            destination = output.expanduser().absolute()
+            artifacts = {
+                "dataset_manifest": str(destination.parent / _RESOLVED_MANIFEST_NAME),
+                "execution_plan": str(destination.parent / _EXECUTION_PLAN_NAME),
+                "pipeline_spec": str(destination),
+                "software_lock": str(destination.parent / _SOFTWARE_LOCK_NAME),
+            }
+            emit(
+                dry_run_result(
+                    "plan",
+                    "would_plan",
+                    would_write=list(artifacts.values()),
+                    details={
+                        "artifacts": artifacts,
+                        "components": list(planned.component_ids),
+                        "goal": "fastq-qc",
+                        "registry_version": planned.registry_version,
+                    },
+                ),
+                as_json=as_json,
+            )
+            return
         paths = _create_plan_bundle(
             output=output,
             manifest_path=manifest_path,

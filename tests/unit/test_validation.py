@@ -149,6 +149,15 @@ def test_tampered_template_is_detected_by_content_and_audit_hash(tmp_path: Path)
     assert FindingCode.GENERATED_HASH_MISMATCH in codes
 
 
+def test_tampered_license_is_detected_by_content_and_audit_hash(tmp_path: Path) -> None:
+    project, _output_target = _generate(tmp_path)
+    (project / "LICENSE").write_text("not the repository license\n", encoding="utf-8")
+
+    codes = _codes(project)
+
+    assert FindingCode.GENERATED_HASH_MISMATCH in codes
+
+
 def test_tampered_lock_is_detected_against_exact_default_registry(tmp_path: Path) -> None:
     project, _output_target = _generate(tmp_path)
     lock_path = project / "software.lock.yaml"

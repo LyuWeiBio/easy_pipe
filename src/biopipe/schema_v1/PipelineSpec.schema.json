@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "PipelineAnalysis": {
+      "additionalProperties": false,
+      "description": "The constrained M3 analysis graph.",
+      "properties": {
+        "goal": {
+          "const": "fastq_qc",
+          "default": "fastq_qc",
+          "title": "Goal",
+          "type": "string"
+        },
+        "stages": {
+          "items": {
+            "enum": [
+              "raw_fastqc",
+              "optional_trimming",
+              "post_trim_fastqc",
+              "multiqc"
+            ],
+            "type": "string"
+          },
+          "title": "Stages",
+          "type": "array"
+        }
+      },
+      "title": "PipelineAnalysis",
+      "type": "object"
+    },
+    "PipelineExecution": {
+      "additionalProperties": false,
+      "description": "Bounded workflow execution resources.",
+      "properties": {
+        "container_engine": {
+          "default": "apptainer",
+          "enum": [
+            "apptainer",
+            "docker"
+          ],
+          "title": "Container Engine",
+          "type": "string"
+        },
+        "executor": {
+          "default": "local",
+          "enum": [
+            "local",
+            "slurm"
+          ],
+          "title": "Executor",
+          "type": "string"
+        },
+        "max_cpus": {
+          "default": 1,
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Max Cpus",
+          "type": "integer"
+        },
+        "max_memory_gb": {
+          "default": 4,
+          "maximum": 16384,
+          "minimum": 1,
+          "title": "Max Memory Gb",
+          "type": "integer"
+        },
+        "workflow_engine": {
+          "const": "nextflow",
+          "default": "nextflow",
+          "title": "Workflow Engine",
+          "type": "string"
+        }
+      },
+      "title": "PipelineExecution",
+      "type": "object"
+    },
+    "PipelineInput": {
+      "additionalProperties": false,
+      "description": "Manifest input selected for planning.",
+      "properties": {
+        "dataset_type": {
+          "const": "fastq",
+          "default": "fastq",
+          "title": "Dataset Type",
+          "type": "string"
+        },
+        "layout": {
+          "enum": [
+            "single_end",
+            "paired_end"
+          ],
+          "title": "Layout",
+          "type": "string"
+        },
+        "manifest": {
+          "title": "Manifest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "layout"
+      ],
+      "title": "PipelineInput",
+      "type": "object"
+    },
+    "PipelineParameters": {
+      "additionalProperties": false,
+      "description": "Versioned parameters for the fixed QC graph.",
+      "properties": {
+        "trimming": {
+          "$ref": "#/$defs/TrimmingParameters"
+        }
+      },
+      "title": "PipelineParameters",
+      "type": "object"
+    },
+    "PipelinePaths": {
+      "additionalProperties": false,
+      "description": "Execution paths kept as data rather than shell fragments.",
+      "properties": {
+        "container_cache": {
+          "title": "Container Cache",
+          "type": "string"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "work_dir": {
+          "title": "Work Dir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_dir",
+        "output_dir",
+        "container_cache"
+      ],
+      "title": "PipelinePaths",
+      "type": "object"
+    },
+    "PipelinePolicy": {
+      "additionalProperties": false,
+      "description": "Fail-closed real-data and network policy defaults.",
+      "properties": {
+        "network_access_during_tasks": {
+          "default": false,
+          "title": "Network Access During Tasks",
+          "type": "boolean"
+        },
+        "overwrite_existing_outputs": {
+          "default": false,
+          "title": "Overwrite Existing Outputs",
+          "type": "boolean"
+        },
+        "require_real_data_approval": {
+          "default": true,
+          "title": "Require Real Data Approval",
+          "type": "boolean"
+        },
+        "run_real_data": {
+          "default": false,
+          "title": "Run Real Data",
+          "type": "boolean"
+        }
+      },
+      "title": "PipelinePolicy",
+      "type": "object"
+    },
+    "PipelineProject": {
+      "additionalProperties": false,
+      "description": "Human-readable project identity.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "PipelineProject",
+      "type": "object"
+    },
+    "TrimmingParameters": {
+      "additionalProperties": false,
+      "description": "Controlled fastp parameters; no arbitrary command fragment is accepted.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "minimum_length": {
+          "default": 30,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Minimum Length",
+          "type": "integer"
+        },
+        "tool": {
+          "const": "fastp",
+          "default": "fastp",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "title": "TrimmingParameters",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/PipelineSpec.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic specification for the fixed FASTQ QC goal.",
+  "properties": {
+    "analysis": {
+      "$ref": "#/$defs/PipelineAnalysis"
+    },
+    "execution": {
+      "$ref": "#/$defs/PipelineExecution"
+    },
+    "input": {
+      "$ref": "#/$defs/PipelineInput"
+    },
+    "parameters": {
+      "$ref": "#/$defs/PipelineParameters"
+    },
+    "paths": {
+      "$ref": "#/$defs/PipelinePaths"
+    },
+    "policy": {
+      "$ref": "#/$defs/PipelinePolicy"
+    },
+    "project": {
+      "$ref": "#/$defs/PipelineProject"
+    },
+    "spec_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Spec Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "input",
+    "paths"
+  ],
+  "title": "PipelineSpec",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

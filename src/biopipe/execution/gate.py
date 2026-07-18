@@ -10,10 +10,10 @@ import stat
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, TypeVar
+from typing import Any, TypeVar
 
 import yaml
-from pydantic import BaseModel, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ValidationError
 
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution.models import (
@@ -35,11 +35,9 @@ from biopipe.models import (
     PipelinePolicy,
     PipelineSpec,
     SoftwareLock,
-    StrictModel,
 )
 from biopipe.planner import reconstruct_planned_pipeline
-from biopipe.validation import ValidationReport
-from biopipe.workflow_test import WorkflowTestReport, WorkflowTestStatus
+from biopipe.report_models import TestCommandReport, ValidationCommandReport
 
 _MAX_CORE_BYTES = 16 * 1024 * 1024
 _MAX_REPORT_BYTES = 16 * 1024 * 1024
@@ -115,63 +113,6 @@ _UniqueSafeLoader.add_constructor(
 )
 
 
-class _ValidationCommandReport(StrictModel):
-    report_version: Literal["1.0"]
-    command: Literal["validate"]
-    status: Literal["passed"]
-    code: Literal["OK"]
-    project_directory: str
-    report_path: Literal["reports/validation.json"]
-    synthetic_data_only: Literal[True]
-    static_validation: ValidationReport
-    runtime_validation: WorkflowTestReport
-    remediation: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def require_success(self) -> _ValidationCommandReport:
-        if (
-            self.static_validation.status != "valid"
-            or self.static_validation.findings
-            or self.runtime_validation.mode != "validate"
-            or self.runtime_validation.status != WorkflowTestStatus.PASSED
-        ):
-            raise ValueError("validation evidence is not wholly successful")
-        return self
-
-
-class _TestCommandReport(StrictModel):
-    report_version: Literal["1.0"]
-    command: Literal["test"]
-    profile: Literal["test"]
-    status: Literal["passed"]
-    code: Literal["OK"]
-    project_directory: str
-    report_path: Literal["reports/test.json"]
-    synthetic_data_only: Literal[True]
-    static_validation: ValidationReport
-    runs: dict[str, WorkflowTestReport]
-    remediation: tuple[str, ...] = ()
-
-    @field_validator("runs")
-    @classmethod
-    def require_successful_runs(
-        cls, values: dict[str, WorkflowTestReport]
-    ) -> dict[str, WorkflowTestReport]:
-        if set(values) != {"e2e", "stub"}:
-            raise ValueError("the complete synthetic test profile is required")
-        if any(key != report.mode for key, report in values.items()):
-            raise ValueError("test run keys must match their report modes")
-        if any(report.status != WorkflowTestStatus.PASSED for report in values.values()):
-            raise ValueError("all synthetic test runs must pass")
-        return values
-
-    @model_validator(mode="after")
-    def require_static_success(self) -> _TestCommandReport:
-        if self.static_validation.status != "valid" or self.static_validation.findings:
-            raise ValueError("test evidence requires successful static validation")
-        return self
-
-
 class _Artifact:
     __slots__ = ("digest", "payload")
 
@@ -220,9 +161,17 @@ class ApprovalGate:
         profile = _parse_profile(material["execution_profile"].payload)
         validation = _parse_json_model(
             material["validation_report"].payload,
-            _ValidationCommandReport,
+            ValidationCommandReport,
         )
-        test = _parse_json_model(material["test_report"].payload, _TestCommandReport)
+        test = _parse_json_model(material["test_report"].payload, TestCommandReport)
+        try:
+            validation.require_gate_success()
+            test.require_gate_success()
+        except ValueError as exc:
+            raise _gate_error(
+                ErrorCode.APPROVAL_ARTIFACT_MISMATCH,
+                "report_not_successful",
+            ) from exc
         preflight = _parse_json_model(
             material["preflight_report"].payload,
             PreflightReport,
@@ -388,8 +337,8 @@ class ApprovalGate:
 
     @staticmethod
     def _validate_reports(
-        validation: _ValidationCommandReport,
-        test: _TestCommandReport,
+        validation: ValidationCommandReport,
+        test: TestCommandReport,
         core_hashes: CoreArtifactHashes,
     ) -> None:
         expected = {

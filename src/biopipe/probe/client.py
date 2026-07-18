@@ -173,9 +173,8 @@ class OpenSSHProbeClient:
         """
 
         arguments = self.build_argv(source)
-        _validate_request_scope(source, request)
+        validate_probe_request(source, request)
         request_jsonl = request.model_dump_json(exclude_none=False) + "\n"
-        _validate_outbound_budget(source, request, request_jsonl)
         sensitive_paths = _request_paths(request)
         stdout_limit = _effective_limit(source.probe.max_response_bytes, self._max_stdout_bytes)
         stderr_limit = _effective_limit(source.probe.stderr_limit_bytes, self._max_stderr_bytes)
@@ -395,12 +394,7 @@ class OpenSSHProbeClient:
     ) -> ProbeResponse:
         """Request a bounded metadata-only directory listing."""
 
-        request = ProbeRequest(
-            request_id=request_id or _request_id("list-tree"),
-            operation="list_tree",
-            root=root,
-            policy=_metadata_policy(source),
-        )
+        request = build_list_tree_request(source, root, request_id=request_id)
         return self.invoke(source, request)
 
     def stat_files(
@@ -670,6 +664,38 @@ def _format_policy(source: SourceProfile, *, sample_fastq_records: int) -> Probe
     )
 
 
+def build_list_tree_request(
+    source: SourceProfile,
+    root: str,
+    *,
+    request_id: str | None = None,
+) -> ProbeRequest:
+    """Build the exact first request used by inspection without contacting SSH."""
+
+    try:
+        return ProbeRequest(
+            request_id=request_id or _request_id("list-tree"),
+            operation="list_tree",
+            root=root,
+            policy=_metadata_policy(source),
+        )
+    except ValidationError as exc:
+        raise ProbeClientError(
+            ErrorCode.VALIDATION_FAILED,
+            "The requested inspection root is not a safe absolute POSIX path.",
+            context={"source_id": source.source_id},
+            remediation=["Use SOURCE_ID:/absolute/path below an allowed root."],
+        ) from exc
+
+
+def validate_probe_request(source: SourceProfile, request: ProbeRequest) -> None:
+    """Apply the complete controller-side request checks without transport."""
+
+    _validate_request_scope(source, request)
+    request_jsonl = request.model_dump_json(exclude_none=False) + "\n"
+    _validate_outbound_budget(source, request, request_jsonl)
+
+
 def _validate_outbound_budget(
     source: SourceProfile,
     request: ProbeRequest,
@@ -849,9 +875,11 @@ __all__ = [
     "ProbeTransportError",
     "RemoteProbeError",
     "SubprocessRunner",
+    "build_list_tree_request",
     "detect_formats",
     "list_tree",
     "stat_files",
     "summarize_fastq",
+    "validate_probe_request",
     "verify",
 ]

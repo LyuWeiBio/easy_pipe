@@ -1,0 +1,447 @@
+{
+  "$defs": {
+    "FindingCode": {
+      "description": "Stable, additive codes emitted by the static validator.",
+      "enum": [
+        "VALIDATION_PROJECT_NOT_FOUND",
+        "VALIDATION_PROJECT_NOT_DIRECTORY",
+        "VALIDATION_UNSAFE_PROJECT_ENTRY",
+        "VALIDATION_PROJECT_LIMIT_EXCEEDED",
+        "VALIDATION_REQUIRED_ARTIFACT_MISSING",
+        "VALIDATION_ARTIFACT_UNREADABLE",
+        "VALIDATION_ARTIFACT_MODEL_INVALID",
+        "MANIFEST_INTEGRITY_INVALID",
+        "MANIFEST_NOT_EXECUTABLE",
+        "VALIDATION_CROSS_ARTIFACT_MISMATCH",
+        "REGISTRY_SOFTWARE_LOCK_MISMATCH",
+        "PATH_EXECUTION_OVERLAP",
+        "PATH_OUTPUT_CONFLICT",
+        "APPROVAL_DEFAULT_DENY_INVALID",
+        "TEMPLATE_FILE_SET_MISMATCH",
+        "TEMPLATE_CONTENT_MISMATCH",
+        "TEMPLATE_SAMPLESHEET_MISMATCH",
+        "TEMPLATE_ARTIFACT_HASH_MISMATCH",
+        "CONTAINER_REFERENCE_NOT_DIGEST_ONLY",
+        "CONTAINER_FLOATING_VERSION",
+        "VALIDATION_AUDIT_RECORD_INVALID",
+        "REGISTRY_DEFAULT_INVALID"
+      ],
+      "title": "FindingCode",
+      "type": "string"
+    },
+    "FindingSeverity": {
+      "description": "Severity of a validation finding.",
+      "enum": [
+        "warning",
+        "blocking"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
+    "ValidationFinding": {
+      "additionalProperties": false,
+      "description": "One stable, actionable result from a static validation check.",
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact"
+        },
+        "code": {
+          "$ref": "#/$defs/FindingCode"
+        },
+        "context": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "title": "Context",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "remediation": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Remediation",
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity",
+          "default": "blocking"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "remediation"
+      ],
+      "title": "ValidationFinding",
+      "type": "object"
+    },
+    "ValidationReport": {
+      "additionalProperties": false,
+      "description": "Deterministic report returned by static generated-project validation.",
+      "properties": {
+        "artifact_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Artifact Hashes",
+          "type": "object"
+        },
+        "checked_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Checked Artifacts",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/ValidationFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "output_target_checked": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Target Checked"
+        },
+        "project_directory": {
+          "title": "Project Directory",
+          "type": "string"
+        },
+        "report_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Report Version",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "valid",
+            "invalid"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "validator": {
+          "const": "static-generated-project",
+          "default": "static-generated-project",
+          "title": "Validator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_directory",
+        "status"
+      ],
+      "title": "ValidationReport",
+      "type": "object"
+    },
+    "WorkflowCheck": {
+      "additionalProperties": false,
+      "description": "One bounded command or structural assertion without raw command output.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/WorkflowTestCode"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "remediation": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Remediation",
+          "type": "array"
+        },
+        "return_code": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": -255,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Return Code"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkflowTestStatus"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "code",
+        "message"
+      ],
+      "title": "WorkflowCheck",
+      "type": "object"
+    },
+    "WorkflowTestCode": {
+      "description": "Stable additive codes for M4 validation and synthetic execution.",
+      "enum": [
+        "OK",
+        "PROJECT_INVALID",
+        "FIXTURE_INVALID",
+        "FIXTURE_LAYOUT_MISMATCH",
+        "RUNTIME_DIRECTORY_CONFLICT",
+        "NEXTFLOW_NOT_FOUND",
+        "TOOL_NOT_FOUND",
+        "TOOL_VERSION_CHECK_FAILED",
+        "TOOL_VERSION_MISMATCH",
+        "NF_TEST_NOT_FOUND",
+        "NF_TEST_SUITE_NOT_FOUND",
+        "COMMAND_TIMEOUT",
+        "COMMAND_OUTPUT_LIMIT",
+        "CONFIG_CHECK_FAILED",
+        "LINT_CHECK_FAILED",
+        "SYNTAX_CHECK_FAILED",
+        "STUB_RUN_FAILED",
+        "E2E_RUN_FAILED",
+        "NF_TEST_FAILED",
+        "OUTPUT_ASSERTION_FAILED"
+      ],
+      "title": "WorkflowTestCode",
+      "type": "string"
+    },
+    "WorkflowTestReport": {
+      "additionalProperties": false,
+      "description": "Deterministic report for config, syntax, stub, or synthetic E2E checks.",
+      "properties": {
+        "checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "code": {
+          "$ref": "#/$defs/WorkflowTestCode"
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "enum": [
+                "single_end",
+                "paired_end"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layout"
+        },
+        "mode": {
+          "enum": [
+            "validate",
+            "stub",
+            "e2e"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "outputs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "remediation": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Remediation",
+          "type": "array"
+        },
+        "report_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Report Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkflowTestStatus"
+        },
+        "synthetic_data_only": {
+          "const": true,
+          "default": true,
+          "title": "Synthetic Data Only",
+          "type": "boolean"
+        },
+        "trimming_enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trimming Enabled"
+        }
+      },
+      "required": [
+        "mode",
+        "status",
+        "code"
+      ],
+      "title": "WorkflowTestReport",
+      "type": "object"
+    },
+    "WorkflowTestStatus": {
+      "description": "Terminal status of a workflow test or one of its checks.",
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "degraded"
+      ],
+      "title": "WorkflowTestStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/TestCommandReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete public shape of persisted ``reports/test.json``.",
+  "properties": {
+    "code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FindingCode"
+        },
+        {
+          "$ref": "#/$defs/WorkflowTestCode"
+        }
+      ],
+      "title": "Code"
+    },
+    "command": {
+      "const": "test",
+      "default": "test",
+      "title": "Command",
+      "type": "string"
+    },
+    "profile": {
+      "const": "test",
+      "default": "test",
+      "title": "Profile",
+      "type": "string"
+    },
+    "project_directory": {
+      "title": "Project Directory",
+      "type": "string"
+    },
+    "remediation": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Remediation",
+      "type": "array"
+    },
+    "report_path": {
+      "anyOf": [
+        {
+          "const": "reports/test.json",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Report Path"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "runs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/WorkflowTestReport"
+      },
+      "title": "Runs",
+      "type": "object"
+    },
+    "static_validation": {
+      "$ref": "#/$defs/ValidationReport"
+    },
+    "status": {
+      "$ref": "#/$defs/WorkflowTestStatus"
+    },
+    "synthetic_data_only": {
+      "const": true,
+      "default": true,
+      "title": "Synthetic Data Only",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "status",
+    "code",
+    "project_directory",
+    "report_path",
+    "static_validation",
+    "runs"
+  ],
+  "title": "TestCommandReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}
