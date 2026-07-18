@@ -194,6 +194,7 @@ remote account access to data.
 
 - [Installation and uninstall](docs/installation.md)
 - [Remote Probe and Remote Executor deployment](docs/remote-deployment.md)
+- [Operator-only real-host release acceptance](docs/real-host-acceptance.md)
 - [CLI command reference](docs/cli-reference.md)
 - [Frozen MVP schema v1](docs/schema-v1.md)
 - [DatasetManifest review and overrides](docs/manifest-workflow.md)
