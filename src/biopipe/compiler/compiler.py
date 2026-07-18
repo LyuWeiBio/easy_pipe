@@ -329,6 +329,18 @@ class NextflowCompiler:
             "paired_end": paired,
             "trimming_enabled": trimming,
         }
+        fixture_directory = "paired_end" if paired else "single_end"
+        fixture_sample_id = "synthetic_pe_001" if paired else "synthetic_se_001"
+        fixture_read1 = "synthetic_pe_R1.fastq" if paired else "synthetic_se_R1.fastq"
+        nf_test_context: dict[str, object] = {
+            **common,
+            "expected_task_count": 4 if trimming else 2,
+            "fixture_directory": fixture_directory,
+            "layout_label": "paired-end" if paired else "single-end",
+            "read1_name": fixture_read1,
+            "read2_name": "synthetic_pe_R2.fastq",
+            "sample_id": fixture_sample_id,
+        }
         artifacts: dict[str, bytes] = {
             "main.nf": self._renderer.render("project/main.nf.j2", common),
             "nextflow.config": self._renderer.render(
@@ -353,6 +365,42 @@ class NextflowCompiler:
             "conf/slurm.config": self._renderer.render(
                 "project/conf/slurm.config.j2",
                 {"queue_size": spec.execution.max_cpus},
+            ),
+            "nf-test.config": self._renderer.render(
+                "project/nf-test.config.j2",
+                {},
+            ),
+            "tests/nextflow.config": self._renderer.render(
+                "project/tests/nextflow.config.j2",
+                {},
+            ),
+            "tests/pipeline.nf.test": self._renderer.render(
+                "project/tests/pipeline.nf.test.j2",
+                nf_test_context,
+            ),
+            "tests/fixtures/README.md": self._renderer.render(
+                "project/tests/fixtures/README.md.j2",
+                {},
+            ),
+            "tests/fixtures/single_end/fixture.json": self._renderer.render(
+                "project/tests/fixtures/single_end/fixture.json.j2",
+                {},
+            ),
+            "tests/fixtures/single_end/reads/synthetic_se_R1.fastq": self._renderer.render(
+                "project/tests/fixtures/single_end/reads/synthetic_se_R1.fastq.j2",
+                {},
+            ),
+            "tests/fixtures/paired_end/fixture.json": self._renderer.render(
+                "project/tests/fixtures/paired_end/fixture.json.j2",
+                {},
+            ),
+            "tests/fixtures/paired_end/reads/synthetic_pe_R1.fastq": self._renderer.render(
+                "project/tests/fixtures/paired_end/reads/synthetic_pe_R1.fastq.j2",
+                {},
+            ),
+            "tests/fixtures/paired_end/reads/synthetic_pe_R2.fastq": self._renderer.render(
+                "project/tests/fixtures/paired_end/reads/synthetic_pe_R2.fastq.j2",
+                {},
             ),
             "modules/fastqc/raw.nf": self._renderer.render(
                 _component_template(components["fastqc_raw_v1"]),

@@ -1,0 +1,12 @@
+config {
+    testsDir "tests"
+    workDir System.getenv("BIOPIPE_NF_TEST_WORK_DIR") ?: ".nf-test"
+    configFile "tests/nextflow.config"
+    profile "local"
+    withTrace true
+    autoSort true
+    options "-stub-run"
+    requires (
+        "nf-test": "0.9.5"
+    )
+}

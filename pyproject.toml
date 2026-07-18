@@ -48,6 +48,10 @@ where = ["src"]
 "biopipe.compiler" = [
   "_templates/project/*.j2",
   "_templates/project/conf/*.j2",
+  "_templates/project/tests/*.j2",
+  "_templates/project/tests/fixtures/*.j2",
+  "_templates/project/tests/fixtures/*/*.j2",
+  "_templates/project/tests/fixtures/*/reads/*.j2",
   "_templates/components/*/*.j2",
 ]
 "biopipe.registry" = ["data/*.yaml"]

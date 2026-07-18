@@ -1,13 +1,13 @@
 process FASTP {
-    tag "${meta.id}:${meta.lane}:${meta.chunk}"
+    tag { "${meta.id}:${meta.lane}:${meta.chunk}" }
     label 'fastp'
-    publishDir "${params.output_dir}/fastp/${meta.id}/${meta.lane}/${meta.chunk}", mode: 'copy', overwrite: false
+    publishDir { "${params.output_dir}/fastp/${meta.id}/${meta.lane}/${meta.chunk}" }, mode: 'copy', overwrite: false
 
     input:
 {% if paired_end %}
-    tuple val(meta), path(read1, name: "${meta.read1_stage}"), path(read2, name: "${meta.read2_stage}")
+    tuple val(meta), path("${meta.read1_stage}"), path("${meta.read2_stage}")
 {% else %}
-    tuple val(meta), path(read1, name: "${meta.read1_stage}")
+    tuple val(meta), path("${meta.read1_stage}")
 {% endif %}
 
     output:
@@ -16,8 +16,8 @@ process FASTP {
 {% else %}
     tuple val(meta), path('*.trimmed.fastq.gz', arity: '1'), emit: reads
 {% endif %}
-    path('*.fastp.json', arity: '1'), emit: json
-    path('*.fastp.html', arity: '1'), emit: html
+    path '*.fastp.json', arity: '1', emit: json
+    path '*.fastp.html', arity: '1', emit: html
 
     script:
     def prefix = "${meta.id}_${meta.lane}_${meta.chunk}"
@@ -25,9 +25,9 @@ process FASTP {
     fastp \\
         --thread ${task.cpus} \\
         --length_required {{ minimum_length }} \\
-        --in1 "${read1}" \\
+        --in1 "${meta.read1_stage}" \\
 {% if paired_end %}
-        --in2 "${read2}" \\
+        --in2 "${meta.read2_stage}" \\
         --out1 "${prefix}.R1.trimmed.fastq.gz" \\
         --out2 "${prefix}.R2.trimmed.fastq.gz" \\
 {% else %}
@@ -35,5 +35,18 @@ process FASTP {
 {% endif %}
         --json "${prefix}.fastp.json" \\
         --html "${prefix}.fastp.html"
+    """
+
+    stub:
+    def stubPrefix = "${meta.id}_${meta.lane}_${meta.chunk}"
+    """
+{% if paired_end %}
+    printf 'stub trimmed R1\n' > "${stubPrefix}.R1.trimmed.fastq.gz"
+    printf 'stub trimmed R2\n' > "${stubPrefix}.R2.trimmed.fastq.gz"
+{% else %}
+    printf 'stub trimmed read\n' > "${stubPrefix}.trimmed.fastq.gz"
+{% endif %}
+    printf '{}\n' > "${stubPrefix}.fastp.json"
+    printf '<html><body>stub fastp</body></html>\n' > "${stubPrefix}.fastp.html"
     """
 }

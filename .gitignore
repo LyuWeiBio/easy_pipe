@@ -10,3 +10,8 @@ __pycache__/
 build/
 dist/
 htmlcov/
+.nextflow/
+.nextflow.log*
+.nf-test/
+.nf-test.log
+/null/
