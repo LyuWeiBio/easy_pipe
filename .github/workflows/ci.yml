@@ -30,7 +30,12 @@ jobs:
             exit 1
           fi
       - name: Ruff format
-        run: ruff format --check .
+        run: |
+          if ! ruff format --check .; then
+            ruff format .
+            git diff -- .
+            exit 1
+          fi
       - name: Mypy
         run: mypy src
       - name: Tests
