@@ -60,12 +60,24 @@ workflow FASTQ_QC {
 
     FASTQC_RAW(reads_ch)
     raw_fastqc_reports = FASTQC_RAW.out.zip
-        .flatMap { meta, reports -> reports instanceof List ? reports : [reports] }
+        .flatMap { item ->
+            def reportPaths = item[1]
+            if (reportPaths instanceof List) {
+                return reportPaths
+            }
+            return [reportPaths]
+        }
 {% if trimming_enabled %}
     FASTP(reads_ch)
     FASTQC_POST_TRIM(FASTP.out.reads)
     trimmed_fastqc_reports = FASTQC_POST_TRIM.out.zip
-        .flatMap { meta, reports -> reports instanceof List ? reports : [reports] }
+        .flatMap { item ->
+            def reportPaths = item[1]
+            if (reportPaths instanceof List) {
+                return reportPaths
+            }
+            return [reportPaths]
+        }
     multiqc_inputs = raw_fastqc_reports
         .mix(FASTP.out.json)
         .mix(trimmed_fastqc_reports)
@@ -77,6 +89,6 @@ workflow FASTQ_QC {
 }
 
 workflow {
-    samplesheet_ch = Channel.fromPath(params.samplesheet, checkIfExists: true)
+    samplesheet_ch = channel.fromPath(params.samplesheet, checkIfExists: true)
     FASTQ_QC(samplesheet_ch)
 }

@@ -13,9 +13,19 @@ process MULTIQC {
     script:
     """
     multiqc \\
+        --no-version-check \\
         --force \\
-        --filename multiqc_report.html \\
+        --filename multiqc.html \\
         --outdir . \\
         reports
+
+    mv multiqc.html multiqc_report.html
+    """
+
+    stub:
+    """
+    printf '<html><body>stub MultiQC</body></html>\n' > multiqc_report.html
+    mkdir multiqc_data
+    printf '{}\n' > multiqc_data/multiqc_general_stats.txt
     """
 }

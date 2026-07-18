@@ -12,6 +12,8 @@ from biopipe.cli.inspect import inspect_command
 from biopipe.cli.manifest import manifest_app
 from biopipe.cli.plan import plan_command
 from biopipe.cli.source import source_app
+from biopipe.cli.test import test_command
+from biopipe.cli.validate import validate_command
 
 app = typer.Typer(
     name="biopipe",
@@ -26,6 +28,10 @@ app.command("inspect", help="Inspect Source Host metadata or build an M2 FASTQ m
 )
 app.command("plan", help="Create the fixed FASTQ-QC planning artifacts.")(plan_command)
 app.command("generate", help="Generate a reviewed Nextflow DSL2 project.")(generate_command)
+app.command("validate", help="Validate a generated project without using real raw data.")(
+    validate_command
+)
+app.command("test", help="Run stub and small synthetic-data workflow tests.")(test_command)
 
 
 def _placeholder(command: str, as_json: bool) -> None:
@@ -61,8 +67,6 @@ def _register_placeholder(name: str, help_text: str, milestone: str) -> None:
 
 
 for _name, _help, _milestone in (
-    ("validate", "Validate a generated project", "M4"),
-    ("test", "Test a generated project", "M4"),
     ("preflight", "Check an execution host", "M5"),
     ("run", "Run an explicitly approved project", "M5"),
 ):

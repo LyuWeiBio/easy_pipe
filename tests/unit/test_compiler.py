@@ -144,9 +144,18 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
         "modules/fastqc/post_trim.nf",
         "modules/fastqc/raw.nf",
         "modules/multiqc/main.nf",
+        "nf-test.config",
         "nextflow.config",
         "pipeline.spec.yaml",
         "software.lock.yaml",
+        "tests/fixtures/README.md",
+        "tests/fixtures/paired_end/fixture.json",
+        "tests/fixtures/paired_end/reads/synthetic_pe_R1.fastq",
+        "tests/fixtures/paired_end/reads/synthetic_pe_R2.fastq",
+        "tests/fixtures/single_end/fixture.json",
+        "tests/fixtures/single_end/reads/synthetic_se_R1.fastq",
+        "tests/nextflow.config",
+        "tests/pipeline.nf.test",
     }
     samplesheet_lines = (first / "assets/samplesheet.csv").read_text().splitlines()
     assert samplesheet_lines == [
@@ -158,10 +167,34 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
     main = (first / "main.nf").read_text()
     assert "FASTP(reads_ch)" in main
     assert "FASTQC_POST_TRIM(FASTP.out.reads)" in main
-    assert main.count(".flatMap { meta, reports ->") == 2
+    assert main.count(".flatMap { item ->") == 2
+    assert "samplesheet_ch = channel.fromPath" in main
     assert ".mix(trimmed_fastqc_reports)" in main
     assert ".mix(FASTQC_POST_TRIM.out.zip)" not in main
     assert "path reports" in (first / "modules/multiqc/main.nf").read_text()
+    assert "stub:" in (first / "modules/multiqc/main.nf").read_text()
+    assert "stub:" in (first / "modules/fastp/main.nf").read_text()
+    assert "stub:" in (first / "modules/fastqc/raw.nf").read_text()
+    assert (
+        "path '*.fastp.json', arity: '1', emit: json"
+        in (first / "modules/fastp/main.nf").read_text()
+    )
+    assert "mv multiqc.html multiqc_report.html" in (first / "modules/multiqc/main.nf").read_text()
+    assert "--no-version-check" in (first / "modules/multiqc/main.nf").read_text()
+
+    nf_test_config = (first / "nf-test.config").read_text()
+    assert '"nf-test": "0.9.5"' in nf_test_config
+    assert "BIOPIPE_NF_TEST_WORK_DIR" in nf_test_config
+    assert 'options "-stub-run"' in nf_test_config
+    pipeline_test = (first / "tests/pipeline.nf.test").read_text()
+    assert "synthetic_pe_001" in pipeline_test
+    assert "synthetic_pe_R1.fastq" in pipeline_test
+    assert "synthetic_pe_R2.fastq" in pipeline_test
+    assert "workflow.trace.succeeded().size() == 4" in pipeline_test
+    assert "fastqc_trimmed" in pipeline_test
+    test_config = (first / "tests/nextflow.config").read_text()
+    assert "docker.enabled = false" in test_config
+    assert "apptainer.enabled = false" in test_config
 
     base_config = (first / "conf/base.config").read_text()
     for digest in (
@@ -210,6 +243,12 @@ def test_compile_single_end_without_trimming_omits_unselected_processes(
         .read_text()
         .endswith("sample-A,L001,001,/srv/raw/sample-A_L001_R1_001.fastq.gz,\n")
     )
+    pipeline_test = (tmp_path / "generated/tests/pipeline.nf.test").read_text()
+    assert "synthetic_se_001" in pipeline_test
+    assert "synthetic_se_R1.fastq" in pipeline_test
+    assert "synthetic_pe_R2.fastq" not in pipeline_test
+    assert "workflow.trace.succeeded().size() == 2" in pipeline_test
+    assert "fastqc_trimmed" not in pipeline_test
 
 
 def test_execution_path_mapping_is_applied_to_every_multilane_mate(tmp_path: Path) -> None:
@@ -435,6 +474,15 @@ def test_registry_template_resources_exist_and_match_review_copies() -> None:
         "project/conf/local.config.j2",
         "project/conf/slurm.config.j2",
         "project/README.md.j2",
+        "project/nf-test.config.j2",
+        "project/tests/nextflow.config.j2",
+        "project/tests/pipeline.nf.test.j2",
+        "project/tests/fixtures/README.md.j2",
+        "project/tests/fixtures/single_end/fixture.json.j2",
+        "project/tests/fixtures/single_end/reads/synthetic_se_R1.fastq.j2",
+        "project/tests/fixtures/paired_end/fixture.json.j2",
+        "project/tests/fixtures/paired_end/reads/synthetic_pe_R1.fastq.j2",
+        "project/tests/fixtures/paired_end/reads/synthetic_pe_R2.fastq.j2",
         "components/_shared/fastp.nf.j2",
     ):
         packaged = package_root.joinpath(*relative.split("/"))

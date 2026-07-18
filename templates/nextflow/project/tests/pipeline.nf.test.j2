@@ -1,0 +1,43 @@
+nextflow_pipeline {
+
+    name "Synthetic {{ layout_label }} FASTQ QC stub"
+    script "main.nf"
+
+    test("Runs the fixed graph without real data or containers") {
+
+        when {
+            params {
+                def syntheticRoot = file("$baseDir/tests/fixtures/{{ fixture_directory }}").toPath().toAbsolutePath().normalize()
+                def syntheticRead1 = syntheticRoot.resolve("reads/{{ read1_name }}")
+{% if paired_end %}
+                def syntheticRead2 = syntheticRoot.resolve("reads/{{ read2_name }}")
+{% endif %}
+                def sheet = file("$outputDir/synthetic.samplesheet.csv").toPath()
+                sheet.text = "sample_id,lane,chunk,read1,read2\n{{ sample_id }},L001,001,${syntheticRead1},{% if paired_end %}${syntheticRead2}{% endif %}\n"
+                samplesheet = sheet.toString()
+                source_root = syntheticRoot.toString()
+                output_dir = file("$outputDir/results").toPath().toString()
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert workflow.exitStatus == 0
+            assert workflow.trace.failed().size() == 0
+            assert workflow.trace.succeeded().size() == {{ expected_task_count }}
+            assert file("$outputDir/results/fastqc_raw/{{ sample_id }}/L001/001/{{ sample_id }}_L001_001_raw.read1_fastqc.zip").exists()
+{% if paired_end %}
+            assert file("$outputDir/results/fastqc_raw/{{ sample_id }}/L001/001/{{ sample_id }}_L001_001_raw.read2_fastqc.zip").exists()
+{% endif %}
+{% if trimming_enabled %}
+            assert file("$outputDir/results/fastp/{{ sample_id }}/L001/001/{{ sample_id }}_L001_001.fastp.json").exists()
+            assert file("$outputDir/results/fastqc_trimmed/{{ sample_id }}/L001/001/{{ sample_id }}_L001_001_trimmed.read1_fastqc.zip").exists()
+{% if paired_end %}
+            assert file("$outputDir/results/fastqc_trimmed/{{ sample_id }}/L001/001/{{ sample_id }}_L001_001_trimmed.read2_fastqc.zip").exists()
+{% endif %}
+{% endif %}
+            assert file("$outputDir/results/multiqc/multiqc_report.html").exists()
+            assert file("$outputDir/results/multiqc/multiqc_data").isDirectory()
+        }
+    }
+}
