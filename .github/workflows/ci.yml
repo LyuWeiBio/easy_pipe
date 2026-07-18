@@ -37,6 +37,6 @@ jobs:
             exit 1
           fi
       - name: Mypy
-        run: mypy src
+        run: mypy src remote_probe/src remote_probe/build_zipapp.py
       - name: Tests
-        run: python -m pytest --cov=biopipe --cov-report=term-missing
+        run: python -m pytest --cov=biopipe --cov=bioprobe --cov-report=term-missing

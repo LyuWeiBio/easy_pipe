@@ -45,11 +45,12 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers -ra"
-testpaths = ["tests"]
+testpaths = ["tests", "remote_probe/tests"]
+pythonpath = ["src", "remote_probe/src"]
 
 [tool.coverage.run]
 branch = true
-source = ["biopipe"]
+source = ["biopipe", "bioprobe"]
 
 [tool.coverage.report]
 show_missing = true
@@ -58,25 +59,25 @@ skip_covered = true
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "remote_probe/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/biopipe/cli/app.py" = ["B008"]
+"src/biopipe/cli/*.py" = ["B008"]
 "src/biopipe/errors.py" = ["UP042"]
 "tests/**" = ["S101", "UP017"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["biopipe"]
+known-first-party = ["biopipe", "bioprobe"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
-packages = ["biopipe"]
-mypy_path = "src"
+packages = ["biopipe", "bioprobe"]
+mypy_path = "src:remote_probe/src"
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
