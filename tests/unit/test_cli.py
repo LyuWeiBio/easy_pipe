@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from biopipe.cli import app as exported_app
@@ -147,7 +148,7 @@ def test_every_leaf_command_has_machine_readable_json(
     result = runner.invoke(app, [*command_path, "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "--json" in result.output
+    assert "--json" in unstyle(result.output)
 
 
 @pytest.mark.parametrize(
@@ -161,4 +162,4 @@ def test_every_write_or_remote_command_has_dry_run(
     result = runner.invoke(app, [*command_path, "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "--dry-run" in result.output
+    assert "--dry-run" in unstyle(result.output)
