@@ -102,9 +102,9 @@ def test_run_cli_refuses_missing_real_data_approval_before_reading_project() -> 
 
 
 def test_m5_commands_are_real_help_surfaces_not_placeholders() -> None:
-    root = runner.invoke(app, ["--help"])
-    preflight = runner.invoke(app, ["preflight", "--help"])
-    run = runner.invoke(app, ["run", "--help"])
+    root = runner.invoke(app, ["--help"], terminal_width=160)
+    preflight = runner.invoke(app, ["preflight", "--help"], terminal_width=160)
+    run = runner.invoke(app, ["run", "--help"], terminal_width=160)
 
     assert root.exit_code == preflight.exit_code == run.exit_code == 0
     assert "execution-profile" in root.stdout
