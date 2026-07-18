@@ -1,0 +1,21 @@
+process MULTIQC {
+    tag 'multiqc'
+    label 'multiqc'
+    publishDir "${params.output_dir}/multiqc", mode: 'copy', overwrite: false
+
+    input:
+    path reports, stageAs: 'reports/*', arity: '1..*'
+
+    output:
+    path 'multiqc_report.html', arity: '1', emit: report
+    path 'multiqc_data', arity: '1', emit: data
+
+    script:
+    """
+    multiqc \\
+        --force \\
+        --filename multiqc_report.html \\
+        --outdir . \\
+        reports
+    """
+}

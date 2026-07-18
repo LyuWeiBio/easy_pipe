@@ -7,8 +7,10 @@ import json
 import typer
 
 from biopipe import __version__
+from biopipe.cli.generate import generate_command
 from biopipe.cli.inspect import inspect_command
 from biopipe.cli.manifest import manifest_app
+from biopipe.cli.plan import plan_command
 from biopipe.cli.source import source_app
 
 app = typer.Typer(
@@ -22,6 +24,8 @@ app.add_typer(manifest_app, name="manifest")
 app.command("inspect", help="Inspect Source Host metadata or build an M2 FASTQ manifest.")(
     inspect_command
 )
+app.command("plan", help="Create the fixed FASTQ-QC planning artifacts.")(plan_command)
+app.command("generate", help="Generate a reviewed Nextflow DSL2 project.")(generate_command)
 
 
 def _placeholder(command: str, as_json: bool) -> None:
@@ -57,8 +61,6 @@ def _register_placeholder(name: str, help_text: str, milestone: str) -> None:
 
 
 for _name, _help, _milestone in (
-    ("plan", "Create a constrained pipeline specification", "M3"),
-    ("generate", "Generate a Nextflow project", "M3"),
     ("validate", "Validate a generated project", "M4"),
     ("test", "Test a generated project", "M4"),
     ("preflight", "Check an execution host", "M5"),

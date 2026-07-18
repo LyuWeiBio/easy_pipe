@@ -201,6 +201,7 @@ def test_sanitized_manifest_removes_names_paths_and_free_text() -> None:
     assert [sample.sample_id for sample in sanitized.samples] == ["sample_001", "sample_002"]
     assert all(sample.original_sample_name is None for sample in sanitized.samples)
     assert sanitized.source.root == "/redacted"
+    assert sanitized.privacy.artifact_scope == "sanitized"
     assert sanitized.privacy.filenames_may_contain_identifiers is False
     assert {lane.lane for sample in sanitized.samples for lane in sample.lanes} <= {
         "lane_001",

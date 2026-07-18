@@ -1,0 +1,128 @@
+registry_schema_version: "1.0"
+registry_version: "1.0.0"
+released_at: "2026-07-18T00:00:00Z"
+components:
+  - component_schema_version: "1.0"
+    component_id: fastqc_raw_v1
+    tool:
+      name: fastqc
+      version: "0.12.1"
+      license: GPL-3.0-or-later
+    accepts:
+      - single_fastq
+      - paired_fastq
+    produces:
+      reports: fastqc_reports
+    parameters: {}
+    resources:
+      cpus: 4
+      memory_gb: 4
+    container:
+      image: quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+      digest: sha256:e194048df39c3145d9b4e0a14f4da20b59d59250465b6f2a9cb698445fd45900
+    template:
+      key: fastqc
+      nextflow: templates/components/fastqc/main.nf.j2
+
+  - component_schema_version: "1.0"
+    component_id: fastp_single_v1
+    tool:
+      name: fastp
+      version: "1.3.6"
+      license: MIT
+    accepts:
+      - single_fastq
+    produces:
+      read1: trimmed_single_fastq
+      report_json: fastp_reports
+      report_html: fastp_reports
+    parameters:
+      minimum_length:
+        type: integer
+        cli_flag: --length_required
+        default: 30
+        minimum: 1
+        maximum: 1000
+    resources:
+      cpus: 4
+      memory_gb: 8
+    container:
+      image: quay.io/biocontainers/fastp:1.3.6--h43da1c4_0
+      digest: sha256:cbbe2402b6b6704df470d7d77dcb498eefd5bcd01f4c38be0ec69899e79ac134
+    template:
+      key: fastp_single
+      nextflow: templates/components/fastp_single/main.nf.j2
+
+  - component_schema_version: "1.0"
+    component_id: fastp_paired_v1
+    tool:
+      name: fastp
+      version: "1.3.6"
+      license: MIT
+    accepts:
+      - paired_fastq
+    produces:
+      read1: trimmed_paired_fastq
+      read2: trimmed_paired_fastq
+      report_json: fastp_reports
+      report_html: fastp_reports
+    parameters:
+      minimum_length:
+        type: integer
+        cli_flag: --length_required
+        default: 30
+        minimum: 1
+        maximum: 1000
+    resources:
+      cpus: 4
+      memory_gb: 8
+    container:
+      image: quay.io/biocontainers/fastp:1.3.6--h43da1c4_0
+      digest: sha256:cbbe2402b6b6704df470d7d77dcb498eefd5bcd01f4c38be0ec69899e79ac134
+    template:
+      key: fastp_paired
+      nextflow: templates/components/fastp_paired/main.nf.j2
+
+  - component_schema_version: "1.0"
+    component_id: fastqc_post_trim_v1
+    tool:
+      name: fastqc
+      version: "0.12.1"
+      license: GPL-3.0-or-later
+    accepts:
+      - trimmed_single_fastq
+      - trimmed_paired_fastq
+    produces:
+      reports: fastqc_reports
+    parameters: {}
+    resources:
+      cpus: 4
+      memory_gb: 4
+    container:
+      image: quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+      digest: sha256:e194048df39c3145d9b4e0a14f4da20b59d59250465b6f2a9cb698445fd45900
+    template:
+      key: fastqc_post_trim
+      nextflow: templates/components/fastqc_post_trim/main.nf.j2
+
+  - component_schema_version: "1.0"
+    component_id: multiqc_v1
+    tool:
+      name: multiqc
+      version: "1.35"
+      license: GPL-3.0-or-later
+    accepts:
+      - fastqc_reports
+      - fastp_reports
+    produces:
+      report: multiqc_report
+    parameters: {}
+    resources:
+      cpus: 2
+      memory_gb: 4
+    container:
+      image: quay.io/biocontainers/multiqc:1.35--pyhdfd78af_1
+      digest: sha256:b65e3fe879df27b92334dda0fd987a6e21bdee09a2848551d4f287099a93b7ac
+    template:
+      key: multiqc
+      nextflow: templates/components/multiqc/main.nf.j2

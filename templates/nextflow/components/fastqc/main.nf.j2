@@ -1,0 +1,33 @@
+process {{ process_name }} {
+    tag "${meta.id}:${meta.lane}:${meta.chunk}"
+    label {{ process_label | groovy_quote }}
+    publishDir "${params.output_dir}/{{ result_subdir }}/${meta.id}/${meta.lane}/${meta.chunk}", mode: 'copy', overwrite: false
+
+    input:
+{% if paired_end %}
+    tuple val(meta), path(read1, name: {% if raw_inputs %}"${meta.read1_stage}"{% else %}'read1.fastq.gz'{% endif %}), path(read2, name: {% if raw_inputs %}"${meta.read2_stage}"{% else %}'read2.fastq.gz'{% endif %})
+{% else %}
+    tuple val(meta), path(read1, name: {% if raw_inputs %}"${meta.read1_stage}"{% else %}'read1.fastq.gz'{% endif %})
+{% endif %}
+
+    output:
+    tuple val(meta), path('*_fastqc.zip', arity: '{{ report_arity }}'), emit: zip
+    tuple val(meta), path('*_fastqc.html', arity: '{{ report_arity }}'), emit: html
+
+    script:
+    def prefix = "${meta.id}_${meta.lane}_${meta.chunk}_{{ report_label }}"
+    """
+    fastqc \\
+        --quiet \\
+        --threads ${task.cpus} \\
+        "${read1}"{% if paired_end %} \\
+        "${read2}"{% endif %}
+
+    mv read1_fastqc.zip "${prefix}.read1_fastqc.zip"
+    mv read1_fastqc.html "${prefix}.read1_fastqc.html"
+{% if paired_end %}
+    mv read2_fastqc.zip "${prefix}.read2_fastqc.zip"
+    mv read2_fastqc.html "${prefix}.read2_fastqc.html"
+{% endif %}
+    """
+}

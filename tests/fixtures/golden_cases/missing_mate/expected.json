@@ -181,6 +181,7 @@
       }
     ],
     "privacy": {
+      "artifact_scope": "full",
       "filenames_may_contain_identifiers": true,
       "raw_content_exported": false
     },

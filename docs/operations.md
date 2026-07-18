@@ -1,8 +1,13 @@
-# M2 operations guide
+# M2–M3 operations guide
 
 M2 provides a local controller, a manually installed Remote Probe, fixed
 OpenSSH transport, privacy-safe FASTQ detection, and auditable manifests. It
 does not deploy software automatically and does not run analysis workflows.
+
+M3 can deterministically plan and generate a fixed FASTQ-QC Nextflow project,
+but still does not run it. See the
+[planning and generation guide](generated-project.md) after completing the
+manifest workflow.
 
 ## Build the zipapp
 

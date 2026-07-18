@@ -14,6 +14,10 @@ Version1 = Literal["1.0"]
 Layout = Literal["single_end", "paired_end", "unknown"]
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_PINNED_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+_TAGGED_IMAGE_PATTERN = re.compile(
+    r"^[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+)
 
 
 class StrictModel(BaseModel):
@@ -404,6 +408,7 @@ class ManifestIssue(StrictModel):
 class ManifestPrivacy(StrictModel):
     """Privacy claims attached to the scan artifact."""
 
+    artifact_scope: Literal["full", "sanitized"] = "full"
     filenames_may_contain_identifiers: bool = True
     raw_content_exported: bool = False
 
@@ -413,6 +418,14 @@ class ManifestPrivacy(StrictModel):
         if value:
             raise ValueError("raw_content_exported must remain false")
         return value
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> ManifestPrivacy:
+        if self.artifact_scope == "sanitized" and self.filenames_may_contain_identifiers:
+            raise ValueError(
+                "sanitized manifests must set filenames_may_contain_identifiers to false"
+            )
+        return self
 
 
 class ManifestIntegrity(StrictModel):
@@ -552,7 +565,7 @@ PipelineStage = Literal["raw_fastqc", "optional_trimming", "post_trim_fastqc", "
 
 
 def _default_pipeline_stages() -> list[PipelineStage]:
-    return ["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]
+    return ["raw_fastqc", "multiqc"]
 
 
 class PipelineAnalysis(StrictModel):
@@ -565,9 +578,9 @@ class PipelineAnalysis(StrictModel):
 class TrimmingParameters(StrictModel):
     """Controlled fastp parameters; no arbitrary command fragment is accepted."""
 
-    enabled: bool = True
+    enabled: bool = Field(default=False, strict=True)
     tool: Literal["fastp"] = "fastp"
-    minimum_length: int = Field(default=30, ge=1, le=1_000)
+    minimum_length: int = Field(default=30, ge=1, le=1_000, strict=True)
 
 
 class PipelineParameters(StrictModel):
@@ -626,6 +639,24 @@ class PipelineSpec(StrictModel):
     paths: PipelinePaths
     policy: PipelinePolicy = Field(default_factory=PipelinePolicy)
 
+    @model_validator(mode="after")
+    def validate_fixed_fastq_qc_graph(self) -> PipelineSpec:
+        expected: list[PipelineStage]
+        if self.parameters.trimming.enabled:
+            expected = [
+                "raw_fastqc",
+                "optional_trimming",
+                "post_trim_fastqc",
+                "multiqc",
+            ]
+        else:
+            expected = ["raw_fastqc", "multiqc"]
+        if self.analysis.stages != expected:
+            raise ValueError(
+                "analysis.stages must match the fixed fastq_qc graph selected by trimming.enabled"
+            )
+        return self
+
 
 class LockedComponent(StrictModel):
     """Reviewed tool and immutable container identity."""
@@ -640,11 +671,25 @@ class LockedComponent(StrictModel):
     def validate_text(cls, value: str) -> str:
         return _safe_text(value, "software lock value")
 
+    @field_validator("version")
+    @classmethod
+    def reject_floating_version(cls, value: str) -> str:
+        if value.casefold() == "latest" or not _PINNED_VERSION_PATTERN.fullmatch(value):
+            raise ValueError("software lock versions must be pinned")
+        return value
+
     @field_validator("image")
     @classmethod
     def reject_latest(cls, value: str) -> str:
-        image_without_digest = value.split("@", maxsplit=1)[0]
-        if image_without_digest.endswith(":latest") or ":latest/" in image_without_digest:
+        if "@" in value:
+            raise ValueError("software lock image and digest must be stored separately")
+        if not _TAGGED_IMAGE_PATTERN.fullmatch(value):
+            raise ValueError("software lock images must be safe tagged OCI references")
+        final_segment = value.rsplit("/", maxsplit=1)[-1]
+        if ":" not in final_segment:
+            raise ValueError("software lock images require an explicit versioned tag")
+        tag = final_segment.rsplit(":", maxsplit=1)[-1]
+        if not tag or tag.casefold() == "latest":
             raise ValueError("software lock images must not use the latest tag")
         return value
 
@@ -653,6 +698,8 @@ class LockedComponent(StrictModel):
     def validate_digest(cls, value: str) -> str:
         if not value.startswith("sha256:") or not _SHA256_PATTERN.fullmatch(value[7:]):
             raise ValueError("component digest must be sha256 followed by 64 lowercase hex digits")
+        if value[7:] == "0" * 64:
+            raise ValueError("component digest must not be an all-zero placeholder")
         return value
 
 
@@ -664,12 +711,26 @@ class SoftwareLock(StrictModel):
     resolved_at: datetime
     resolver_version: str
 
+    @field_validator("components")
+    @classmethod
+    def validate_component_names(
+        cls, values: dict[str, LockedComponent]
+    ) -> dict[str, LockedComponent]:
+        for component_name in values:
+            _safe_identifier(component_name, "software lock component name")
+        return values
+
     @field_validator("resolved_at")
     @classmethod
     def require_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("resolved_at must include a timezone")
         return value
+
+    @field_validator("resolver_version")
+    @classmethod
+    def validate_resolver_version(cls, value: str) -> str:
+        return _safe_text(value, "resolver_version")
 
 
 class ExecutionPaths(StrictModel):

@@ -107,6 +107,7 @@ def sanitize_manifest(manifest: DatasetManifest) -> DatasetManifest:
         warnings=[_sanitize_issue(issue) for issue in manifest.warnings],
         errors=[_sanitize_issue(issue) for issue in manifest.errors],
         privacy=ManifestPrivacy(
+            artifact_scope="sanitized",
             filenames_may_contain_identifiers=False,
             raw_content_exported=False,
         ),
