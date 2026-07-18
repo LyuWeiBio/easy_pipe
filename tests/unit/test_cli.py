@@ -11,7 +11,6 @@ from typer.testing import CliRunner
 from biopipe.cli import app as exported_app
 from biopipe.cli.app import app
 
-
 runner = CliRunner()
 
 EXPECTED_COMMANDS = (

@@ -20,7 +20,6 @@ from biopipe.models import (
     SourceProfile,
 )
 
-
 MODEL_TYPES = (
     SourceProfile,
     ProbeRequest,

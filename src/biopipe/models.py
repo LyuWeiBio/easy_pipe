@@ -765,6 +765,7 @@ PUBLIC_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 __all__ = [
+    "PUBLIC_MODELS",
     "AuditEvent",
     "DatasetManifest",
     "ExecutionPlan",
@@ -774,5 +775,4 @@ __all__ = [
     "ProbeResponse",
     "SoftwareLock",
     "SourceProfile",
-    "PUBLIC_MODELS",
 ]
