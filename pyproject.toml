@@ -68,6 +68,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "src/biopipe/errors.py" = ["UP042"]
 "tests/**" = ["S101", "UP017"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["biopipe"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
