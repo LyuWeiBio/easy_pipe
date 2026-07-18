@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from biopipe.cli.app import app
@@ -13,6 +14,7 @@ from biopipe.io import read_model, write_model_atomic
 from biopipe.registry import load_default_registry
 
 runner = CliRunner()
+_HELP_ENV = {"COLUMNS": "160", "FORCE_COLOR": None, "NO_COLOR": "1"}
 
 
 def test_execution_profile_create_and_show_are_create_only(tmp_path: Path) -> None:
@@ -102,12 +104,20 @@ def test_run_cli_refuses_missing_real_data_approval_before_reading_project() -> 
 
 
 def test_m5_commands_are_real_help_surfaces_not_placeholders() -> None:
-    root = runner.invoke(app, ["--help"], terminal_width=160)
-    preflight = runner.invoke(app, ["preflight", "--help"], terminal_width=160)
-    run = runner.invoke(app, ["run", "--help"], terminal_width=160)
+    root = runner.invoke(app, ["--help"], env=_HELP_ENV, terminal_width=160)
+    preflight = runner.invoke(
+        app,
+        ["preflight", "--help"],
+        env=_HELP_ENV,
+        terminal_width=160,
+    )
+    run = runner.invoke(app, ["run", "--help"], env=_HELP_ENV, terminal_width=160)
+    root_help = "".join(unstyle(root.stdout).split())
+    preflight_help = "".join(unstyle(preflight.stdout).split())
+    run_help = "".join(unstyle(run.stdout).split())
 
     assert root.exit_code == preflight.exit_code == run.exit_code == 0
-    assert "execution-profile" in root.stdout
-    assert "--execution-profile" in preflight.stdout
-    assert "--approve-real-data" in run.stdout
-    assert "placeholder" not in (root.stdout + preflight.stdout + run.stdout).casefold()
+    assert "execution-profile" in root_help
+    assert "--execution-profile" in preflight_help
+    assert "--approve-real-data" in run_help
+    assert "placeholder" not in (root_help + preflight_help + run_help).casefold()
