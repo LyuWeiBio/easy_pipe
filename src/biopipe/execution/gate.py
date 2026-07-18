@@ -8,6 +8,7 @@ import os
 import re
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
@@ -121,6 +122,46 @@ class _Artifact:
         self.digest = hashlib.sha256(payload).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class LocalGateEvidence:
+    """Validated in-memory evidence for side-effect-free local run checks."""
+
+    project_id: str
+    profile_id: str
+    manifest: DatasetManifest
+    spec: PipelineSpec
+    plan: ExecutionPlan
+    software_lock: SoftwareLock
+    profile: ExecutionProfile
+    preflight: PreflightReport
+    core_hashes: CoreArtifactHashes
+    artifact_hashes: AuthorizationArtifactHashes
+    preflight_checked_at: datetime
+
+    def validate_approval_time(self, approved_at: datetime) -> None:
+        """Apply the real authorization ordering check without creating authorization."""
+
+        if _utc_now(approved_at) < self.preflight_checked_at:
+            raise _gate_error(ErrorCode.APPROVAL_REQUIRED, "approval_precedes_preflight")
+
+    def validate_resume_compatibility(
+        self,
+        previous: RunAuthorization,
+        *,
+        bundle_hash: str,
+    ) -> None:
+        """Apply the real resume compatibility check to validated local evidence."""
+
+        if not _SHA256.fullmatch(bundle_hash):
+            raise _gate_error(ErrorCode.APPROVAL_ARTIFACT_MISMATCH, "bundle_hash_invalid")
+        if (
+            previous.project_id != self.project_id
+            or previous.profile_id != self.profile_id
+            or previous.compatibility_hash != _compatibility_hash(self.core_hashes, bundle_hash)
+        ):
+            raise _gate_error(ErrorCode.RESUME_INCOMPATIBLE, "authorization_inputs_changed")
+
+
 class ApprovalGate:
     """Bind reviewed artifacts and fresh preflight evidence into one authorization."""
 
@@ -133,6 +174,28 @@ class ApprovalGate:
         previous_authorization: RunAuthorization | None = None,
         now: datetime | None = None,
     ) -> RunAuthorization:
+        """Authorize a run while preserving the stable public return contract."""
+
+        authorization, _evidence = self.authorize_with_evidence(
+            artifacts,
+            request,
+            bundle_hash=bundle_hash,
+            previous_authorization=previous_authorization,
+            now=now,
+        )
+        return authorization
+
+    def authorize_with_evidence(
+        self,
+        artifacts: ApprovalArtifactPaths,
+        request: ApprovalRequest,
+        *,
+        bundle_hash: str,
+        previous_authorization: RunAuthorization | None = None,
+        now: datetime | None = None,
+    ) -> tuple[RunAuthorization, LocalGateEvidence]:
+        """Authorize and retain the already validated evidence for local state binding."""
+
         try:
             artifacts = ApprovalArtifactPaths.model_validate(artifacts.model_dump(mode="python"))
         except (AttributeError, TypeError, ValueError, ValidationError) as exc:
@@ -152,6 +215,59 @@ class ApprovalGate:
         if request.approved_at > current_time + _CLOCK_SKEW:
             raise _gate_error(ErrorCode.APPROVAL_REQUIRED, "approval_time_in_future")
 
+        evidence = self._validate_local_evidence(artifacts, current_time)
+        evidence.validate_approval_time(request.approved_at)
+
+        compatibility_hash = _compatibility_hash(evidence.core_hashes, bundle_hash)
+        authorization_id = _authorization_id(
+            project_id=evidence.project_id,
+            actor=request.actor,
+            approved_at=request.approved_at,
+            policy=request.policy.model_dump(mode="json"),
+            hashes=evidence.artifact_hashes,
+            bundle_hash=bundle_hash,
+        )
+        authorization = RunAuthorization(
+            authorization_id=authorization_id,
+            project_id=evidence.project_id,
+            profile_id=evidence.profile_id,
+            actor=request.actor,
+            approved_at=request.approved_at,
+            cli_approved=True,
+            policy=request.policy,
+            artifact_hashes=evidence.artifact_hashes,
+            bundle_hash=bundle_hash,
+            preflight_checked_at=evidence.preflight_checked_at,
+            compatibility_hash=compatibility_hash,
+        )
+        if request.policy.resume:
+            if previous_authorization is None:
+                raise _gate_error(ErrorCode.RESUME_INCOMPATIBLE, "previous_authorization_missing")
+            assert_resume_compatible(previous_authorization, authorization)
+        return authorization, evidence
+
+    def validate_local_evidence(
+        self,
+        artifacts: ApprovalArtifactPaths,
+        *,
+        now: datetime | None = None,
+    ) -> LocalGateEvidence:
+        """Validate current local gate evidence without authorizing or mutating a run."""
+
+        try:
+            artifacts = ApprovalArtifactPaths.model_validate(artifacts.model_dump(mode="python"))
+        except (AttributeError, TypeError, ValueError, ValidationError) as exc:
+            raise _gate_error(
+                ErrorCode.APPROVAL_ARTIFACT_MISMATCH,
+                "approval_inputs_invalid",
+            ) from exc
+        return self._validate_local_evidence(artifacts, _utc_now(now))
+
+    def _validate_local_evidence(
+        self,
+        artifacts: ApprovalArtifactPaths,
+        current_time: datetime,
+    ) -> LocalGateEvidence:
         self._validate_layout(artifacts)
         material = self._read_material(artifacts)
         manifest = _parse_json_model(material["dataset_manifest"].payload, DatasetManifest)
@@ -194,8 +310,6 @@ class ApprovalGate:
             core_hashes,
             current_time,
         )
-        if request.approved_at < preflight.checked_at:
-            raise _gate_error(ErrorCode.APPROVAL_REQUIRED, "approval_precedes_preflight")
 
         all_hashes = AuthorizationArtifactHashes(
             **core_hashes.model_dump(),
@@ -203,33 +317,19 @@ class ApprovalGate:
             test_report=material["test_report"].digest,
             preflight_report=material["preflight_report"].digest,
         )
-        compatibility_hash = _compatibility_hash(core_hashes, bundle_hash)
-        authorization_id = _authorization_id(
-            project_id=spec.project.name,
-            actor=request.actor,
-            approved_at=request.approved_at,
-            policy=request.policy.model_dump(mode="json"),
-            hashes=all_hashes,
-            bundle_hash=bundle_hash,
-        )
-        authorization = RunAuthorization(
-            authorization_id=authorization_id,
+        return LocalGateEvidence(
             project_id=spec.project.name,
             profile_id=profile.profile_id,
-            actor=request.actor,
-            approved_at=request.approved_at,
-            cli_approved=True,
-            policy=request.policy,
+            manifest=manifest,
+            spec=spec,
+            plan=plan,
+            software_lock=software_lock,
+            profile=profile,
+            preflight=preflight,
+            core_hashes=core_hashes,
             artifact_hashes=all_hashes,
-            bundle_hash=bundle_hash,
             preflight_checked_at=preflight.checked_at,
-            compatibility_hash=compatibility_hash,
         )
-        if request.policy.resume:
-            if previous_authorization is None:
-                raise _gate_error(ErrorCode.RESUME_INCOMPATIBLE, "previous_authorization_missing")
-            assert_resume_compatible(previous_authorization, authorization)
-        return authorization
 
     @staticmethod
     def _validate_layout(artifacts: ApprovalArtifactPaths) -> None:
@@ -642,4 +742,4 @@ def _gate_error(code: ErrorCode, reason: str) -> BioPipeError:
     )
 
 
-__all__ = ["ApprovalGate", "assert_resume_compatible"]
+__all__ = ["ApprovalGate", "LocalGateEvidence", "assert_resume_compatible"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -10,7 +11,16 @@ from pydantic import ValidationError
 
 from biopipe.cli.common import ExitCode, dry_run_result, emit, fail, validation_error
 from biopipe.errors import BioPipeError, ErrorCode
-from biopipe.execution.runner import abandon_pending_run, query_run_status, submit_approved_run
+from biopipe.execution.deploy import hash_frozen_deployment_snapshot
+from biopipe.execution.gate import ApprovalGate
+from biopipe.execution.models import ApprovalArtifactPaths
+from biopipe.execution.runner import (
+    abandon_pending_run,
+    query_run_status,
+    submit_approved_run,
+    validate_local_run_state,
+)
+from biopipe.validation import validate_generated_project
 
 _RUN_ID = re.compile(r"^run-[0-9a-f]{32}$")
 _ACTOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -54,7 +64,10 @@ def run_command(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Preview the mode without reading keys, signing, deploying, or contacting SSH.",
+        help=(
+            "Validate submit/resume local gates and preview the mode without reading keys, "
+            "signing, deploying, or contacting SSH."
+        ),
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit compact machine-readable JSON."),
 ) -> None:
@@ -116,26 +129,42 @@ def run_command(
                 )
                 status = "would_resume" if resume_run_id is not None else "would_submit"
                 report_names = [".preflight-state.json", ".run-state.json", "run.json"]
-            emit(
-                dry_run_result(
-                    "run",
-                    status,
-                    would_write=[
-                        str(project / "audit" / "events.jsonl"),
-                        *(str(project / "reports" / name) for name in report_names),
-                    ],
-                    remote_operations=remote_operations,
-                    details={
-                        "actor_provided": actor is not None,
-                        "approval_required_for_execution": mode in {"submit", "resume"},
-                        "execution_profile": str(execution_profile.expanduser().absolute()),
-                        "mode": mode,
-                        "real_data_approval_provided": approve_real_data,
-                        "run_id": selected_run_id,
-                    },
-                ),
-                as_json=as_json,
+            if mode in {"submit", "resume"}:
+                if actor is None:
+                    raise BioPipeError(
+                        ErrorCode.APPROVAL_REQUIRED,
+                        "An attributable --actor is required to validate submission gates.",
+                    )
+                if not approve_real_data:
+                    raise BioPipeError(
+                        ErrorCode.APPROVAL_REQUIRED,
+                        "Explicit --approve-real-data is required to validate submission gates.",
+                    )
+                _validate_local_submission_gate(
+                    project,
+                    execution_profile,
+                    resume_run_id=resume_run_id,
+                )
+            dry_run_output = dry_run_result(
+                "run",
+                status,
+                would_write=[
+                    str(project / "audit" / "events.jsonl"),
+                    *(str(project / "reports" / name) for name in report_names),
+                ],
+                remote_operations=remote_operations,
+                details={
+                    "actor_provided": actor is not None,
+                    "approval_required_for_execution": mode in {"submit", "resume"},
+                    "execution_profile": str(execution_profile.expanduser().absolute()),
+                    "mode": mode,
+                    "real_data_approval_provided": approve_real_data,
+                    "run_id": selected_run_id,
+                },
             )
+            if mode in {"submit", "resume"}:
+                dry_run_output["local_gate_validation"] = "passed"
+            emit(dry_run_output, as_json=as_json)
             return
         if abandon_pending_run_id is not None:
             reconciliation = abandon_pending_run(
@@ -175,6 +204,48 @@ def run_command(
     emit(run_result, as_json=as_json)
     if run_result.status == "failed":
         raise typer.Exit(code=ExitCode.COMMAND_FAILED)
+
+
+def _validate_local_submission_gate(
+    project: Path,
+    execution_profile: Path,
+    *,
+    resume_run_id: str | None,
+) -> None:
+    validation = validate_generated_project(
+        project,
+        check_output_conflict=resume_run_id is None,
+    )
+    if validation.status != "valid":
+        raise BioPipeError(
+            ErrorCode.DEPLOYMENT_FAILED,
+            "The generated project is not valid for deployment.",
+            context={"finding_codes": [finding.code.value for finding in validation.findings]},
+            remediation=["Regenerate, validate, test, and preflight the project before retrying."],
+        )
+    bundle_hash = hash_frozen_deployment_snapshot(project)
+    approval_time = datetime.now(UTC)
+    evidence = ApprovalGate().validate_local_evidence(
+        ApprovalArtifactPaths(
+            dataset_manifest=project / "dataset.manifest.resolved.json",
+            pipeline_spec=project / "pipeline.spec.yaml",
+            execution_plan=project / "execution.plan.yaml",
+            software_lock=project / "software.lock.yaml",
+            validation_report=project / "reports" / "validation.json",
+            test_report=project / "reports" / "test.json",
+            execution_profile=execution_profile.expanduser().absolute(),
+            preflight_report=project / "reports" / "preflight.json",
+        ),
+        now=approval_time,
+    )
+    evidence.validate_approval_time(approval_time)
+    validate_local_run_state(
+        project,
+        execution_profile,
+        evidence,
+        bundle_hash=bundle_hash,
+        resume_run_id=resume_run_id,
+    )
 
 
 __all__ = ["run_command"]
