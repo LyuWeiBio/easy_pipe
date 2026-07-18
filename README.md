@@ -70,7 +70,8 @@ python -m biopipe --help
 ```
 
 M2 implements source management, metadata/FASTQ inspection, and manifest
-review. Later workflow commands remain explicit placeholders:
+review. M3 adds deterministic planning and Nextflow project generation; later
+validation and execution commands remain explicit placeholders:
 
 ```bash
 biopipe source --help
@@ -83,6 +84,23 @@ biopipe test --help
 biopipe preflight --help
 biopipe run --help
 ```
+
+Create the fixed FASTQ-QC planning bundle and a new generated project:
+
+```bash
+biopipe plan \
+  --manifest projects/run42/dataset.manifest.resolved.json \
+  --goal fastq-qc \
+  --output projects/run42/pipeline.spec.yaml
+
+biopipe generate \
+  --spec projects/run42/pipeline.spec.yaml \
+  --output projects/run42/generated
+```
+
+These commands never run Nextflow or replace existing artifacts. See the
+[M3 planning and generation guide](docs/generated-project.md) for trimming,
+execution paths, immutable containers, and the real-data approval boundary.
 
 The command hierarchy is:
 
