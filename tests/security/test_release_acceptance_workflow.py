@@ -118,7 +118,9 @@ def test_linux_job_uses_exact_lock_for_real_tools_and_sanitized_evidence() -> No
     assert "-m pip check" in installs
     assert "verify_installed_package.py" in installs
 
-    demo = _step(linux, "Run forced real-tool acceptance")["run"]
+    demo_step = _step(linux, "Run forced real-tool acceptance")
+    assert demo_step["env"] == {"BIOPIPE_SYNTHETIC_CI_DIAGNOSTICS": "1"}
+    demo = demo_step["run"]
     assert "BIOPIPE_ACCEPTANCE_RESULT=" in demo
     assert "bash scripts/demo_release_acceptance.sh" in demo
     collect = _step(linux, "Create sanitized acceptance evidence")["run"]

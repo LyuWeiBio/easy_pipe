@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ from biopipe.workflow_test.subprocess_runner import (
 _MAX_PROJECT_ARTIFACT_BYTES = 16 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 300.0
 _DEFAULT_OUTPUT_LIMIT_BYTES = 256 * 1024
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_ABSOLUTE_PATH = re.compile(r"/(?:[A-Za-z0-9._@+-]+/)*[A-Za-z0-9._@+-]+")
 _NO_CONTAINER_CONFIG = """\
 docker.enabled = false
 apptainer.enabled = false
@@ -588,7 +591,34 @@ class WorkflowTestRunner:
                 failure_message,
                 ("Verify the local test runtime and retry with the same generated project.",),
             )
+        if (
+            name == "nf_test"
+            and result.return_code != 0
+            and self._parent_environment.get("BIOPIPE_SYNTHETIC_CI_DIAGNOSTICS") == "1"
+        ):
+            _emit_synthetic_ci_diagnostic(result)
         return _check_from_result(name, result, failure_code, failure_message)
+
+
+def _emit_synthetic_ci_diagnostic(result: CommandResult) -> None:
+    """Emit a bounded path-free diagnostic only for the fixed synthetic CI run."""
+
+    combined = f"{result.stdout}\n{result.stderr}"
+    lines: list[str] = []
+    for raw_line in combined.splitlines():
+        normalized = _ANSI_ESCAPE.sub("", raw_line)
+        normalized = _ABSOLUTE_PATH.sub("<PATH>", normalized)
+        normalized = "".join(
+            character if character.isprintable() else "?" for character in normalized
+        ).strip()
+        if normalized:
+            lines.append(normalized[:300])
+        if len(lines) == 80:
+            break
+    print("BIOPIPE_SYNTHETIC_DIAGNOSTIC_BEGIN", file=sys.stderr)
+    for line in lines:
+        print(line, file=sys.stderr)
+    print("BIOPIPE_SYNTHETIC_DIAGNOSTIC_END", file=sys.stderr)
 
 
 def _load_project(project_directory: str | Path) -> _ProjectContext:

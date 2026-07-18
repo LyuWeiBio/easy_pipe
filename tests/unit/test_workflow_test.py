@@ -597,6 +597,43 @@ def test_nf_test_suite_runs_from_project_with_isolated_work_and_log(tmp_path: Pa
     assert not (project / ".nf-test.log").exists()
 
 
+def test_nf_test_ci_diagnostic_is_opt_in_bounded_and_path_free(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = _generated_project(tmp_path, layout="single_end", trimming=False)
+    private_path = "/srv/private-real-data/sample.fastq"
+    commands = _FakeCommandRunner(
+        result_factory=lambda arguments: CommandResult(
+            argv=arguments,
+            return_code=1 if Path(arguments[0]).name == "nf-test" else 0,
+            stdout=f"FAILED at {private_path}\n" + "x" * 600,
+            stderr="synthetic assertion failed\n",
+        )
+    )
+    runner = WorkflowTestRunner(
+        command_runner=commands,
+        executable_finder=_finder(nf_test=True),
+        parent_environment={
+            "BIOPIPE_SYNTHETIC_CI_DIAGNOSTICS": "1",
+            "PATH": os.defpath,
+        },
+    )
+
+    report = runner.validate(
+        project,
+        fixture_root=FIXTURES / "single_end",
+        runtime_directory=tmp_path / "diagnostic-runtime",
+    )
+
+    captured = capsys.readouterr()
+    assert report.code is WorkflowTestCode.NF_TEST_FAILED
+    assert private_path not in captured.err
+    assert "FAILED at <PATH>" in captured.err
+    assert "BIOPIPE_SYNTHETIC_DIAGNOSTIC_BEGIN" in captured.err
+    assert max(map(len, captured.err.splitlines())) <= 300
+
+
 def test_real_subprocess_runner_uses_shell_false_timeout_and_output_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

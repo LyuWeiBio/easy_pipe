@@ -156,6 +156,8 @@ jobs:
           smoke_artifact "${wheels[0]}" wheel
           smoke_artifact "${sdists[0]}" sdist
       - name: Run forced real-tool acceptance
+        env:
+          BIOPIPE_SYNTHETIC_CI_DIAGNOSTICS: "1"
         run: |
           set -euo pipefail
           umask 077
