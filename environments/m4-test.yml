@@ -1,0 +1,27 @@
+name: easy-pipe-m4
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Controller and deterministic Python validation toolchain.
+  - python=3.12.11
+  - pip=26.1.2
+  - setuptools=83.0.0
+  - jinja2=3.1.6
+  - pydantic=2.13.4
+  - pyyaml=6.0.3
+  - rich=14.3.4
+  - typer=0.27.0
+  - pytest=9.1.1
+  - pytest-cov=7.1.0
+  - mypy=1.20.2
+  - ruff=0.15.22
+  - types-pyyaml=6.0.12.20260518
+
+  # M4 workflow validation and synthetic local E2E tools.
+  - openjdk=23.0.2
+  - nextflow=26.04.6
+  - nf-test=0.9.5
+  - fastqc=0.12.1
+  - fastp=1.3.6
+  - multiqc=1.35

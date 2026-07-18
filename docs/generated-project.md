@@ -82,4 +82,6 @@ M3 generation is not permission to run real data. The spec and execution plan
 remain default-deny, and the README records that task network policy still has
 to be enforced by validation/preflight before a real-data run. M4 adds static,
 stub, and synthetic-data validation; M5 adds execution-host preflight and the
-explicit approval gate.
+explicit approval gate. See the [M4 validation and synthetic testing
+guide](m4-validation-testing.md) for the pinned mamba environment, command
+sequence, report contracts, and degraded-mode semantics.
