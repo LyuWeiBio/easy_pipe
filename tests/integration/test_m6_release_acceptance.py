@@ -170,7 +170,14 @@ class _TrustedExecutionFixture:
 
 def _invoke(arguments: list[str], *, expected: int = 0) -> dict[str, Any]:
     result = _RUNNER.invoke(app, [*arguments, "--json"])
-    assert result.exit_code == expected, result.output
+    failure_output = result.output
+    if os.environ.get("BIOPIPE_SYNTHETIC_CI_DIAGNOSTICS") == "1":
+        diagnostic_start = result.stderr.find("BIOPIPE_SYNTHETIC_DIAGNOSTIC_BEGIN")
+        diagnostic_end = result.stderr.find("BIOPIPE_SYNTHETIC_DIAGNOSTIC_END")
+        if 0 <= diagnostic_start <= diagnostic_end:
+            diagnostic_end += len("BIOPIPE_SYNTHETIC_DIAGNOSTIC_END")
+            failure_output = f"{failure_output}\n{result.stderr[diagnostic_start:diagnostic_end]}"
+    assert result.exit_code == expected, failure_output
     selected = result.stdout if expected == 0 else result.stderr
     payload = json.loads(selected)
     assert isinstance(payload, dict)
