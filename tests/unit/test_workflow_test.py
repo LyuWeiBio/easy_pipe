@@ -353,6 +353,9 @@ def test_validate_uses_only_synthetic_overrides_and_stable_degraded_report(
     )
     snapshot_sheet = tmp_path / "validate-one/syntax/assets/samplesheet.csv"
     assert str(FIXTURES) not in snapshot_sheet.read_text(encoding="utf-8")
+    runtime_config = (tmp_path / "validate-one/syntax/test.config").read_text(encoding="utf-8")
+    assert "executor.cpus = 8" in runtime_config
+    assert "executor.memory = '16 GB'" in runtime_config
     environment = first_commands.calls[0][2]
     assert set(environment) == {
         "JAVA_HOME",

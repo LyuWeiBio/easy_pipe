@@ -9,4 +9,5 @@ wave.enabled = false
 
 process.executor = 'local'
 executor.cpus = {{ max_cpus }}
+executor.memory = {{ (max_memory_gb ~ ' GB') | groovy_quote }}
 executor.queueSize = 1

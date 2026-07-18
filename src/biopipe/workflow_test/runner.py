@@ -54,15 +54,12 @@ charliecloud.enabled = false
 conda.enabled = false
 wave.enabled = false
 """
-_SYNTAX_CONFIG = (
-    _NO_CONTAINER_CONFIG
-    + """\
+_SYNTAX_OBSERVER_CONFIG = """\
 timeline.enabled = false
 report.enabled = false
 trace.enabled = false
 dag.enabled = false
 """
-)
 
 
 class _ProjectValidationError(ValueError):
@@ -221,11 +218,25 @@ class WorkflowTestRunner:
                 manifest=project.manifest,
                 planned=project.planned,
             )
-            syntax_case = _prepare_case(runtime / "syntax", fixture, syntax_only=True)
+            max_cpus = project.planned.spec.execution.max_cpus
+            max_memory_gb = project.planned.spec.execution.max_memory_gb
+            syntax_case = _prepare_case(
+                runtime / "syntax",
+                fixture,
+                max_cpus=max_cpus,
+                max_memory_gb=max_memory_gb,
+                syntax_only=True,
+            )
             run_case = (
                 None
                 if mode == "validate"
-                else _prepare_case(runtime / "run", fixture, syntax_only=False)
+                else _prepare_case(
+                    runtime / "run",
+                    fixture,
+                    max_cpus=max_cpus,
+                    max_memory_gb=max_memory_gb,
+                    syntax_only=False,
+                )
             )
             environment = _restricted_environment(runtime, self._parent_environment)
         except (BioPipeError, OSError, ValueError) as exc:
@@ -756,6 +767,8 @@ def _prepare_case(
     root: Path,
     fixture: SyntheticFastqFixture,
     *,
+    max_cpus: int,
+    max_memory_gb: int,
     syntax_only: bool,
 ) -> Path:
     root.mkdir(mode=0o700)
@@ -773,9 +786,24 @@ def _prepare_case(
     )
     _write_exclusive(
         root / "test.config",
-        _SYNTAX_CONFIG if syntax_only else _NO_CONTAINER_CONFIG,
+        _synthetic_runtime_config(
+            max_cpus=max_cpus,
+            max_memory_gb=max_memory_gb,
+            syntax_only=syntax_only,
+        ),
     )
     return root
+
+
+def _synthetic_runtime_config(
+    *,
+    max_cpus: int,
+    max_memory_gb: int,
+    syntax_only: bool,
+) -> str:
+    resources = f"executor.cpus = {max_cpus}\nexecutor.memory = '{max_memory_gb} GB'\n"
+    observers = _SYNTAX_OBSERVER_CONFIG if syntax_only else ""
+    return f"{_NO_CONTAINER_CONFIG}{resources}{observers}"
 
 
 def _snapshot_read(root: Path, fixture_root: Path, source: Path, payload: bytes) -> None:
