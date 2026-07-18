@@ -49,14 +49,23 @@ offline checksum verification proves byte integrity, not release sign-off.
       local profiles, private state, real reports, real data, or secrets.
 - [ ] `LICENSE` still covers repository-owned source and documentation.
 - [ ] `THIRD_PARTY_NOTICES.md` matches `pyproject.toml`,
-      `environments/m4-test.yml`, and both packaged copies of the component
+      `environments/m4-test.yml`, `environments/locks/direct-dependencies.json`,
+      both platform inventories, and both packaged copies of the component
       registry.
-- [ ] The exact installed environment and its transitive license metadata were
-      inventoried for any redistributed environment.
-- [ ] Every shipped/mirrored container digest was inventoried separately and
-      its notices/source obligations were reviewed.
+- [ ] `python scripts/generate_supply_chain_inventory.py verify` succeeds
+      offline; `SHA256SUMS`, both explicit locks, and both package inventories
+      agree on URLs, builds, channels, hashes, and exact package counts. A
+      `pending` native-runtime status has not been presented as native evidence,
+      and any redistributed installed environment was separately exported and
+      compared with the matching inventory.
+- [ ] `remote-zipapps.json` matches two byte-identical builds, and every
+      shipped/mirrored container digest appears in `containers.json`; exact
+      image verification, notices, and source obligations were independently
+      reviewed before any `pending` or `blocked` status was cleared.
 - [ ] No dependency, container, action, or remote runtime change lacks a
-      provenance and security review.
+      provenance and security review; every external workflow Action is
+      allowlisted, pinned to a reviewed full commit SHA, and annotated with its
+      exact release version.
 
 ## Static quality and regression suite
 
@@ -78,7 +87,10 @@ python -m pytest
       release-acceptance coverage.
 - [ ] Coverage results were reviewed for changed safety-critical paths.
 - [ ] GitHub Actions passes on every configured Python/platform job from the
-      exact candidate commit.
+      exact candidate commit, including full-SHA Action policy, byte-identical
+      double zipapp builds, and separate dependency-resolving wheel and sdist
+      installations that pass `pip check`, version/schema/resource checks, and
+      a minimal `plan` to `generate` smoke test.
 
 ## Reproducible remote artifacts
 

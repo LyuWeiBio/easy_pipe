@@ -1,0 +1,45 @@
+{
+  "classification": {
+    "confidence": 1.0,
+    "dataset_type": "illumina_fastq",
+    "layout": "single_end"
+  },
+  "errors": [],
+  "evidence": [],
+  "integrity": {
+    "manifest_sha256": "9942afca155f538b76ec1897919fb58ed5c901cc7fd53c5ebb1ee7265163ee91"
+  },
+  "manifest_version": "1.0",
+  "observations": {
+    "compression": "unknown",
+    "header_family": "unknown",
+    "likely_quality_encoding": "unknown",
+    "read_length": null
+  },
+  "privacy": {
+    "artifact_scope": "full",
+    "filenames_may_contain_identifiers": false,
+    "raw_content_exported": false
+  },
+  "samples": [
+    {
+      "lanes": [
+        {
+          "chunk": null,
+          "lane": "L001",
+          "read1": "/synthetic/package-install/synthetic_sample_L001_R1.fastq.gz",
+          "read2": null
+        }
+      ],
+      "original_sample_name": "synthetic_sample",
+      "sample_id": "synthetic_sample"
+    }
+  ],
+  "source": {
+    "root": "/synthetic/package-install",
+    "scan_policy": "format_summary",
+    "scanned_at": "2026-01-01T00:00:00Z",
+    "source_id": "package-install-synthetic"
+  },
+  "warnings": []
+}

@@ -1,0 +1,188 @@
+{
+  "artifacts": [
+    {
+      "archive_name": "bioprobe.pyz",
+      "archive_sha256": "e07b4b3d9045173cb2f22d0cf978b3291d523a0548b2fb75ccec2000b544f3b3",
+      "archive_size": 89789,
+      "build_count": 2,
+      "bytes_equal": true,
+      "members": [
+        {
+          "mode": "0644",
+          "name": "__main__.py",
+          "sha256": "5588fb7c4d9b225928f3074823e963f23d98c2291861ca1ddb9527918cb6d0d1",
+          "size": 56
+        },
+        {
+          "mode": "0644",
+          "name": "LICENSE",
+          "sha256": "82c486fd9a885b07ce93eff575f9ba52a30aa7e13b163e26818925df706ada51",
+          "size": 1064
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/__init__.py",
+          "sha256": "d8bbeaa92e4b811a9ab948467d78b506774d07f69ef2d2a26dfe5926be7ccf58",
+          "size": 194
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/__main__.py",
+          "sha256": "d9676b518a64957e44ad43dbaabcf587f5cc0b62dcdd99b4bfe56125ccf39ed3",
+          "size": 134
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/config.py",
+          "sha256": "98907c6d1177300e766ef6cae47e29fbf3334ba201c34a0b50ba6a9c78b3676f",
+          "size": 12564
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/errors.py",
+          "sha256": "84bfcb15b7685494953ad82fb361f6c7e89d40d1ab0da8000b3c8f9c645e8562",
+          "size": 1112
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/fastq.py",
+          "sha256": "36f4d0db5682d6588f1410aaba217da47fa13f91f9c77dde788e076d3c7ccf41",
+          "size": 16052
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/main.py",
+          "sha256": "f15b928b8b9fc4d903e5b84566757dfe47b045f76079a9115e13ad7a63cdb3f5",
+          "size": 3743
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/operations.py",
+          "sha256": "4a31c0f00e7aef40b0faba0b955f995b5fa1bf9f515a1c4a975fc979b1554932",
+          "size": 21605
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/paths.py",
+          "sha256": "059bb6a78686bb68aa79caa24539e7d1a48dd056d854afb29abd0279c13f982f",
+          "size": 18348
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/protocol.py",
+          "sha256": "32f674671138e11aa4c928ab2ee006f0d81efb57a3845ce4f95553d96e5534c2",
+          "size": 11597
+        },
+        {
+          "mode": "0644",
+          "name": "bioprobe/service.py",
+          "sha256": "ab13884ef2ce552bba4203032647555bf09fd45ecdf5836374c617b881dcdbde",
+          "size": 1953
+        }
+      ],
+      "role": "bioprobe",
+      "version": "0.1.0"
+    },
+    {
+      "archive_name": "bioexec.pyz",
+      "archive_sha256": "3553a7dd1dcf42ac8f9cbefd01a4c7bff3ad61f49afdc478ba0b3a8c1cd170e1",
+      "archive_size": 186141,
+      "build_count": 2,
+      "bytes_equal": true,
+      "members": [
+        {
+          "mode": "0644",
+          "name": "__main__.py",
+          "sha256": "034fb5eb7a05e4e0b1d3995fe7ccaa424853f22583196d6df8b32f6d33aa9626",
+          "size": 55
+        },
+        {
+          "mode": "0644",
+          "name": "LICENSE",
+          "sha256": "82c486fd9a885b07ce93eff575f9ba52a30aa7e13b163e26818925df706ada51",
+          "size": 1064
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/__init__.py",
+          "sha256": "5c8d17076b547f0e63e24945c7d4d0c7b0314ee369fd01cabac6cd85a2022216",
+          "size": 194
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/__main__.py",
+          "sha256": "4c306e0696c7d35e1beaddb6c77f0bab8172b83cd66918710c5c04da615d5844",
+          "size": 132
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/commands.py",
+          "sha256": "654b5ff9b3a518ec6cb3de0f9e4fcb52a7d7c7b609d7f2d89b3dc42bfe790ab0",
+          "size": 9022
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/config.py",
+          "sha256": "5f7e3a1f7cd94a9f0aede0e3dba7feda823e4d803cde2fd9e874be182fbe08d4",
+          "size": 24854
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/deployment.py",
+          "sha256": "6a5f507fa44a5305a28c0c06acb63a61bf634c41ccfa5f20305813c7fe477203",
+          "size": 21685
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/errors.py",
+          "sha256": "c4dd10da79943bf27d01c8b6e4025aa556f543532108f743d8520ceedd409e27",
+          "size": 1172
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/main.py",
+          "sha256": "49411a94750a9a512cccde0f0c2d5a9e00700e5f4c39f3634c6c0d91e26e3681",
+          "size": 4482
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/paths.py",
+          "sha256": "20bcf7bea02bfab8e5eaf67ceb99029b0294d944261b6085b146fcf8cf39134b",
+          "size": 18443
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/preflight.py",
+          "sha256": "25f0154501254fce1dcd8bfe164fb8f18b4e0a81b90d8beb85eb68497a7dfa04",
+          "size": 30547
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/protocol.py",
+          "sha256": "d397f7600ce60da721c4ba6449a4a02807fc3b77cc16aef1c5e36b03441309bb",
+          "size": 7916
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/runner.py",
+          "sha256": "24b3ba807318d3381068f8260136569408eeb0b320f7a9135f3addd9fff839e2",
+          "size": 44651
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/state.py",
+          "sha256": "a8df9fb52fc0d0fe0a7737b492806afab38fcde3b656598d56ed013cbb5dab65",
+          "size": 20349
+        }
+      ],
+      "role": "bioexec",
+      "version": "0.1.0"
+    }
+  ],
+  "format_version": "1",
+  "native_remote_host_acceptance": {
+    "reason": "local_reproducible_build_is_not_remote_host_acceptance",
+    "status": "pending"
+  },
+  "source_date_epoch": 315532800
+}

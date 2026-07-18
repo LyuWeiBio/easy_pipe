@@ -32,8 +32,9 @@ The quickest safe evaluation uses only committed synthetic reads. It does not
 need a real SSH server, does not contact a container registry, and must not be
 interpreted as biological QC evidence.
 
-Clone the repository, create the pinned test environment, and install the
-controller from the reviewed checkout:
+Clone the repository, create the test environment from the reviewed,
+human-readable specification, and install the controller from the reviewed
+checkout:
 
 ```bash
 git clone https://github.com/LyuWeiBio/easy_pipe.git
@@ -42,6 +43,21 @@ micromamba create --strict-channel-priority -f environments/m4-test.yml
 micromamba activate easy-pipe-m4
 python -m pip install --no-deps --no-build-isolation -e .
 ```
+
+The YAML pins the intended direct package versions but still asks the solver to
+select platform artifacts. The committed
+[platform locks and supply-chain inventories](environments/locks/README.md)
+bind the corresponding cross-platform solves to exact package URLs, builds,
+channels, and hashes. Verify that bundle fully offline before using it as
+release evidence:
+
+```bash
+python scripts/generate_supply_chain_inventory.py verify
+```
+
+These locks record cross-platform metadata solves. Their native-runtime
+validation remains `pending`; neither the locks nor a successful offline
+integrity check claim that the environments ran on native hosts.
 
 Verify the installed controller and inspect its frozen public schemas:
 
@@ -180,6 +196,7 @@ remote account access to data.
 - [Known limitations](docs/known-limitations.md)
 - [Release evidence workflow and trust boundary](docs/release-evidence.md)
 - [Release checklist](docs/release-checklist.md)
+- [Platform locks and supply-chain inventories](environments/locks/README.md)
 - [Probe protocol](docs/probe-protocol.md)
 - [Architecture decision record](docs/adr/0001-architecture.md)
 
@@ -192,6 +209,7 @@ ruff format --check .
 ruff check .
 mypy src remote_probe/src remote_probe/build_zipapp.py \
   remote_executor/src remote_executor/build_zipapp.py
+python scripts/generate_supply_chain_inventory.py verify
 python -m pytest
 ```
 

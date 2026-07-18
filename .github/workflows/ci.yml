@@ -15,13 +15,17 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install package and development tools
-        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
       - name: Ruff lint
         run: |
           if ! ruff check .; then
@@ -37,32 +41,65 @@ jobs:
             exit 1
           fi
       - name: Mypy
-        run: mypy src remote_probe/src remote_probe/build_zipapp.py remote_executor/src remote_executor/build_zipapp.py
+        run: >-
+          mypy src remote_probe/src remote_probe/build_zipapp.py
+          remote_executor/src remote_executor/build_zipapp.py
+          scripts/generate_supply_chain_inventory.py scripts/verify_installed_package.py
+      - name: Verify committed supply-chain inventory
+        run: python scripts/generate_supply_chain_inventory.py verify
       - name: Reproducible zipapp build smoke
         env:
           SOURCE_DATE_EPOCH: "315532800"
         run: |
-          python remote_probe/build_zipapp.py
-          python remote_executor/build_zipapp.py
-      - name: Wheel install and public-contract smoke
+          zipapp_dir="$(mktemp -d)"
+          python remote_probe/build_zipapp.py --output "$zipapp_dir/bioprobe-a.pyz"
+          python remote_probe/build_zipapp.py --output "$zipapp_dir/bioprobe-b.pyz"
+          cmp "$zipapp_dir/bioprobe-a.pyz" "$zipapp_dir/bioprobe-b.pyz"
+          python remote_executor/build_zipapp.py --output "$zipapp_dir/bioexec-a.pyz"
+          python remote_executor/build_zipapp.py --output "$zipapp_dir/bioexec-b.pyz"
+          cmp "$zipapp_dir/bioexec-a.pyz" "$zipapp_dir/bioexec-b.pyz"
+      - name: Clean wheel and sdist install smoke
+        env:
+          PYTHONPATH: ""
+          PYTHONNOUSERSITE: "1"
         run: |
           release_dir="$(mktemp -d)"
-          mkdir -p "$release_dir/wheels"
-          python -m pip wheel --no-deps \
-            --wheel-dir "$release_dir/wheels" .
-          python -m venv --system-site-packages "$release_dir/venv"
-          "$release_dir/venv/bin/python" -m pip install \
-            --no-index --no-deps "$release_dir"/wheels/easy_pipe-*.whl
-          "$release_dir/venv/bin/biopipe" version --json
-          "$release_dir/venv/bin/biopipe" schema list --json
+          python -m build --wheel --sdist --outdir "$release_dir/dist"
+
+          shopt -s nullglob
+          wheels=("$release_dir"/dist/easy_pipe-*.whl)
+          sdists=("$release_dir"/dist/easy_pipe-*.tar.gz)
+          test "${#wheels[@]}" -eq 1
+          test "${#sdists[@]}" -eq 1
+
+          smoke_artifact() {
+            artifact="$1"
+            label="$2"
+            venv="$release_dir/$label-venv"
+            work_dir="$release_dir/$label-work"
+            python -m venv "$venv"
+            "$venv/bin/python" -m pip install --upgrade pip
+            "$venv/bin/python" -m pip install "$artifact"
+            "$venv/bin/python" -m pip check
+            "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/verify_installed_package.py" \
+              --repository-root "$GITHUB_WORKSPACE" \
+              --sdist "${sdists[0]}" \
+              --fixture "$GITHUB_WORKSPACE/tests/fixtures/package_install/dataset.manifest.json" \
+              --work-dir "$work_dir"
+          }
+
+          smoke_artifact "${wheels[0]}" wheel
+          smoke_artifact "${sdists[0]}" sdist
       - name: Tests
         run: python -m pytest --cov=biopipe --cov=bioprobe --cov=bioexec --cov-report=term-missing
 
   remote-python39:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.9"
           cache: pip
