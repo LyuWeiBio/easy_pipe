@@ -280,7 +280,7 @@ def plan_fastq_qc(
     execution_host = options.execution_host or source_host
     mapping = (
         None
-        if execution_root == manifest.source.root
+        if execution_root == manifest.source.root and execution_host == source_host
         else [
             PathMapping(
                 source_prefix=manifest.source.root,

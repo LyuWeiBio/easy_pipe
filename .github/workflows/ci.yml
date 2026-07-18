@@ -37,6 +37,31 @@ jobs:
             exit 1
           fi
       - name: Mypy
-        run: mypy src remote_probe/src remote_probe/build_zipapp.py
+        run: mypy src remote_probe/src remote_probe/build_zipapp.py remote_executor/src remote_executor/build_zipapp.py
+      - name: Reproducible zipapp build smoke
+        env:
+          SOURCE_DATE_EPOCH: "315532800"
+        run: |
+          python remote_probe/build_zipapp.py
+          python remote_executor/build_zipapp.py
       - name: Tests
-        run: python -m pytest --cov=biopipe --cov=bioprobe --cov-report=term-missing
+        run: python -m pytest --cov=biopipe --cov=bioprobe --cov=bioexec --cov-report=term-missing
+
+  remote-python39:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+          cache: pip
+      - name: Install remote-agent test dependency
+        run: python -m pip install 'pytest>=8,<9'
+      - name: Python 3.9 remote-agent compatibility
+        env:
+          PYTHONPATH: remote_executor/src
+          SOURCE_DATE_EPOCH: "315532800"
+        run: |
+          python -m compileall -q remote_executor/src remote_executor/build_zipapp.py
+          python remote_executor/build_zipapp.py
+          python -m pytest remote_executor/tests

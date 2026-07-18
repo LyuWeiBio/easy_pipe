@@ -293,6 +293,20 @@ def test_planner_selects_paired_fastp_and_emits_explicit_path_mapping() -> None:
     assert planned.execution_plan.path_mapping[0].execution_prefix == "/shared/raw/run42"
 
 
+def test_planner_emits_identity_mapping_for_distinct_hosts_with_shared_paths() -> None:
+    options = _options(trimming=False)
+    options.execution_host = "compute01"
+    options.execution_root = "/srv/raw/run42"
+
+    planned = plan_fastq_qc(_manifest(), options)
+
+    assert planned.execution_plan.source_host == "hpc01"
+    assert planned.execution_plan.execution_host == "compute01"
+    assert planned.execution_plan.path_mapping is not None
+    assert planned.execution_plan.path_mapping[0].source_prefix == "/srv/raw/run42"
+    assert planned.execution_plan.path_mapping[0].execution_prefix == "/srv/raw/run42"
+
+
 def test_planner_no_trimming_has_no_fastp_or_post_trim_stage() -> None:
     planned = plan_fastq_qc(_manifest(), _options(trimming=False))
 

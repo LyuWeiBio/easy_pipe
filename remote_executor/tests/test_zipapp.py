@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from bioexec.config import AgentConfig
+
+from .conftest import config_json, write_config
+
+
+def _builder_module() -> object:
+    path = Path(__file__).parents[1] / "build_zipapp.py"
+    spec = importlib.util.spec_from_file_location("bioexec_build_zipapp", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_zipapp_build_is_byte_reproducible_and_health_is_one_json_line(
+    agent_config: AgentConfig,
+    tmp_path: Path,
+) -> None:
+    builder = _builder_module()
+    first = tmp_path / "first.pyz"
+    second = tmp_path / "second.pyz"
+    builder.build(first, 315_532_800)  # type: ignore[attr-defined]
+    builder.build(second, 315_532_800)  # type: ignore[attr-defined]
+    assert (
+        hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(second.read_bytes()).digest()
+    )
+    config_path = tmp_path / ".config" / "bioexec" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    write_config(config_path, config_json(agent_config))
+    request = {
+        "protocol_version": "1.0",
+        "request_id": "health-1",
+        "operation": "health",
+        "payload": {},
+    }
+    environment = {**os.environ, "HOME": str(tmp_path)}
+    environment.pop("BIOEXEC_CONFIG", None)
+    environment.pop("XDG_CONFIG_HOME", None)
+    system_python = Path("/usr/bin/python3")
+    completed = subprocess.run(
+        [str(system_python if system_python.exists() else Path(sys.executable)), str(first)],
+        input=json.dumps(request, separators=(",", ":")) + "\n",
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+        shell=False,
+        env=environment,
+    )
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert len(completed.stdout.splitlines()) == 1
+    response = json.loads(completed.stdout)
+    assert response["success"] is True
+    assert response["result"]["status"] == "ok"
+    assert "exec" not in response["result"]["operations"]
