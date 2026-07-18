@@ -287,9 +287,7 @@ def test_probe_policy_rejects_raw_fastq_export_flags(raw_export_flag: str) -> No
 
 def test_execution_contracts_default_to_no_real_data_run() -> None:
     specification = PipelineSpec.model_validate(VALID_MODEL_PAYLOAD_BY_TYPE[PipelineSpec])
-    execution_plan = ExecutionPlan.model_validate(
-        VALID_MODEL_PAYLOAD_BY_TYPE[ExecutionPlan]
-    )
+    execution_plan = ExecutionPlan.model_validate(VALID_MODEL_PAYLOAD_BY_TYPE[ExecutionPlan])
 
     assert specification.policy.network_access_during_tasks is False
     assert specification.policy.run_real_data is False

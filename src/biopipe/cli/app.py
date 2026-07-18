@@ -24,9 +24,7 @@ def _placeholder(command: str, as_json: bool) -> None:
     message = f"{command} is defined by the M0 CLI contract and will be implemented later."
     if as_json:
         typer.echo(
-            json.dumps(
-                {"status": "not_implemented", "command": command, "message": message}
-            )
+            json.dumps({"status": "not_implemented", "command": command, "message": message})
         )
     else:
         typer.echo(message)

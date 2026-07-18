@@ -19,12 +19,15 @@ class AuditWriter:
     def append(self, event: AuditEvent) -> None:
         """Append and fsync *event*; existing bytes are never rewritten."""
 
-        payload = json.dumps(
-            event.model_dump(mode="json"),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ) + "\n"
+        payload = (
+            json.dumps(
+                event.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)

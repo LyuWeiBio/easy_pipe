@@ -422,9 +422,7 @@ class DatasetManifest(StrictModel):
     @model_validator(mode="after")
     def validate_layout(self) -> DatasetManifest:
         lanes = [lane for sample in self.samples for lane in sample.lanes]
-        if self.classification.layout == "paired_end" and any(
-            lane.read2 is None for lane in lanes
-        ):
+        if self.classification.layout == "paired_end" and any(lane.read2 is None for lane in lanes):
             raise ValueError("paired_end manifests require read2 for every lane")
         if self.classification.layout == "single_end" and any(
             lane.read2 is not None for lane in lanes
@@ -505,9 +503,7 @@ class PipelineAnalysis(StrictModel):
     """The constrained M3 analysis graph."""
 
     goal: Literal["fastq_qc"] = "fastq_qc"
-    stages: list[
-        Literal["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]
-    ] = Field(
+    stages: list[Literal["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]] = Field(
         default_factory=lambda: [
             "raw_fastqc",
             "optional_trimming",
