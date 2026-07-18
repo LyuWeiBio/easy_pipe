@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "/srv/raw/broken.fastq",
+      "compression": "none",
+      "structure_valid": false,
+      "read_length": null,
+      "likely_quality_encoding": "unknown",
+      "header_family": "unknown",
+      "mate_markers": null
+    }
+  ],
+  "expected": {
+    "dataset_type": "unknown",
+    "layout": "unknown",
+    "sample_count": 0,
+    "lane_count": 0,
+    "original_names": [],
+    "warning_codes": [],
+    "error_codes": ["invalid_fastq_structure"],
+    "probe_error_codes": ["invalid_fastq", "no_fastq_files"]
+  }
+}

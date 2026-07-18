@@ -31,7 +31,11 @@ Example configuration:
     "max_request_bytes": 1048576,
     "max_response_bytes": 10485760,
     "max_paths": 10000,
-    "max_path_bytes": 4096
+    "max_path_bytes": 4096,
+    "max_sample_records_total": 100000,
+    "max_content_bytes": 268435456,
+    "max_input_bytes": 268435456,
+    "max_fastq_line_bytes": 1048576
   },
   "follow_symlinks": false,
   "allow_mount_crossing": false
@@ -44,7 +48,7 @@ probe checks the XDG path above, `~/.bioprobe.json`, and finally
 all path operations fail closed because the allowlist is empty.
 
 The configuration and zipapp are installed manually. `biopipe` does not write
-them to a remote host in M1.
+them to a remote host in M2.
 
 On the supported Linux/POSIX target, the probe pins every allowed root by
 device and inode, opens path components relative to directory descriptors with
@@ -74,14 +78,18 @@ required descriptor APIs fail closed.
 }
 ```
 
-M1 supports:
+M2 supports:
 
 - `health`: protocol and runtime health; no path is required.
 - `list_tree`: bounded metadata traversal below `root` using `os.scandir`.
 - `stat_files`: metadata for the absolute paths in `paths`.
+- `detect_formats`: gzip-magic and bounded content-backed FASTQ detection for
+  the absolute paths in `paths`.
+- `summarize_fastq`: bounded four-line validation and privacy-safe aggregate
+  FASTQ facts for the absolute paths in `paths`.
 
 Other protocol names are reserved for later milestones and return an
-unsupported-operation response until implemented.
+unsupported-operation response.
 
 Each input line is capped by the host-local `max_request_bytes` setting. JSON
 nesting is additionally capped at 128 container levels before decoding so that
@@ -133,18 +141,30 @@ Failure:
 | 22 | Symlink or canonical-path escape was detected |
 | 30 | Depth, entry, request-size, response-size, or another scan budget was exceeded |
 | 31 | Runtime budget was exceeded |
-| 40 | Unsupported file format (reserved for M2) |
-| 41 | Invalid FASTQ structure (reserved for M2) |
+| 40 | Unsupported file format |
+| 41 | Invalid or truncated FASTQ structure |
 | 50 | Internal failure with sanitized diagnostic data |
 
 ## Privacy guarantees
 
-M1 operations return filesystem metadata only: path, entry type, size,
-timestamps, permissions, and traversal summaries. They do not open file
-contents and cannot return FASTQ sequences, qualities, full read identifiers,
-credentials, environment dumps, or arbitrary file lines.
+Metadata operations return path, entry type, size, timestamps, permissions,
+and traversal summaries. M2 content operations may read only bounded FASTQ
+records and return a fixed aggregate allowlist: format/compression,
+sampled-record count, structure validity, read-length statistics, likely
+quality encoding, header family, and mate-marker counts. They cannot return
+FASTQ sequences, qualities, full read identifiers, credentials, environment
+dumps, or arbitrary file lines. The controller independently validates every
+success shape and replaces all remote failure free text with fixed local text.
 
 The complete JSONL response, including its newline, is capped by the host-local
 `max_response_bytes` limit. Collection operations account for encoded metadata
 before retaining it and return a bounded code-30 error rather than a partial
 success when the response budget would be exceeded.
+
+FASTQ content requests also share host-enforced request-level ceilings across
+all supplied files: `max_sample_records_total`, decompressed
+`max_content_bytes`, underlying plain/compressed `max_input_bytes`, and
+`max_fastq_line_bytes`. Gzip headers, optional names/comments, and deflate input
+are read through the same unbuffered, deadline-aware input meter. Exceeding any
+ceiling returns `SCAN_BUDGET_EXCEEDED` with code 30. The controller additionally
+splits path batches when a request-level budget requires a smaller batch.

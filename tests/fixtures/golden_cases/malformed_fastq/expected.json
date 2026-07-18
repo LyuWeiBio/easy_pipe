@@ -1,0 +1,128 @@
+{
+  "snapshot_version": "1.0",
+  "probe_responses": [
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "entries": [
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "broken.fastq",
+            "path": "/srv/raw/broken.fastq",
+            "relative_path": "broken.fastq",
+            "size_bytes": 30
+          }
+        ],
+        "entry_count": 1,
+        "max_depth_observed": 1,
+        "operation": "list_tree",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 1,
+        "files": [
+          {
+            "compression": "none",
+            "extension_candidate": true,
+            "format": "unknown",
+            "path": "/srv/raw/broken.fastq"
+          }
+        ],
+        "operation": "detect_formats",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": {
+        "code": "INVALID_FASTQ",
+        "context": {
+          "path_index": 0
+        },
+        "message": "sampled FASTQ content has invalid or truncated four-line structure",
+        "remediation": []
+      },
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": null,
+      "return_code": 41,
+      "success": false
+    }
+  ],
+  "manifest": {
+    "manifest_version": "1.0",
+    "source": {
+      "source_id": "golden-source",
+      "root": "/srv/raw",
+      "scanned_at": "2026-01-01T00:00:00Z",
+      "scan_policy": "format_summary"
+    },
+    "classification": {
+      "dataset_type": "unknown",
+      "layout": "unknown",
+      "confidence": 0
+    },
+    "samples": [],
+    "observations": {
+      "compression": "unknown",
+      "read_length": null,
+      "likely_quality_encoding": "unknown",
+      "header_family": "unknown"
+    },
+    "evidence": [],
+    "warnings": [],
+    "errors": [
+      {
+        "code": "invalid_fastq",
+        "severity": "blocking",
+        "message": "A FASTQ candidate has invalid or truncated record structure.",
+        "context": {
+          "path": "/srv/raw/broken.fastq"
+        },
+        "remediation": [
+          "Correct the source file or exclude both affected mates explicitly."
+        ]
+      },
+      {
+        "code": "no_fastq_files",
+        "severity": "blocking",
+        "message": "No FASTQ aggregate facts were provided.",
+        "context": {},
+        "remediation": [
+          "Correct the remote dataset or provide an explicit reviewed manifest override."
+        ]
+      }
+    ],
+    "privacy": {
+      "filenames_may_contain_identifiers": true,
+      "raw_content_exported": false
+    },
+    "integrity": {
+      "manifest_sha256": "<manifest-sha256>"
+    }
+  },
+  "samplesheet": null
+}

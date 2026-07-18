@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "/srv/raw/kept.fastq.gz",
+      "compression": "gzip",
+      "structure_valid": true,
+      "read_length": {"minimum": 80, "median": 80.0, "maximum": 80},
+      "likely_quality_encoding": "phred33",
+      "header_family": "generic",
+      "mate_markers": {"read_1": 0, "read_2": 0, "unknown": 1, "mixed": false}
+    }
+  ],
+  "ignored_non_fastq_count": 2,
+  "expected": {
+    "dataset_type": "generic_fastq",
+    "layout": "single_end",
+    "sample_count": 1,
+    "lane_count": 1,
+    "original_names": ["kept"],
+    "warning_codes": ["unsupported_files_ignored"],
+    "error_codes": []
+  }
+}

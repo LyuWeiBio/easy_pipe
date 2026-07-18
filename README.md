@@ -6,33 +6,39 @@ without moving reads to the controller, produce reviewed file-based artifacts,
 and deterministically generate a constrained Nextflow DSL2 quality-control
 workflow.
 
-> **Project status: M1 secure remote inspection.** The repository now provides
-> a manually deployed, metadata-only Remote Probe plus a constrained OpenSSH
-> controller. FASTQ interpretation, manifest generation, Nextflow generation,
-> and real-data execution remain future milestones.
+> **Project status: M2 FASTQ detection and DatasetManifest.** The repository
+> provides a manually deployed, read-only Remote Probe, constrained OpenSSH
+> controller, privacy-safe FASTQ summaries, deterministic pairing, and
+> auditable full/sanitized/resolved manifests. Nextflow generation and
+> real-data execution remain future milestones.
 
 ## Current scope
 
-The completed M0 foundation and M1 security boundary provide:
+The completed M0-M2 foundation and inspection boundary provide:
 
 - a Python 3.11+ package and Typer CLI skeleton;
 - versioned, strict Pydantic data contracts;
 - stable structured errors and JSON/YAML serialization helpers;
 - SHA-256 artifact hashing and append-only JSONL audit records;
 - a local, atomic SourceProfile registry that stores no SSH credentials;
-- fixed `health`, `list_tree`, and `stat_files` JSONL operations;
+- fixed `health`, `list_tree`, `stat_files`, `detect_formats`, and
+  `summarize_fastq` JSONL operations;
 - canonical allowlists, descriptor-based symlink rejection, and
   request/response/mount/depth/entry/runtime budgets;
 - a fixed OpenSSH invocation using argument arrays, strict host-key checking,
   JSONL standard input, timeouts, bounded diagnostics, and redaction;
 - a byte-reproducible, standard-library-only `bioprobe.pyz` build;
+- bounded gzip/plain FASTQ validation and aggregate read-length, quality
+  encoding, header-family, and mate-marker summaries;
+- explainable generic/Illumina detection, four naming conventions,
+  single/paired-end classification, and multi-lane grouping;
+- SHA-256 finalized full and sanitized manifests, create-only artifacts,
+  explicit traceable overrides, and deterministic candidate samplesheets;
 - security, integration, lint, formatting, and type-checking checks.
 
 The following capabilities are intentionally deferred:
 
 - automatic remote probe deployment;
-- FASTQ parsing, sample/lane inference, and pairing;
-- manifest review and override workflows;
 - pipeline planning, component resolution, and Nextflow generation;
 - preflight checks, schedulers, containers, or real-data execution;
 - arbitrary shell or Python execution of any kind.
@@ -63,8 +69,8 @@ biopipe --version
 python -m biopipe --help
 ```
 
-M1 implements source management and metadata-only inspection. Later workflow
-commands remain explicit placeholders:
+M2 implements source management, metadata/FASTQ inspection, and manifest
+review. Later workflow commands remain explicit placeholders:
 
 ```bash
 biopipe source --help
@@ -92,10 +98,9 @@ preflight
 run
 ```
 
-`source add/list/show/remove/verify` and `inspect` are implemented. The
-`manifest`, `plan`, `generate`, `validate`, `test`, `preflight`, and `run`
-surfaces reserve later milestones and must not be interpreted as real-data
-execution support.
+`source add/list/show/remove/verify`, `inspect`, `manifest show`, and
+`manifest apply-overrides` are implemented. The remaining workflow surfaces
+reserve later milestones and must not be interpreted as execution support.
 
 Register an existing SSH alias and inspect one approved directory:
 
@@ -103,11 +108,17 @@ Register an existing SSH alias and inspect one approved directory:
 biopipe source add hpc01 --host hpc01 --allowed-root /data/raw
 biopipe source verify hpc01
 biopipe inspect hpc01:/data/raw/run42 --policy metadata-only --json
+biopipe inspect hpc01:/data/raw/run42 --policy format-summary \
+  --sample-fastq-records 1000 --output dataset.manifest.json
+biopipe manifest show dataset.manifest.json
+biopipe manifest apply-overrides dataset.manifest.json --overrides overrides.yaml \
+  --output-dir resolved --name run42
 ```
 
 The Remote Probe must first be built, reviewed, configured, and installed by
 the operator. `biopipe` never writes to the Source Host. See the
-[M1 operations guide](docs/operations.md) and
+[operations guide](docs/operations.md),
+[manifest workflow](docs/manifest-workflow.md), and
 [protocol reference](docs/probe-protocol.md).
 
 ## Development checks
@@ -130,7 +141,8 @@ roles, even if a deployment later places more than one role on the same
 machine.
 
 - Raw reads, sequence, quality strings, complete read identifiers, and
-  credentials must not enter controller artifacts or logs.
+  credentials do not enter controller artifacts or logs. M2 returns only
+  bounded aggregate FASTQ facts.
 - SSH will use an existing OpenSSH configuration, agent, and strict host-key
   verification. The project must not store passwords or private keys.
 - The Remote Probe exposes only fixed read-only operations over a bounded JSONL
@@ -139,7 +151,7 @@ machine.
 - OpenSSH uses an argument array, timeout, and checked return code. User data
   paths travel only in JSON standard input and never enter the SSH arguments.
 - Real-data execution will require validation, preflight checks, and an
-  explicit approval gate. M1 contains no workflow execution path.
+  explicit approval gate. M2 contains no workflow execution path.
 - Audit records are append-only and exclude secrets and raw biological data.
 
 See [ADR 0001](docs/adr/0001-architecture.md) for the architectural rationale
@@ -159,8 +171,8 @@ remote data directory
   -> execution near the data
 ```
 
-M1 ends at constrained metadata inspection; subsequent stages are scheduled
-for M2-M6.
+M2 ends at a reviewed DatasetManifest and candidate samplesheet; pipeline
+generation and execution remain scheduled for M3-M6.
 
 ## License
 

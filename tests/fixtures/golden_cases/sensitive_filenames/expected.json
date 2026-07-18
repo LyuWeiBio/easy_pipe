@@ -1,0 +1,174 @@
+{
+  "snapshot_version": "1.0",
+  "probe_responses": [
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "entries": [
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "Patient Alpha.fastq.gz",
+            "path": "/srv/raw/Patient Alpha.fastq.gz",
+            "relative_path": "Patient Alpha.fastq.gz",
+            "size_bytes": 88
+          }
+        ],
+        "entry_count": 1,
+        "max_depth_observed": 1,
+        "operation": "list_tree",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 1,
+        "files": [
+          {
+            "compression": "gzip",
+            "extension_candidate": true,
+            "format": "fastq",
+            "path": "/srv/raw/Patient Alpha.fastq.gz"
+          }
+        ],
+        "operation": "detect_formats",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 1,
+        "files": [
+          {
+            "compression": "gzip",
+            "format": "fastq",
+            "header_family": "generic",
+            "likely_quality_encoding": "phred33",
+            "mate_markers": {
+              "mixed": false,
+              "read_1": 0,
+              "read_2": 0,
+              "unknown": 1
+            },
+            "path": "/srv/raw/Patient Alpha.fastq.gz",
+            "read_length": {
+              "maximum": 90,
+              "median": 90,
+              "minimum": 90
+            },
+            "records_sampled": 1,
+            "structure_valid": true
+          }
+        ],
+        "operation": "summarize_fastq",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    }
+  ],
+  "manifest": {
+    "manifest_version": "1.0",
+    "source": {
+      "source_id": "golden-source",
+      "root": "/srv/raw",
+      "scanned_at": "2026-01-01T00:00:00Z",
+      "scan_policy": "format_summary"
+    },
+    "classification": {
+      "dataset_type": "generic_fastq",
+      "layout": "single_end",
+      "confidence": 1
+    },
+    "samples": [
+      {
+        "sample_id": "sample_001",
+        "original_sample_name": "Patient Alpha",
+        "lanes": [
+          {
+            "lane": "unlaned",
+            "chunk": null,
+            "read1": "/srv/raw/Patient Alpha.fastq.gz",
+            "read2": null
+          }
+        ]
+      }
+    ],
+    "observations": {
+      "compression": "gzip",
+      "read_length": {
+        "minimum": 90,
+        "median": 90,
+        "maximum": 90
+      },
+      "likely_quality_encoding": "phred33",
+      "header_family": "generic"
+    },
+    "evidence": [
+      {
+        "rule": "valid_fastq_structure",
+        "score": 0.55,
+        "detail": "1/1 valid structures"
+      },
+      {
+        "rule": "fastq_extension",
+        "score": 0.15,
+        "detail": "1/1 supported suffixes"
+      },
+      {
+        "rule": "parseable_naming",
+        "score": 0.15,
+        "detail": "1/1 sample keys"
+      },
+      {
+        "rule": "read_length_aggregate",
+        "score": 0.1,
+        "detail": "1/1 read-length aggregates"
+      },
+      {
+        "rule": "quality_encoding_aggregate",
+        "score": 0.05,
+        "detail": "1/1 likely quality encodings"
+      }
+    ],
+    "warnings": [],
+    "errors": [],
+    "privacy": {
+      "filenames_may_contain_identifiers": true,
+      "raw_content_exported": false
+    },
+    "integrity": {
+      "manifest_sha256": "<manifest-sha256>"
+    }
+  },
+  "samplesheet": "sample_id,lane,chunk,read1,read2\nsample_001,unlaned,,/srv/raw/Patient Alpha.fastq.gz,\n"
+}

@@ -1,0 +1,216 @@
+{
+  "snapshot_version": "1.0",
+  "probe_responses": [
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "entries": [
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "ignored-0.txt",
+            "path": "/srv/raw/ignored-0.txt",
+            "relative_path": "ignored-0.txt",
+            "size_bytes": 23
+          },
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "ignored-1.txt",
+            "path": "/srv/raw/ignored-1.txt",
+            "relative_path": "ignored-1.txt",
+            "size_bytes": 23
+          },
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "kept.fastq.gz",
+            "path": "/srv/raw/kept.fastq.gz",
+            "relative_path": "kept.fastq.gz",
+            "size_bytes": 79
+          }
+        ],
+        "entry_count": 3,
+        "max_depth_observed": 1,
+        "operation": "list_tree",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 3,
+        "files": [
+          {
+            "compression": "none",
+            "extension_candidate": false,
+            "format": "unknown",
+            "path": "/srv/raw/ignored-0.txt"
+          },
+          {
+            "compression": "none",
+            "extension_candidate": false,
+            "format": "unknown",
+            "path": "/srv/raw/ignored-1.txt"
+          },
+          {
+            "compression": "gzip",
+            "extension_candidate": true,
+            "format": "fastq",
+            "path": "/srv/raw/kept.fastq.gz"
+          }
+        ],
+        "operation": "detect_formats",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 1,
+        "files": [
+          {
+            "compression": "gzip",
+            "format": "fastq",
+            "header_family": "generic",
+            "likely_quality_encoding": "phred33",
+            "mate_markers": {
+              "mixed": false,
+              "read_1": 0,
+              "read_2": 0,
+              "unknown": 1
+            },
+            "path": "/srv/raw/kept.fastq.gz",
+            "read_length": {
+              "maximum": 80,
+              "median": 80,
+              "minimum": 80
+            },
+            "records_sampled": 1,
+            "structure_valid": true
+          }
+        ],
+        "operation": "summarize_fastq",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    }
+  ],
+  "manifest": {
+    "manifest_version": "1.0",
+    "source": {
+      "source_id": "golden-source",
+      "root": "/srv/raw",
+      "scanned_at": "2026-01-01T00:00:00Z",
+      "scan_policy": "format_summary"
+    },
+    "classification": {
+      "dataset_type": "generic_fastq",
+      "layout": "single_end",
+      "confidence": 1
+    },
+    "samples": [
+      {
+        "sample_id": "sample_001",
+        "original_sample_name": "kept",
+        "lanes": [
+          {
+            "lane": "unlaned",
+            "chunk": null,
+            "read1": "/srv/raw/kept.fastq.gz",
+            "read2": null
+          }
+        ]
+      }
+    ],
+    "observations": {
+      "compression": "gzip",
+      "read_length": {
+        "minimum": 80,
+        "median": 80,
+        "maximum": 80
+      },
+      "likely_quality_encoding": "phred33",
+      "header_family": "generic"
+    },
+    "evidence": [
+      {
+        "rule": "valid_fastq_structure",
+        "score": 0.55,
+        "detail": "1/1 valid structures"
+      },
+      {
+        "rule": "fastq_extension",
+        "score": 0.15,
+        "detail": "1/1 supported suffixes"
+      },
+      {
+        "rule": "parseable_naming",
+        "score": 0.15,
+        "detail": "1/1 sample keys"
+      },
+      {
+        "rule": "read_length_aggregate",
+        "score": 0.1,
+        "detail": "1/1 read-length aggregates"
+      },
+      {
+        "rule": "quality_encoding_aggregate",
+        "score": 0.05,
+        "detail": "1/1 likely quality encodings"
+      }
+    ],
+    "warnings": [
+      {
+        "code": "unsupported_files_ignored",
+        "severity": "warning",
+        "message": "Non-FASTQ files were ignored after content-backed detection.",
+        "context": {
+          "file_count": 2
+        },
+        "remediation": []
+      }
+    ],
+    "errors": [],
+    "privacy": {
+      "filenames_may_contain_identifiers": true,
+      "raw_content_exported": false
+    },
+    "integrity": {
+      "manifest_sha256": "<manifest-sha256>"
+    }
+  },
+  "samplesheet": "sample_id,lane,chunk,read1,read2\nsample_001,unlaned,,/srv/raw/kept.fastq.gz,\n"
+}
