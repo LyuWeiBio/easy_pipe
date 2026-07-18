@@ -45,6 +45,7 @@ jobs:
           mypy src remote_probe/src remote_probe/build_zipapp.py
           remote_executor/src remote_executor/build_zipapp.py
           scripts/create_release_acceptance_evidence.py
+          scripts/collect_real_host_evidence.py
           scripts/generate_supply_chain_inventory.py scripts/verify_installed_package.py
           scripts/verify_release_acceptance_junit.py
       - name: Verify committed supply-chain inventory
