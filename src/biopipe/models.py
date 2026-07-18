@@ -499,18 +499,18 @@ class PipelineInput(StrictModel):
         return _safe_text(value, "input.manifest")
 
 
+PipelineStage = Literal["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]
+
+
+def _default_pipeline_stages() -> list[PipelineStage]:
+    return ["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]
+
+
 class PipelineAnalysis(StrictModel):
     """The constrained M3 analysis graph."""
 
     goal: Literal["fastq_qc"] = "fastq_qc"
-    stages: list[Literal["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]] = Field(
-        default_factory=lambda: [
-            "raw_fastqc",
-            "optional_trimming",
-            "post_trim_fastqc",
-            "multiqc",
-        ]
-    )
+    stages: list[PipelineStage] = Field(default_factory=_default_pipeline_stages)
 
 
 class TrimmingParameters(StrictModel):
