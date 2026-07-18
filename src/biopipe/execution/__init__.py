@@ -25,6 +25,7 @@ from biopipe.execution.models import (
     compute_project_hash,
 )
 from biopipe.execution.profiles import ExecutionProfileRegistry
+from biopipe.execution.reports import ReconciliationReport, RunReport, StatusReport
 
 __all__ = [
     "AllowedExecutionRoots",
@@ -48,8 +49,11 @@ __all__ = [
     "PreflightCheck",
     "PreflightEvidence",
     "PreflightReport",
+    "ReconciliationReport",
     "RunAuthorization",
     "RunPolicy",
+    "RunReport",
+    "StatusReport",
     "assert_resume_compatible",
     "build_deployment_bundle",
     "compute_input_set_hash",

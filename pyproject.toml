@@ -1,21 +1,21 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "easy-pipe"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first, remote-data-aware bioinformatics pipeline builder"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [
   { name = "Wei Lyu" },
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Environment :: Console",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -41,10 +41,14 @@ dev = [
 [project.scripts]
 biopipe = "biopipe.cli:app"
 
+[tool.setuptools.dynamic]
+version = { attr = "biopipe.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
+"biopipe" = ["schema_v1/*.json"]
 "biopipe.compiler" = [
   "_templates/project/*.j2",
   "_templates/project/conf/*.j2",

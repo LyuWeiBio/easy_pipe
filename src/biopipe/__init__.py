@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+from biopipe.version import CONTROLLER_VERSION
+
+__version__ = CONTROLLER_VERSION
 
 __all__ = ["__version__"]

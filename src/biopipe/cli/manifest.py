@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 from pydantic import BaseModel
 
-from biopipe.cli.common import emit, fail
+from biopipe.cli.common import dry_run_result, emit, fail
 from biopipe.errors import BioPipeError
 from biopipe.io import read_model
 from biopipe.manifests import (
@@ -71,6 +71,11 @@ def manifest_apply_overrides(
     ),
     output_dir: Path | None = typer.Option(None, "--output-dir", file_okay=False),
     name: str = typer.Option("dataset", "--name"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate and resolve in memory without writing artifacts.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Apply an attributable override without modifying the original manifest."""
@@ -99,6 +104,27 @@ def manifest_apply_overrides(
         }
         if samplesheet is not None:
             artifacts[names["samplesheet"]] = samplesheet
+        planned_paths = {
+            key: None
+            if key == "samplesheet" and samplesheet is None
+            else str((destination / value).absolute())
+            for key, value in names.items()
+        }
+        if dry_run:
+            emit(
+                dry_run_result(
+                    "manifest apply-overrides",
+                    "would_apply_overrides",
+                    would_write=[value for value in planned_paths.values() if value is not None],
+                    details={
+                        "artifacts": planned_paths,
+                        "blocking_errors": [issue.code for issue in resolved.errors],
+                        "manifest_sha256": resolved.integrity.manifest_sha256,
+                    },
+                ),
+                as_json=as_json,
+            )
+            return
         paths = store.create_bundle(artifacts)
         created = {
             key: None if key == "samplesheet" and samplesheet is None else str(paths[value])

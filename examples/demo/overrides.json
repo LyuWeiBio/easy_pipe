@@ -1,0 +1,10 @@
+{
+  "approved_by": "demo-reviewer",
+  "exclude_files": [],
+  "manual_pairs": [],
+  "override_version": "1.0",
+  "reason": "Rename the synthetic delivery label for the anonymous release demo.",
+  "rename_samples": {
+    "SyntheticDemo": "anonymous_control_001"
+  }
+}

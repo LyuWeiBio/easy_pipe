@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import typer
 from pydantic import ValidationError
 
-from biopipe.cli.common import emit, fail, validation_error
+from biopipe.cli.common import ExitCode, dry_run_result, emit, fail, validation_error
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution.runner import abandon_pending_run, query_run_status, submit_approved_run
+
+_RUN_ID = re.compile(r"^run-[0-9a-f]{32}$")
+_ACTOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def run_command(
@@ -47,22 +51,93 @@ def run_command(
         "--abandon-pending",
         help="After the safety delay, reconcile and abandon a remotely absent pending run.",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview the mode without reading keys, signing, deploying, or contacting SSH.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit compact machine-readable JSON."),
 ) -> None:
     """Submit only after the gate passes, or query one exact recorded run."""
 
     try:
-        if abandon_pending_run_id is not None:
-            if (
-                status_run_id is not None
-                or resume_run_id is not None
-                or actor is not None
-                or approve_real_data
-            ):
-                raise BioPipeError(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Pending-run abandonment cannot be combined with other run modes.",
+        selected_run_ids = [resume_run_id, status_run_id, abandon_pending_run_id]
+        if any(value is not None and not _RUN_ID.fullmatch(value) for value in selected_run_ids):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "A run mode received an invalid run ID.",
+                remediation=["Use the exact locally recorded run-NNN identifier."],
+            )
+        if actor is not None and not _ACTOR.fullmatch(actor):
+            raise BioPipeError(
+                ErrorCode.APPROVAL_REQUIRED,
+                "The approval actor must be a stable safe identifier.",
+            )
+        if abandon_pending_run_id is not None and (
+            status_run_id is not None
+            or resume_run_id is not None
+            or actor is not None
+            or approve_real_data
+        ):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "Pending-run abandonment cannot be combined with other run modes.",
+            )
+        if status_run_id is not None and (
+            resume_run_id is not None or actor is not None or approve_real_data
+        ):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "Status mode cannot be combined with approval or resume options.",
+                remediation=["Use only --status RUN_ID with the project and profile."],
+            )
+        if dry_run:
+            project = project_directory.expanduser().absolute()
+            selected_run_id: str | None
+            if abandon_pending_run_id is not None:
+                mode = "abandon_pending"
+                selected_run_id = abandon_pending_run_id
+                remote_operations = ["executor.abandon"]
+                status = "would_abandon_pending"
+                report_names = [".run-state.json"]
+            elif status_run_id is not None:
+                mode = "status"
+                selected_run_id = status_run_id
+                remote_operations = ["executor.status"]
+                status = "would_query_status"
+                report_names = [".run-state.json", "run.json", "status.json"]
+            else:
+                mode = "resume" if resume_run_id is not None else "submit"
+                selected_run_id = resume_run_id
+                remote_operations = (
+                    ["executor.resume"]
+                    if resume_run_id is not None
+                    else ["executor.deploy", "executor.submit"]
                 )
+                status = "would_resume" if resume_run_id is not None else "would_submit"
+                report_names = [".preflight-state.json", ".run-state.json", "run.json"]
+            emit(
+                dry_run_result(
+                    "run",
+                    status,
+                    would_write=[
+                        str(project / "audit" / "events.jsonl"),
+                        *(str(project / "reports" / name) for name in report_names),
+                    ],
+                    remote_operations=remote_operations,
+                    details={
+                        "actor_provided": actor is not None,
+                        "approval_required_for_execution": mode in {"submit", "resume"},
+                        "execution_profile": str(execution_profile.expanduser().absolute()),
+                        "mode": mode,
+                        "real_data_approval_provided": approve_real_data,
+                        "run_id": selected_run_id,
+                    },
+                ),
+                as_json=as_json,
+            )
+            return
+        if abandon_pending_run_id is not None:
             reconciliation = abandon_pending_run(
                 project_directory,
                 execution_profile,
@@ -71,12 +146,6 @@ def run_command(
             emit(reconciliation, as_json=as_json)
             return
         if status_run_id is not None:
-            if resume_run_id is not None or actor is not None or approve_real_data:
-                raise BioPipeError(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Status mode cannot be combined with approval or resume options.",
-                    remediation=["Use only --status RUN_ID with the project and profile."],
-                )
             result = query_run_status(
                 project_directory,
                 execution_profile,
@@ -84,7 +153,7 @@ def run_command(
             )
             emit(result, as_json=as_json)
             if result.status == "failed":
-                raise typer.Exit(code=2)
+                raise typer.Exit(code=ExitCode.COMMAND_FAILED)
             return
         else:
             if actor is None:
@@ -105,7 +174,7 @@ def run_command(
         fail(error)
     emit(run_result, as_json=as_json)
     if run_result.status == "failed":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=ExitCode.COMMAND_FAILED)
 
 
 __all__ = ["run_command"]

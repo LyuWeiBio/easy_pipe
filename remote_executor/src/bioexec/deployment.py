@@ -28,6 +28,7 @@ from .state import StateStore
 
 _FIXED_FILES = frozenset(
     {
+        "LICENSE",
         "README.md",
         "assets/samplesheet.csv",
         "audit/events.jsonl",
@@ -43,6 +44,7 @@ _FIXED_FILES = frozenset(
 )
 _REQUIRED_FILES = frozenset(
     {
+        "LICENSE",
         "assets/samplesheet.csv",
         "conf/base.config",
         "conf/local.config",

@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "catalog_sha256": "f2e25d057be6a9acc9e8007f8f0c46bea7f7b6af5d4da1657357d787a631524a",
+  "schema_count": 21,
+  "schema_version": "1.0",
+  "schemas": [
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/AuditEvent.schema.json",
+      "name": "AuditEvent",
+      "path": "AuditEvent.schema.json",
+      "sha256": "a5d9ed81bbe4080a17eccd6ebf2695df451599e8d3e25402c24e71eca7875768"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/DatasetManifest.schema.json",
+      "name": "DatasetManifest",
+      "path": "DatasetManifest.schema.json",
+      "sha256": "fa098fb94f5cad92bb9ea837e747d3daddad4bc75904ee24afa6c006d51cd379"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ExecutionPlan.schema.json",
+      "name": "ExecutionPlan",
+      "path": "ExecutionPlan.schema.json",
+      "sha256": "00b111281fa0da5b174b9028f0602cc63bd74998bb197f9e20df8873def22e20"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ExecutionProfile.schema.json",
+      "name": "ExecutionProfile",
+      "path": "ExecutionProfile.schema.json",
+      "sha256": "30c285e0b4607a7582c529d23494bb45e4505a471e51aff227065ff0e8400544"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ManifestOverrides.schema.json",
+      "name": "ManifestOverrides",
+      "path": "ManifestOverrides.schema.json",
+      "sha256": "d5dd80c239ce837c2a8dc277054b7e2c1deb486740c7a2e53bd7d7bdada1a6dc"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/OverrideDiff.schema.json",
+      "name": "OverrideDiff",
+      "path": "OverrideDiff.schema.json",
+      "sha256": "844ba845fb23b8df49bc0aca02530362abc7372e80464f9127133146825adbd0"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/PipelineSpec.schema.json",
+      "name": "PipelineSpec",
+      "path": "PipelineSpec.schema.json",
+      "sha256": "83845dea76b26927fb067e1c3b1bd11fd540d66b93cbf0ce876d5c80949da231"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/PreflightReport.schema.json",
+      "name": "PreflightReport",
+      "path": "PreflightReport.schema.json",
+      "sha256": "7d50362d0b6eef805a7a9570fdb93aa3d3c7d265f56a4b3a4df95aca1cec1553"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ProbeRequest.schema.json",
+      "name": "ProbeRequest",
+      "path": "ProbeRequest.schema.json",
+      "sha256": "0dffa9043f860bdd122a7339cabf61a4b445a33c00257c1a6bb691e945b2073a"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ProbeResponse.schema.json",
+      "name": "ProbeResponse",
+      "path": "ProbeResponse.schema.json",
+      "sha256": "2aabca5d93817f27792cfc766122f45f18e06af1ba8749a660f71a7d659df0f1"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ReconciliationReport.schema.json",
+      "name": "ReconciliationReport",
+      "path": "ReconciliationReport.schema.json",
+      "sha256": "923a3068dcb5987c18ecfcc9def5f54611ae51a351ef6feecfefb1533345643c"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RegistryDocument.schema.json",
+      "name": "RegistryDocument",
+      "path": "RegistryDocument.schema.json",
+      "sha256": "b20117d877949e867c5e7739a17fd701a9e8b22b41d3e0a1f9a46f8cb04138a7"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RunAuthorization.schema.json",
+      "name": "RunAuthorization",
+      "path": "RunAuthorization.schema.json",
+      "sha256": "7c0c7667801c1dba4782bdd127cc0119d0b942dab471510bf1abb78e36f5599b"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/RunReport.schema.json",
+      "name": "RunReport",
+      "path": "RunReport.schema.json",
+      "sha256": "9173e63a375d856a6431aa8af192c4b5ec725c28e0b267d469d6b4651e6ccf5a"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/SoftwareLock.schema.json",
+      "name": "SoftwareLock",
+      "path": "SoftwareLock.schema.json",
+      "sha256": "de0064b69f10d8afa0226affcbb61e80c9def97ea83d92de2ae2288224e3b2d8"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/SourceProfile.schema.json",
+      "name": "SourceProfile",
+      "path": "SourceProfile.schema.json",
+      "sha256": "2ad8d42e59dc08da9332c01b5f43caed9e389d4695d2d7cfa867a5beb402580f"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/StatusReport.schema.json",
+      "name": "StatusReport",
+      "path": "StatusReport.schema.json",
+      "sha256": "8368b9e85e46d30db9d6f9959a98c86141c1cf4f9cd0243dee9d4b71ae8a3b55"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/TestCommandReport.schema.json",
+      "name": "TestCommandReport",
+      "path": "TestCommandReport.schema.json",
+      "sha256": "8a6b249b9cf45a668ce086859d9025c2b9e7436cb2ee10274f163af61ff1556e"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ValidationCommandReport.schema.json",
+      "name": "ValidationCommandReport",
+      "path": "ValidationCommandReport.schema.json",
+      "sha256": "c5698c2fdd84778d7b929526dd0ea13868041c5c4a2009484a8ef82b971df962"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ValidationReport.schema.json",
+      "name": "ValidationReport",
+      "path": "ValidationReport.schema.json",
+      "sha256": "1a9e1817083c4caa64b6b8c7d80b5899b583a04aa6a20fda25e2e24e52203699"
+    },
+    {
+      "id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/WorkflowTestReport.schema.json",
+      "name": "WorkflowTestReport",
+      "path": "WorkflowTestReport.schema.json",
+      "sha256": "998530bfde33bc5bbee9cec1dcc36dd9d631a3e0225fecbe0258e28b7b9a62e2"
+    }
+  ]
+}

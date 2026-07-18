@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "LockedComponent": {
+      "additionalProperties": false,
+      "description": "Reviewed tool and immutable container identity.",
+      "properties": {
+        "digest": {
+          "title": "Digest",
+          "type": "string"
+        },
+        "image": {
+          "title": "Image",
+          "type": "string"
+        },
+        "license": {
+          "title": "License",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "image",
+        "digest",
+        "license"
+      ],
+      "title": "LockedComponent",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/SoftwareLock.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Pinned software inputs for a generated project.",
+  "properties": {
+    "components": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LockedComponent"
+      },
+      "minProperties": 1,
+      "title": "Components",
+      "type": "object"
+    },
+    "lock_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Lock Version",
+      "type": "string"
+    },
+    "resolved_at": {
+      "format": "date-time",
+      "title": "Resolved At",
+      "type": "string"
+    },
+    "resolver_version": {
+      "title": "Resolver Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "components",
+    "resolved_at",
+    "resolver_version"
+  ],
+  "title": "SoftwareLock",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

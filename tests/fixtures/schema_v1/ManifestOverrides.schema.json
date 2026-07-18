@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "ManualPair": {
+      "additionalProperties": false,
+      "description": "An explicit, attributable pairing correction.",
+      "properties": {
+        "lane": {
+          "default": "unlaned",
+          "title": "Lane",
+          "type": "string"
+        },
+        "read1": {
+          "title": "Read1",
+          "type": "string"
+        },
+        "read2": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read2"
+        },
+        "sample_id": {
+          "title": "Sample Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_id",
+        "read1"
+      ],
+      "title": "ManualPair",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ManifestOverrides.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "User-reviewed changes kept separately from immutable scan facts.",
+  "properties": {
+    "approved_by": {
+      "title": "Approved By",
+      "type": "string"
+    },
+    "exclude_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Exclude Files",
+      "type": "array"
+    },
+    "manual_pairs": {
+      "items": {
+        "$ref": "#/$defs/ManualPair"
+      },
+      "title": "Manual Pairs",
+      "type": "array"
+    },
+    "override_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Override Version",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "rename_samples": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Rename Samples",
+      "type": "object"
+    }
+  },
+  "required": [
+    "reason",
+    "approved_by"
+  ],
+  "title": "ManifestOverrides",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

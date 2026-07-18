@@ -9,7 +9,7 @@ from typing import Literal, cast
 import typer
 from pydantic import ValidationError
 
-from biopipe.cli.common import emit, fail, validation_error
+from biopipe.cli.common import dry_run_result, emit, fail, validation_error
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution.models import (
     AllowedExecutionRoots,
@@ -85,6 +85,11 @@ def create_execution_profile(
         min=60,
         max=86_400,
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate the profile without reading the approval key or writing it.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Create one immutable profile from an exact reviewed software lock."""
@@ -151,6 +156,18 @@ def create_execution_profile(
             preflight_max_age_seconds=preflight_max_age_seconds,
             path_mapping=mappings,
         )
+        if dry_run:
+            profile_path = output_directory.expanduser().absolute() / f"{profile.profile_id}.json"
+            emit(
+                dry_run_result(
+                    "execution-profile create",
+                    "would_create",
+                    would_write=[str(profile_path)],
+                    details={"profile": profile.model_dump(mode="json")},
+                ),
+                as_json=as_json,
+            )
+            return
         validate_approval_key(profile)
         path = ExecutionProfileRegistry(output_directory).register(profile)
     except ValidationError as error:

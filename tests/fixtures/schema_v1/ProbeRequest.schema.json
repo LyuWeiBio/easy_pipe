@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "ProbePolicy": {
+      "additionalProperties": false,
+      "description": "Read and return budgets for a probe request.",
+      "properties": {
+        "follow_symlinks": {
+          "default": false,
+          "title": "Follow Symlinks",
+          "type": "boolean"
+        },
+        "inspection_level": {
+          "default": "format_summary",
+          "enum": [
+            "metadata_only",
+            "format_summary",
+            "integrity_check"
+          ],
+          "title": "Inspection Level",
+          "type": "string"
+        },
+        "max_depth": {
+          "default": 6,
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Max Depth",
+          "type": "integer"
+        },
+        "max_entries": {
+          "default": 100000,
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Max Entries",
+          "type": "integer"
+        },
+        "max_runtime_seconds": {
+          "default": 300,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Max Runtime Seconds",
+          "type": "integer"
+        },
+        "return_qualities": {
+          "default": false,
+          "title": "Return Qualities",
+          "type": "boolean"
+        },
+        "return_read_names": {
+          "default": false,
+          "title": "Return Read Names",
+          "type": "boolean"
+        },
+        "return_sequences": {
+          "default": false,
+          "title": "Return Sequences",
+          "type": "boolean"
+        },
+        "sample_fastq_records": {
+          "default": 1000,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Sample Fastq Records",
+          "type": "integer"
+        }
+      },
+      "title": "ProbePolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ProbeRequest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A request for one allowlisted probe operation.",
+  "properties": {
+    "operation": {
+      "enum": [
+        "health",
+        "list_tree",
+        "stat_files",
+        "detect_formats",
+        "summarize_fastq",
+        "parse_samplesheet",
+        "parse_runinfo",
+        "validate_pairs",
+        "check_runtime",
+        "check_paths",
+        "scan_dataset"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "paths": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "title": "Paths",
+      "type": "array"
+    },
+    "policy": {
+      "$ref": "#/$defs/ProbePolicy"
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "root": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Root"
+    }
+  },
+  "required": [
+    "request_id",
+    "operation"
+  ],
+  "title": "ProbeRequest",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

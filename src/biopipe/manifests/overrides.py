@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,7 +40,7 @@ class OverrideDiff(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    diff_version: str = "1.0"
+    diff_version: Literal["1.0"] = "1.0"
     original_manifest_sha256: str
     override_sha256: str
     resolved_manifest_sha256: str

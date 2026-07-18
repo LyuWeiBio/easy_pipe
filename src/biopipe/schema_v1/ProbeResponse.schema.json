@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "ProbeError": {
+      "additionalProperties": false,
+      "description": "A stable probe-side failure without raw data or exception details.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "context": {
+          "additionalProperties": true,
+          "title": "Context",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "remediation": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remediation",
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ProbeError",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ProbeResponse.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Response envelope for the JSONL probe protocol.",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProbeError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "protocol_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result"
+    },
+    "return_code": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Return Code",
+      "type": "integer"
+    },
+    "success": {
+      "title": "Success",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "request_id",
+    "success",
+    "return_code"
+  ],
+  "title": "ProbeResponse",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

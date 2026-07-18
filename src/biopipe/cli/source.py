@@ -7,7 +7,13 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
-from biopipe.cli.common import controller_config_dir, emit, fail, validation_error
+from biopipe.cli.common import (
+    controller_config_dir,
+    dry_run_result,
+    emit,
+    fail,
+    validation_error,
+)
 from biopipe.errors import BioPipeError
 from biopipe.models import SourceProfile
 from biopipe.probe import OpenSSHProbeClient
@@ -35,6 +41,11 @@ def source_add(
     max_depth: int = typer.Option(6, min=0, max=64),
     max_entries: int = typer.Option(100_000, min=1, max=10_000_000),
     config_dir: Path | None = typer.Option(None, "--config-dir", hidden=True),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate and show the profile path without registering it.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Register a Source Host without storing SSH credentials."""
@@ -56,7 +67,19 @@ def source_add(
                 },
             }
         )
-        stored = _registry(config_dir).add(profile)
+        registry = _registry(config_dir)
+        if dry_run:
+            emit(
+                dry_run_result(
+                    "source add",
+                    "would_add",
+                    would_write=[str(registry.directory / f"{profile.source_id}.json")],
+                    details={"source": profile.model_dump(mode="json")},
+                ),
+                as_json=as_json,
+            )
+            return
+        stored = registry.add(profile)
     except ValidationError as error:
         validation_error(error)
     except BioPipeError as error:
@@ -97,12 +120,30 @@ def source_show(
 def source_remove(
     source_id: str = typer.Argument(...),
     config_dir: Path | None = typer.Option(None, "--config-dir", hidden=True),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Confirm the exact registered source without removing it.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Remove only the local SourceProfile; never contact the Source Host."""
 
     try:
-        removed = _registry(config_dir).remove(source_id)
+        registry = _registry(config_dir)
+        if dry_run:
+            selected = registry.get(source_id)
+            emit(
+                dry_run_result(
+                    "source remove",
+                    "would_remove",
+                    would_write=[str(registry.directory / f"{selected.source_id}.json")],
+                    details={"source_id": selected.source_id},
+                ),
+                as_json=as_json,
+            )
+            return
+        removed = registry.remove(source_id)
     except BioPipeError as error:
         fail(error)
     emit(
@@ -115,12 +156,28 @@ def source_remove(
 def source_verify(
     source_id: str = typer.Argument(...),
     config_dir: Path | None = typer.Option(None, "--config-dir", hidden=True),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate the registered source without contacting the probe.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Send a fixed health request to the registered Remote Probe."""
 
     try:
         profile = _registry(config_dir).get(source_id)
+        if dry_run:
+            emit(
+                dry_run_result(
+                    "source verify",
+                    "would_verify",
+                    remote_operations=["probe.health"],
+                    details={"source_id": profile.source_id},
+                ),
+                as_json=as_json,
+            )
+            return
         client = OpenSSHProbeClient(
             max_stdout_bytes=profile.probe.max_response_bytes,
             max_stderr_bytes=profile.probe.stderr_limit_bytes,

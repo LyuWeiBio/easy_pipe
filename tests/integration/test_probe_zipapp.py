@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import stat
 import subprocess
 import sys
+import time
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = REPOSITORY_ROOT / "remote_probe" / "build_zipapp.py"
+LICENSE_FILE = REPOSITORY_ROOT / "LICENSE"
 
 
 def _build_function() -> Callable[[Path, int], Path]:
@@ -29,6 +33,11 @@ def test_zipapp_build_is_reproducible_and_runs_health(tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     assert first.read_bytes().startswith(b"#!/usr/bin/env python3\n")
+    with zipfile.ZipFile(first) as archive:
+        license_info = archive.getinfo("LICENSE")
+        assert archive.read("LICENSE") == LICENSE_FILE.read_bytes()
+        assert stat.S_IMODE(license_info.external_attr >> 16) == 0o644
+        assert license_info.date_time == time.gmtime(epoch)[:6]
 
     allowed_root = tmp_path / "allowed"
     allowed_root.mkdir()

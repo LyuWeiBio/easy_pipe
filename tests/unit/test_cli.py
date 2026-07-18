@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from biopipe.cli import app as exported_app
@@ -23,6 +24,8 @@ EXPECTED_COMMANDS = (
     "test",
     "preflight",
     "run",
+    "schema",
+    "version",
 )
 EXPECTED_LEAF_COMMANDS = (
     ("source", "add"),
@@ -32,6 +35,50 @@ EXPECTED_LEAF_COMMANDS = (
     ("source", "verify"),
     ("manifest", "show"),
     ("manifest", "apply-overrides"),
+    ("execution-profile", "create"),
+    ("execution-profile", "show"),
+    ("schema", "list"),
+    ("schema", "show"),
+    ("schema", "export"),
+)
+
+JSON_COMMANDS = (
+    ("source", "add"),
+    ("source", "list"),
+    ("source", "show"),
+    ("source", "remove"),
+    ("source", "verify"),
+    ("inspect",),
+    ("manifest", "show"),
+    ("manifest", "apply-overrides"),
+    ("plan",),
+    ("generate",),
+    ("validate",),
+    ("test",),
+    ("execution-profile", "create"),
+    ("execution-profile", "show"),
+    ("preflight",),
+    ("run",),
+    ("schema", "list"),
+    ("schema", "show"),
+    ("schema", "export"),
+    ("version",),
+)
+
+DRY_RUN_COMMANDS = (
+    ("source", "add"),
+    ("source", "remove"),
+    ("source", "verify"),
+    ("inspect",),
+    ("manifest", "apply-overrides"),
+    ("plan",),
+    ("generate",),
+    ("validate",),
+    ("test",),
+    ("execution-profile", "create"),
+    ("preflight",),
+    ("run",),
+    ("schema", "export"),
 )
 
 
@@ -88,3 +135,31 @@ def test_version_is_available_without_a_command() -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "0.1.0"
+
+
+@pytest.mark.parametrize(
+    "command_path",
+    JSON_COMMANDS,
+    ids=("-".join(command_path) for command_path in JSON_COMMANDS),
+)
+def test_every_leaf_command_has_machine_readable_json(
+    command_path: tuple[str, ...],
+) -> None:
+    result = runner.invoke(app, [*command_path, "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--json" in Text.from_ansi(result.output).plain
+
+
+@pytest.mark.parametrize(
+    "command_path",
+    DRY_RUN_COMMANDS,
+    ids=("-".join(command_path) for command_path in DRY_RUN_COMMANDS),
+)
+def test_every_write_or_remote_command_has_dry_run(
+    command_path: tuple[str, ...],
+) -> None:
+    result = runner.invoke(app, [*command_path, "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--dry-run" in Text.from_ansi(result.output).plain

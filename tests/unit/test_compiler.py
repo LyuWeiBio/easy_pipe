@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,8 @@ from biopipe.models import (
 )
 from biopipe.planner import PlanningOptions, plan_fastq_qc
 from biopipe.registry import load_default_registry
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _manifest(
@@ -131,6 +134,7 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
     assert _tree_bytes(first) == _tree_bytes(second)
     assert first_result.generation_fingerprint == second_result.generation_fingerprint
     assert set(first_result.files) == {
+        "LICENSE",
         "README.md",
         "assets/samplesheet.csv",
         "audit/events.jsonl",
@@ -157,6 +161,9 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
         "tests/nextflow.config",
         "tests/pipeline.nf.test",
     }
+    license_payload = (REPOSITORY_ROOT / "LICENSE").read_bytes()
+    assert (first / "LICENSE").read_bytes() == license_payload
+    assert first_result.artifact_hashes["LICENSE"] == hashlib.sha256(license_payload).hexdigest()
     samplesheet_lines = (first / "assets/samplesheet.csv").read_text().splitlines()
     assert samplesheet_lines == [
         "sample_id,lane,chunk,read1,read2",
@@ -216,6 +223,7 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
     assert event["timestamp"] == "2026-07-18T01:02:03Z"
     assert event["status"] == "success"
     assert "audit/events.jsonl" not in event["output_hashes"]
+    assert event["output_hashes"]["LICENSE"] == hashlib.sha256(license_payload).hexdigest()
 
 
 def test_compile_single_end_without_trimming_omits_unselected_processes(
@@ -468,6 +476,7 @@ def test_registry_template_resources_exist_and_match_review_copies() -> None:
         assert packaged.read_bytes() == reviewed.read_bytes()
 
     for relative in (
+        "project/LICENSE.j2",
         "project/main.nf.j2",
         "project/nextflow.config.j2",
         "project/conf/base.config.j2",

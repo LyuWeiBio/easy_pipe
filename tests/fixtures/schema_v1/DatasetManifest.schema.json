@@ -1,0 +1,414 @@
+{
+  "$defs": {
+    "DatasetClassification": {
+      "additionalProperties": false,
+      "description": "Detector conclusion with an explainable confidence score.",
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "dataset_type": {
+          "enum": [
+            "generic_fastq",
+            "illumina_fastq",
+            "unknown"
+          ],
+          "title": "Dataset Type",
+          "type": "string"
+        },
+        "layout": {
+          "enum": [
+            "single_end",
+            "paired_end",
+            "unknown"
+          ],
+          "title": "Layout",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_type",
+        "layout",
+        "confidence"
+      ],
+      "title": "DatasetClassification",
+      "type": "object"
+    },
+    "DatasetObservations": {
+      "additionalProperties": false,
+      "description": "Low-risk aggregate observations from bounded remote inspection.",
+      "properties": {
+        "compression": {
+          "default": "unknown",
+          "enum": [
+            "gzip",
+            "none",
+            "mixed",
+            "unknown"
+          ],
+          "title": "Compression",
+          "type": "string"
+        },
+        "header_family": {
+          "default": "unknown",
+          "title": "Header Family",
+          "type": "string"
+        },
+        "likely_quality_encoding": {
+          "default": "unknown",
+          "enum": [
+            "phred33",
+            "phred64",
+            "unknown"
+          ],
+          "title": "Likely Quality Encoding",
+          "type": "string"
+        },
+        "read_length": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadLengthSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DatasetObservations",
+      "type": "object"
+    },
+    "DatasetSample": {
+      "additionalProperties": false,
+      "description": "A sample with one or more independently retained lanes.",
+      "properties": {
+        "lanes": {
+          "items": {
+            "$ref": "#/$defs/LaneFiles"
+          },
+          "minItems": 1,
+          "title": "Lanes",
+          "type": "array"
+        },
+        "original_sample_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Sample Name"
+        },
+        "sample_id": {
+          "title": "Sample Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_id",
+        "lanes"
+      ],
+      "title": "DatasetSample",
+      "type": "object"
+    },
+    "DetectionEvidence": {
+      "additionalProperties": false,
+      "description": "One explainable detector rule contribution.",
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rule",
+        "score"
+      ],
+      "title": "DetectionEvidence",
+      "type": "object"
+    },
+    "LaneFiles": {
+      "additionalProperties": false,
+      "description": "One lane/chunk of a logical sample.",
+      "properties": {
+        "chunk": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chunk"
+        },
+        "lane": {
+          "default": "unlaned",
+          "title": "Lane",
+          "type": "string"
+        },
+        "read1": {
+          "title": "Read1",
+          "type": "string"
+        },
+        "read2": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read2"
+        }
+      },
+      "required": [
+        "read1"
+      ],
+      "title": "LaneFiles",
+      "type": "object"
+    },
+    "ManifestIntegrity": {
+      "additionalProperties": false,
+      "description": "Digest of a canonical manifest representation when finalized.",
+      "properties": {
+        "manifest_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manifest Sha256"
+        }
+      },
+      "title": "ManifestIntegrity",
+      "type": "object"
+    },
+    "ManifestIssue": {
+      "additionalProperties": false,
+      "description": "A stable actionable warning or blocking manifest error.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "context": {
+          "additionalProperties": true,
+          "title": "Context",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "remediation": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remediation",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "warning",
+            "blocking"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "title": "ManifestIssue",
+      "type": "object"
+    },
+    "ManifestPrivacy": {
+      "additionalProperties": false,
+      "description": "Privacy claims attached to the scan artifact.",
+      "properties": {
+        "artifact_scope": {
+          "default": "full",
+          "enum": [
+            "full",
+            "sanitized"
+          ],
+          "title": "Artifact Scope",
+          "type": "string"
+        },
+        "filenames_may_contain_identifiers": {
+          "default": true,
+          "title": "Filenames May Contain Identifiers",
+          "type": "boolean"
+        },
+        "raw_content_exported": {
+          "default": false,
+          "title": "Raw Content Exported",
+          "type": "boolean"
+        }
+      },
+      "title": "ManifestPrivacy",
+      "type": "object"
+    },
+    "ManifestSource": {
+      "additionalProperties": false,
+      "description": "Provenance of a dataset scan.",
+      "properties": {
+        "root": {
+          "title": "Root",
+          "type": "string"
+        },
+        "scan_policy": {
+          "default": "format_summary",
+          "enum": [
+            "metadata_only",
+            "format_summary",
+            "integrity_check"
+          ],
+          "title": "Scan Policy",
+          "type": "string"
+        },
+        "scanned_at": {
+          "format": "date-time",
+          "title": "Scanned At",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "root",
+        "scanned_at"
+      ],
+      "title": "ManifestSource",
+      "type": "object"
+    },
+    "ReadLengthSummary": {
+      "additionalProperties": false,
+      "description": "Aggregate read lengths; it never contains sequence content.",
+      "properties": {
+        "maximum": {
+          "minimum": 0,
+          "title": "Maximum",
+          "type": "integer"
+        },
+        "median": {
+          "minimum": 0,
+          "title": "Median",
+          "type": "number"
+        },
+        "minimum": {
+          "minimum": 0,
+          "title": "Minimum",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minimum",
+        "median",
+        "maximum"
+      ],
+      "title": "ReadLengthSummary",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/DatasetManifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Full or sanitized dataset structure derived from immutable scan facts.",
+  "properties": {
+    "classification": {
+      "$ref": "#/$defs/DatasetClassification"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/ManifestIssue"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/DetectionEvidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "integrity": {
+      "$ref": "#/$defs/ManifestIntegrity"
+    },
+    "manifest_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "observations": {
+      "$ref": "#/$defs/DatasetObservations"
+    },
+    "privacy": {
+      "$ref": "#/$defs/ManifestPrivacy"
+    },
+    "samples": {
+      "items": {
+        "$ref": "#/$defs/DatasetSample"
+      },
+      "title": "Samples",
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/ManifestSource"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/ManifestIssue"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source",
+    "classification"
+  ],
+  "title": "DatasetManifest",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

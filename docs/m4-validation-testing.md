@@ -2,8 +2,9 @@
 
 M4 proves that an M3-generated FASTQ-QC project is internally consistent and
 can execute on tiny, committed synthetic reads. It never treats a successful
-test as approval to run real data. Remote preflight and real-data approval stay
-in M5.
+test as approval to run real data. The separate M5 remote preflight and
+real-data approval path is documented in the
+[remote deployment guide](remote-deployment.md).
 
 ## Safety boundary
 
@@ -280,5 +281,5 @@ fails instead of following a symlink.
 FastQC, fastp, and MultiQC outputs from these tiny fixtures prove wiring,
 cardinality, parsing, and tool compatibility only. They must not be used to set
 real trimming policy or infer biological quality. Real-data QC interpretation
-still requires reviewed FastQC/MultiQC results and explicit approval in later
-milestones.
+still requires reviewed FastQC/MultiQC results and the implemented, separate
+M5 explicit approval gate.

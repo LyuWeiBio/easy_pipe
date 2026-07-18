@@ -1,0 +1,283 @@
+{
+  "$defs": {
+    "AllowedExecutionRoots": {
+      "additionalProperties": false,
+      "description": "Role-separated remote write allowlists.",
+      "properties": {
+        "cache": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Cache",
+          "type": "array"
+        },
+        "deploy": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Deploy",
+          "type": "array"
+        },
+        "output": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Output",
+          "type": "array"
+        },
+        "work": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Work",
+          "type": "array"
+        }
+      },
+      "required": [
+        "deploy",
+        "work",
+        "output",
+        "cache"
+      ],
+      "title": "AllowedExecutionRoots",
+      "type": "object"
+    },
+    "ApprovalSigner": {
+      "additionalProperties": false,
+      "description": "Controller-side key reference for authenticated run authorizations.\n\nOnly the key identifier and local file path are stored in the execution\nprofile.  The HMAC key bytes never enter generated projects, reports, audit\nrecords, or the remote protocol.",
+      "properties": {
+        "key_file": {
+          "title": "Key File",
+          "type": "string"
+        },
+        "key_id": {
+          "title": "Key Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_id",
+        "key_file"
+      ],
+      "title": "ApprovalSigner",
+      "type": "object"
+    },
+    "ContainerArtifact": {
+      "additionalProperties": false,
+      "description": "Reviewed offline container identity and optional local SIF binding.",
+      "properties": {
+        "digest": {
+          "title": "Digest",
+          "type": "string"
+        },
+        "file_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Sha256"
+        },
+        "image": {
+          "title": "Image",
+          "type": "string"
+        },
+        "local_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Path"
+        }
+      },
+      "required": [
+        "image",
+        "digest"
+      ],
+      "title": "ContainerArtifact",
+      "type": "object"
+    },
+    "DiskThreshold": {
+      "additionalProperties": false,
+      "description": "Minimum free space required by preflight.",
+      "properties": {
+        "minimum_free_bytes": {
+          "default": 10737418240,
+          "maximum": 1125899906842624,
+          "minimum": 1073741824,
+          "title": "Minimum Free Bytes",
+          "type": "integer"
+        }
+      },
+      "title": "DiskThreshold",
+      "type": "object"
+    },
+    "ExecutionPathMapping": {
+      "additionalProperties": false,
+      "description": "One explicit source-to-execution prefix mapping.",
+      "properties": {
+        "execution_prefix": {
+          "title": "Execution Prefix",
+          "type": "string"
+        },
+        "source_prefix": {
+          "title": "Source Prefix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_prefix",
+        "execution_prefix"
+      ],
+      "title": "ExecutionPathMapping",
+      "type": "object"
+    },
+    "LocalExecutionRuntime": {
+      "additionalProperties": false,
+      "description": "The only runtime admitted by the M5 MVP.",
+      "properties": {
+        "container_engine": {
+          "default": "apptainer",
+          "enum": [
+            "apptainer",
+            "docker"
+          ],
+          "title": "Container Engine",
+          "type": "string"
+        },
+        "executor": {
+          "const": "local",
+          "default": "local",
+          "title": "Executor",
+          "type": "string"
+        },
+        "workflow_engine": {
+          "const": "nextflow",
+          "default": "nextflow",
+          "title": "Workflow Engine",
+          "type": "string"
+        }
+      },
+      "title": "LocalExecutionRuntime",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ExecutionProfile.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Hashed controller configuration for one bounded execution domain.",
+  "properties": {
+    "allowed_roots": {
+      "$ref": "#/$defs/AllowedExecutionRoots"
+    },
+    "approval_signer": {
+      "$ref": "#/$defs/ApprovalSigner"
+    },
+    "bioexec_path": {
+      "default": "~/.local/bin/bioexec.pyz",
+      "title": "Bioexec Path",
+      "type": "string"
+    },
+    "containers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ContainerArtifact"
+      },
+      "maxProperties": 64,
+      "minProperties": 1,
+      "title": "Containers",
+      "type": "object"
+    },
+    "disk_threshold": {
+      "$ref": "#/$defs/DiskThreshold"
+    },
+    "execution_host": {
+      "title": "Execution Host",
+      "type": "string"
+    },
+    "path_mapping": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ExecutionPathMapping"
+      },
+      "maxItems": 64,
+      "title": "Path Mapping",
+      "type": "array"
+    },
+    "port": {
+      "default": 22,
+      "maximum": 65535,
+      "minimum": 1,
+      "title": "Port",
+      "type": "integer"
+    },
+    "preflight_max_age_seconds": {
+      "default": 900,
+      "maximum": 86400,
+      "minimum": 60,
+      "title": "Preflight Max Age Seconds",
+      "type": "integer"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "profile_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Profile Version",
+      "type": "string"
+    },
+    "runtime": {
+      "$ref": "#/$defs/LocalExecutionRuntime"
+    },
+    "source_host": {
+      "title": "Source Host",
+      "type": "string"
+    },
+    "ssh_alias": {
+      "title": "Ssh Alias",
+      "type": "string"
+    },
+    "username": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Username"
+    }
+  },
+  "required": [
+    "profile_id",
+    "source_host",
+    "execution_host",
+    "ssh_alias",
+    "approval_signer",
+    "allowed_roots",
+    "containers"
+  ],
+  "title": "ExecutionProfile",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

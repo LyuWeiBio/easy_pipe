@@ -25,6 +25,7 @@ _MAX_BUNDLE_BYTES: Final[int] = 48 * 1024 * 1024
 _MAX_FILES: Final[int] = 128
 _FIXED_FILES: Final[frozenset[str]] = frozenset(
     {
+        "LICENSE",
         "README.md",
         "assets/samplesheet.csv",
         "audit/events.jsonl",
@@ -159,6 +160,7 @@ def _read_production_files(root: Path) -> tuple[DeploymentFile, ...]:
             )
         )
     expected = {
+        "LICENSE",
         "main.nf",
         "nextflow.config",
         "pipeline.spec.yaml",

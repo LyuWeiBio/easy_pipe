@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from biopipe import __version__
+from biopipe.cli.common import ExitCode
 from biopipe.cli.execution_profile import execution_profile_app
 from biopipe.cli.generate import generate_command
 from biopipe.cli.inspect import inspect_command
@@ -12,9 +13,11 @@ from biopipe.cli.manifest import manifest_app
 from biopipe.cli.plan import plan_command
 from biopipe.cli.preflight import preflight_command
 from biopipe.cli.run import run_command
+from biopipe.cli.schema import schema_app
 from biopipe.cli.source import source_app
 from biopipe.cli.test import test_command
 from biopipe.cli.validate import validate_command
+from biopipe.cli.version import version_command
 
 app = typer.Typer(
     name="biopipe",
@@ -25,6 +28,7 @@ app = typer.Typer(
 app.add_typer(source_app, name="source")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(execution_profile_app, name="execution-profile")
+app.add_typer(schema_app, name="schema")
 app.command("inspect", help="Inspect Source Host metadata or build an M2 FASTQ manifest.")(
     inspect_command
 )
@@ -40,6 +44,9 @@ app.command("preflight", help="Check a fixed remote execution profile without ru
 app.command("run", help="Submit an explicitly approved fixed workflow or query its status.")(
     run_command
 )
+app.command("version", help="Show controller, probe, registry, compiler, and schema versions.")(
+    version_command
+)
 
 
 @app.callback()
@@ -50,7 +57,7 @@ def root(
 
     if version:
         typer.echo(__version__)
-        raise typer.Exit()
+        raise typer.Exit(code=ExitCode.SUCCESS)
 
 
 __all__ = ["app"]

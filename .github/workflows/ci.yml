@@ -44,6 +44,17 @@ jobs:
         run: |
           python remote_probe/build_zipapp.py
           python remote_executor/build_zipapp.py
+      - name: Wheel install and public-contract smoke
+        run: |
+          release_dir="$(mktemp -d)"
+          mkdir -p "$release_dir/wheels"
+          python -m pip wheel --no-deps \
+            --wheel-dir "$release_dir/wheels" .
+          python -m venv --system-site-packages "$release_dir/venv"
+          "$release_dir/venv/bin/python" -m pip install \
+            --no-index --no-deps "$release_dir"/wheels/easy_pipe-*.whl
+          "$release_dir/venv/bin/biopipe" version --json
+          "$release_dir/venv/bin/biopipe" schema list --json
       - name: Tests
         run: python -m pytest --cov=biopipe --cov=bioprobe --cov=bioexec --cov-report=term-missing
 

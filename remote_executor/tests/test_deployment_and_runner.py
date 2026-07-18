@@ -239,6 +239,34 @@ def test_deployment_rejects_declared_bundle_mismatch_without_creating_target(
     assert not Path(record["deploy_dir"]).exists()
 
 
+def test_deployment_requires_license_file(
+    agent_config: AgentConfig,
+    make_preflight_payload: Any,
+) -> None:
+    state = StateStore(agent_config.state_root)
+    result, record = run_preflight(make_preflight_payload(), agent_config, state=state)
+    assert result["status"] == "passed" and record is not None
+    state.create("preflights", record["preflight_id"], record)
+    contents = deployment_contents()
+    del contents["LICENSE"]
+    payload = {
+        "deployment_id": "deployment-1",
+        "preflight_id": record["preflight_id"],
+        "profile_id": agent_config.profile_id,
+        "profile_hash": agent_config.profile_hash,
+        "project_hash": project_hash(agent_config),
+        "bundle_hash": bundle_hash(contents),
+        "deployment_dir": record["deploy_dir"],
+        "files": deployment_files(contents),
+    }
+
+    with pytest.raises(AgentFailure) as raised:
+        deploy_bundle(payload, agent_config, state)
+
+    assert raised.value.code == "DEPLOYMENT_INCOMPLETE"
+    assert not Path(record["deploy_dir"]).exists()
+
+
 def test_completed_deployment_replay_is_verified_and_idempotent(
     agent_config: AgentConfig,
     make_preflight_payload: Any,

@@ -8,11 +8,15 @@ from pathlib import Path
 import typer
 from pydantic import BaseModel
 
-from biopipe.cli.common import controller_config_dir, emit, fail
+from biopipe.cli.common import controller_config_dir, dry_run_result, emit, fail
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.inspection import inspect_fastq_dataset
 from biopipe.manifests import ManifestArtifactStore, render_samplesheet, sanitize_manifest
-from biopipe.probe import OpenSSHProbeClient
+from biopipe.probe import (
+    OpenSSHProbeClient,
+    build_list_tree_request,
+    validate_probe_request,
+)
 from biopipe.sources import SourceRegistry
 
 
@@ -33,6 +37,11 @@ def inspect_command(
     output: Path | None = typer.Option(None, "--output"),
     sample_fastq_records: int = typer.Option(1_000, "--sample-fastq-records", min=1, max=100_000),
     config_dir: Path | None = typer.Option(None, "--config-dir", hidden=True),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate the request without contacting the probe or writing artifacts.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Return metadata or a privacy-bounded FASTQ manifest from a Source Host."""
@@ -48,6 +57,55 @@ def inspect_command(
         source_id, root = _split_target(target)
         base = config_dir.expanduser() if config_dir is not None else controller_config_dir()
         profile = SourceRegistry(base / "sources").get(source_id)
+        if (
+            normalized_policy == "format-summary"
+            and output is not None
+            and output.suffix.lower() != ".json"
+        ):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "A manifest output filename must end in .json.",
+            )
+        if dry_run:
+            initial_request = build_list_tree_request(
+                profile,
+                root,
+                request_id="dry-run-inspect",
+            )
+            validate_probe_request(profile, initial_request)
+            would_write: list[str] = []
+            if output is not None:
+                selected_output = output.expanduser().absolute()
+                would_write.append(str(selected_output))
+                if normalized_policy == "format-summary":
+                    would_write.extend(
+                        [
+                            str(selected_output.parent / f"{selected_output.stem}.sanitized.json"),
+                            str(selected_output.parent / f"{selected_output.stem}.samplesheet.csv"),
+                        ]
+                    )
+            emit(
+                dry_run_result(
+                    "inspect",
+                    "would_inspect",
+                    would_write=would_write,
+                    remote_operations=[
+                        "probe.list_tree",
+                        *(
+                            []
+                            if normalized_policy == "metadata-only"
+                            else ["probe.detect_formats", "probe.summarize_fastq"]
+                        ),
+                    ],
+                    details={
+                        "policy": normalized_policy,
+                        "sample_fastq_records": sample_fastq_records,
+                        "source_id": profile.source_id,
+                    },
+                ),
+                as_json=as_json,
+            )
+            return
         client = OpenSSHProbeClient(
             max_stdout_bytes=profile.probe.max_response_bytes,
             max_stderr_bytes=profile.probe.stderr_limit_bytes,
@@ -72,11 +130,6 @@ def inspect_command(
                 sample_fastq_records=sample_fastq_records,
             )
             if output is not None:
-                if output.suffix.lower() != ".json":
-                    raise BioPipeError(
-                        ErrorCode.VALIDATION_FAILED,
-                        "A manifest output filename must end in .json.",
-                    )
                 store = ManifestArtifactStore(output.parent)
                 artifacts: dict[str, BaseModel | str] = {
                     output.name: manifest,

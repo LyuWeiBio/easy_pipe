@@ -1,0 +1,36 @@
+{
+  "$id": "https://github.com/LyuWeiBio/easy_pipe/schemas/v1/ReconciliationReport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicit local resolution of a remotely confirmed missing submission.",
+  "properties": {
+    "confirmed_at": {
+      "format": "date-time",
+      "title": "Confirmed At",
+      "type": "string"
+    },
+    "report_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Report Version",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "const": "abandoned",
+      "default": "abandoned",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "confirmed_at"
+  ],
+  "title": "ReconciliationReport",
+  "type": "object",
+  "x-biopipe-schema-version": "1.0"
+}

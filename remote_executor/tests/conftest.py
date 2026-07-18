@@ -191,6 +191,7 @@ def make_preflight_payload(
 
 def deployment_contents() -> dict[str, bytes]:
     names = {
+        "LICENSE",
         "assets/samplesheet.csv",
         "conf/base.config",
         "conf/local.config",
