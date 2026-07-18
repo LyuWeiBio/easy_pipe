@@ -71,6 +71,39 @@ class OpenedDirectory:
         self.close()
 
 
+@dataclass(slots=True)
+class OpenedFile:
+    """An owned regular-file descriptor opened below an allowed directory."""
+
+    authorized: AuthorizedPath
+    fd: int
+    stat_result: os.stat_result
+
+    @property
+    def path(self) -> Path:
+        return self.authorized.path
+
+    @property
+    def allowed_root(self) -> AllowedRoot:
+        return self.authorized.allowed_root
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    def __enter__(self) -> OpenedFile:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
 class PathGuard:
     """Resolve and access paths only through no-follow directory descriptors."""
 
@@ -143,6 +176,36 @@ class PathGuard:
         _reject_symlink_stat(item_stat)
         self._enforce_mount(item_stat, parent.allowed_root.device)
         return AuthorizedStat(authorized=authorized, stat_result=item_stat)
+
+    def open_file(self, value: str, *, base: OpenedDirectory | None = None) -> OpenedFile:
+        """Open one regular file through anchored ``openat`` calls without symlinks."""
+
+        authorized = self.authorize(value)
+        if base is None:
+            start_fd = self._open_allowed_root(authorized.allowed_root)
+            suffix = authorized.relative_parts
+            baseline_device = authorized.allowed_root.device
+        else:
+            if base.fd < 0:
+                raise _unavailable_failure("request root directory is already closed")
+            if not _is_relative_to(authorized.path, base.path):
+                raise ProbeFailure(
+                    ReturnCode.PATH_OUTSIDE_ALLOWLIST,
+                    "PATH_OUTSIDE_REQUEST_ROOT",
+                    "file path is outside the request root",
+                )
+            suffix = authorized.path.relative_to(base.path).parts
+            try:
+                start_fd = os.dup(base.fd)
+            except OSError as exc:
+                raise _unavailable_failure() from exc
+            baseline_device = base.allowed_root.device
+        return self._open_file_relative_owned(
+            start_fd,
+            authorized,
+            suffix,
+            baseline_device=baseline_device,
+        )
 
     def open_child_directory(self, parent: OpenedDirectory, name: str) -> OpenedDirectory:
         """Open one child with openat O_NOFOLLOW and retain its descriptor."""
@@ -229,6 +292,45 @@ class PathGuard:
             self._enforce_mount(item_stat, baseline_device)
             return item_stat
         finally:
+            os.close(current_fd)
+
+    def _open_file_relative_owned(
+        self,
+        start_fd: int,
+        authorized: AuthorizedPath,
+        relative_parts: tuple[str, ...],
+        *,
+        baseline_device: int,
+    ) -> OpenedFile:
+        current_fd = start_fd
+        file_fd = -1
+        try:
+            if not relative_parts:
+                raise _unavailable_failure("requested path is not a regular file")
+            for component in relative_parts[:-1]:
+                next_fd, next_stat = _open_directory_component(current_fd, component)
+                os.close(current_fd)
+                current_fd = next_fd
+                self._enforce_mount(next_stat, baseline_device)
+            final_name = relative_parts[-1]
+            try:
+                file_fd = os.open(final_name, _file_flags(), dir_fd=current_fd)
+            except OSError as exc:
+                raise _mapped_access_failure(current_fd, final_name, exc) from exc
+            file_stat = os.fstat(file_fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise _unavailable_failure("requested path is not a regular file")
+            self._enforce_mount(file_stat, baseline_device)
+            opened = OpenedFile(
+                authorized=authorized,
+                fd=file_fd,
+                stat_result=file_stat,
+            )
+            file_fd = -1
+            return opened
+        finally:
+            if file_fd >= 0:
+                os.close(file_fd)
             os.close(current_fd)
 
     def _child_authorized(self, parent: OpenedDirectory, name: str) -> AuthorizedPath:
@@ -328,6 +430,10 @@ def _directory_flags() -> int:
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
+def _file_flags() -> int:
+    return os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
 def _open_directory_component(parent_fd: int, name: str) -> tuple[int, os.stat_result]:
     try:
         child_fd = os.open(name, _directory_flags(), dir_fd=parent_fd)
@@ -420,5 +526,6 @@ __all__ = [
     "AuthorizedPath",
     "AuthorizedStat",
     "OpenedDirectory",
+    "OpenedFile",
     "PathGuard",
 ]

@@ -1,0 +1,8 @@
+{
+  "invalid_paths": [
+    "/srv/raw/../etc/passwd.fastq",
+    "relative.fastq",
+    "/srv/raw/control\nname.fastq"
+  ],
+  "expected_validation_error": true
+}

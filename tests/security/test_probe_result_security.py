@@ -75,7 +75,13 @@ def _health_result(*, configured: bool) -> dict[str, Any]:
         "status": "ok",
         "probe_version": "0.1.0",
         "protocol_version": "1.0",
-        "capabilities": ["health", "list_tree", "stat_files"],
+        "capabilities": [
+            "detect_formats",
+            "health",
+            "list_tree",
+            "stat_files",
+            "summarize_fastq",
+        ],
         "configuration": {
             "configured": configured,
             "config_source": "environment" if configured else "none",
@@ -88,6 +94,10 @@ def _health_result(*, configured: bool) -> dict[str, Any]:
                 "max_response_bytes": 10 * 1024 * 1024,
                 "max_paths": 10_000,
                 "max_path_bytes": 4096,
+                "max_sample_records_total": 100_000,
+                "max_content_bytes": 268_435_456,
+                "max_input_bytes": 268_435_456,
+                "max_fastq_line_bytes": 1_048_576,
             },
         },
     }

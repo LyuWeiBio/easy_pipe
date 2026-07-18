@@ -1,0 +1,210 @@
+{
+  "snapshot_version": "1.0",
+  "probe_responses": [
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "entries": [
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "illumina_S7_L001_R1_001.fq.gz",
+            "path": "/srv/raw/illumina_S7_L001_R1_001.fq.gz",
+            "relative_path": "illumina_S7_L001_R1_001.fq.gz",
+            "size_bytes": 98
+          },
+          {
+            "depth": 1,
+            "kind": "file",
+            "mode": "0644",
+            "mtime_ns": "<mtime-ns>",
+            "name": "illumina_S7_L001_R2_001.fq.gz",
+            "path": "/srv/raw/illumina_S7_L001_R2_001.fq.gz",
+            "relative_path": "illumina_S7_L001_R2_001.fq.gz",
+            "size_bytes": 98
+          }
+        ],
+        "entry_count": 2,
+        "max_depth_observed": 1,
+        "operation": "list_tree",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 2,
+        "files": [
+          {
+            "compression": "gzip",
+            "extension_candidate": true,
+            "format": "fastq",
+            "path": "/srv/raw/illumina_S7_L001_R1_001.fq.gz"
+          },
+          {
+            "compression": "gzip",
+            "extension_candidate": true,
+            "format": "fastq",
+            "path": "/srv/raw/illumina_S7_L001_R2_001.fq.gz"
+          }
+        ],
+        "operation": "detect_formats",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    },
+    {
+      "error": null,
+      "protocol_version": "1.0",
+      "request_id": "<request-id>",
+      "result": {
+        "budgets": {
+          "max_depth": 8,
+          "max_entries": 100,
+          "max_runtime_seconds": 10
+        },
+        "file_count": 2,
+        "files": [
+          {
+            "compression": "gzip",
+            "format": "fastq",
+            "header_family": "illumina_casava_1_8",
+            "likely_quality_encoding": "phred33",
+            "mate_markers": {
+              "mixed": false,
+              "read_1": 1,
+              "read_2": 0,
+              "unknown": 0
+            },
+            "path": "/srv/raw/illumina_S7_L001_R1_001.fq.gz",
+            "read_length": {
+              "maximum": 151,
+              "median": 151,
+              "minimum": 151
+            },
+            "records_sampled": 1,
+            "structure_valid": true
+          },
+          {
+            "compression": "gzip",
+            "format": "fastq",
+            "header_family": "illumina_casava_1_8",
+            "likely_quality_encoding": "phred33",
+            "mate_markers": {
+              "mixed": false,
+              "read_1": 0,
+              "read_2": 1,
+              "unknown": 0
+            },
+            "path": "/srv/raw/illumina_S7_L001_R2_001.fq.gz",
+            "read_length": {
+              "maximum": 151,
+              "median": 151,
+              "minimum": 151
+            },
+            "records_sampled": 1,
+            "structure_valid": true
+          }
+        ],
+        "operation": "summarize_fastq",
+        "root": "/srv/raw"
+      },
+      "return_code": 0,
+      "success": true
+    }
+  ],
+  "manifest": {
+    "manifest_version": "1.0",
+    "source": {
+      "source_id": "golden-source",
+      "root": "/srv/raw",
+      "scanned_at": "2026-01-01T00:00:00Z",
+      "scan_policy": "format_summary"
+    },
+    "classification": {
+      "dataset_type": "illumina_fastq",
+      "layout": "paired_end",
+      "confidence": 1
+    },
+    "samples": [
+      {
+        "sample_id": "sample_001",
+        "original_sample_name": "illumina",
+        "lanes": [
+          {
+            "lane": "L001",
+            "chunk": "001",
+            "read1": "/srv/raw/illumina_S7_L001_R1_001.fq.gz",
+            "read2": "/srv/raw/illumina_S7_L001_R2_001.fq.gz"
+          }
+        ]
+      }
+    ],
+    "observations": {
+      "compression": "gzip",
+      "read_length": {
+        "minimum": 151,
+        "median": 151,
+        "maximum": 151
+      },
+      "likely_quality_encoding": "phred33",
+      "header_family": "illumina_casava_1_8"
+    },
+    "evidence": [
+      {
+        "rule": "valid_fastq_structure",
+        "score": 0.35,
+        "detail": "2/2 valid structures"
+      },
+      {
+        "rule": "fastq_extension",
+        "score": 0.1,
+        "detail": "2/2 supported suffixes"
+      },
+      {
+        "rule": "illumina_filename",
+        "score": 0.3,
+        "detail": "2/2 Illumina lane/chunk names"
+      },
+      {
+        "rule": "illumina_header",
+        "score": 0.2,
+        "detail": "2/2 Illumina header families"
+      },
+      {
+        "rule": "header_mate_consistency",
+        "score": 0.05,
+        "detail": "2/2 files have no filename/header mate conflict"
+      }
+    ],
+    "warnings": [],
+    "errors": [],
+    "privacy": {
+      "filenames_may_contain_identifiers": true,
+      "raw_content_exported": false
+    },
+    "integrity": {
+      "manifest_sha256": "<manifest-sha256>"
+    }
+  },
+  "samplesheet": "sample_id,lane,chunk,read1,read2\nsample_001,L001,001,/srv/raw/illumina_S7_L001_R1_001.fq.gz,/srv/raw/illumina_S7_L001_R2_001.fq.gz\n"
+}

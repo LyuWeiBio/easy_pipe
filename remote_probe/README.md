@@ -1,10 +1,12 @@
-# bioprobe M1 remote probe
+# bioprobe M2 remote probe
 
-`bioprobe` is a Python 3.11+ standard-library-only, metadata-only filesystem
+`bioprobe` is a Python 3.11+ standard-library-only, read-only filesystem
 probe. It accepts bounded JSON Lines on stdin and writes one JSON response per
-line on stdout. It has three fixed operations: `health`, `list_tree`, and
-`stat_files`. It contains no shell, `eval`, plugin loader, arbitrary execution,
-download, file-content reader, or raw-data write operation.
+line on stdout. It has five fixed operations: `health`, `list_tree`,
+`stat_files`, `detect_formats`, and `summarize_fastq`. It contains no shell,
+`eval`, plugin loader, arbitrary execution, download, or raw-data write
+operation. Content reads are limited to FASTQ format detection and bounded
+record aggregation; raw lines are never returned.
 
 ## Configuration discovery
 
@@ -25,8 +27,8 @@ must exist; neither may itself be a symlink.
 
 Each request contains `protocol_version`, `request_id`, `operation`, optional
 `root`, optional `paths`, and optional `policy`. Client budgets can reduce but
-cannot raise configured ceilings. `follow_symlinks: true` is always rejected in
-M1. `stat_files` requires one or more absolute `paths`; its optional `root`
+cannot raise configured ceilings. `follow_symlinks: true` is always rejected.
+`stat_files` requires one or more absolute `paths`; its optional `root`
 further confines those paths. `list_tree` requires an absolute directory
 `root` and uses descriptor-based `os.scandir` without loading an unbounded
 directory listing.
@@ -35,6 +37,8 @@ directory listing.
 {"protocol_version":"1.0","request_id":"health-1","operation":"health"}
 {"protocol_version":"1.0","request_id":"tree-1","operation":"list_tree","root":"/data/raw/run42","policy":{"max_depth":6,"max_entries":100000,"max_runtime_seconds":300,"follow_symlinks":false}}
 {"protocol_version":"1.0","request_id":"stat-1","operation":"stat_files","root":"/data/raw/run42","paths":["/data/raw/run42/sample_R1.fastq.gz"]}
+{"protocol_version":"1.0","request_id":"detect-1","operation":"detect_formats","root":"/data/raw/run42","paths":["/data/raw/run42/sample_R1.fastq.gz"],"policy":{"inspection_level":"format_summary","sample_fastq_records":1}}
+{"protocol_version":"1.0","request_id":"summary-1","operation":"summarize_fastq","root":"/data/raw/run42","paths":["/data/raw/run42/sample_R1.fastq.gz"],"policy":{"inspection_level":"format_summary","sample_fastq_records":1000}}
 ```
 
 Run from source:
@@ -47,7 +51,9 @@ BIOPROBE_CONFIG=/absolute/path/to/config.json \
 Every response has `protocol_version`, `request_id`, `success`, `return_code`,
 `result`, and `error`. Successful tree metadata contains only paths, relative
 paths, names, entry kinds, sizes, nanosecond mtimes, permission modes, and
-depths. No file is opened for content inspection.
+depths. FASTQ operations add only format/compression, sampled-record counts,
+read-length aggregates, likely quality encoding, header family, and aggregate
+mate-marker counts.
 
 Stable return codes are 0 success, 10 protocol/schema failure, 11 unsupported
 operation, 20 outside allowlist, 21 missing/unreadable path, 22 symlink/path or
@@ -60,9 +66,25 @@ Request-line size, depth, entry, or explicit-path exhaustion returns code 30
 for the whole request; `list_tree` never reports a truncated result as success.
 The server-only `limits.max_response_bytes` setting defaults to 10 MiB and
 counts the complete JSONL response including its newline. `list_tree` and
-`stat_files` account for each encoded metadata item before retaining it; an
+`stat_files`, `detect_formats`, and `summarize_fastq` account for each encoded
+item before retaining it; an
 overflow is replaced by a bounded `RESPONSE_BUDGET_EXCEEDED` response with code
 30.
+
+FASTQ content reads have three additional server-only ceilings. The defaults
+are 100,000 structurally valid records per request
+(`max_sample_records_total`), 256 MiB of decompressed stream bytes per request
+(`max_content_bytes`), 256 MiB of underlying plain/compressed input reads per
+request (`max_input_bytes`), and 1 MiB per FASTQ line
+(`max_fastq_line_bytes`). The record and byte counters are shared across every
+path in a `detect_formats` or `summarize_fastq` request; a request cannot reset
+them by supplying more files. Underlying files are read unbuffered through a
+deadline-aware meter, including gzip headers, optional names/comments, and
+compressed deflate input. Line terminators count toward the decompressed
+content-byte budget. Reaching a ceiling exactly is permitted, while any
+overrun fails the whole request with `SCAN_BUDGET_EXCEEDED` and return code 30.
+An otherwise valid record with an overlong line is also a budget failure,
+never an `INVALID_FASTQ` classification.
 
 ## Descriptor security and portability
 

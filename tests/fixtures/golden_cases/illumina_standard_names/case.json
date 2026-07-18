@@ -1,0 +1,15 @@
+{
+  "files": [
+    {"path": "/srv/raw/illumina_S7_L001_R1_001.fq.gz", "compression": "gzip", "structure_valid": true, "read_length": {"minimum": 151, "median": 151.0, "maximum": 151}, "likely_quality_encoding": "phred33", "header_family": "illumina_casava_1_8", "mate_markers": {"read_1": 1, "read_2": 0, "unknown": 0, "mixed": false}},
+    {"path": "/srv/raw/illumina_S7_L001_R2_001.fq.gz", "compression": "gzip", "structure_valid": true, "read_length": {"minimum": 151, "median": 151.0, "maximum": 151}, "likely_quality_encoding": "phred33", "header_family": "illumina_casava_1_8", "mate_markers": {"read_1": 0, "read_2": 1, "unknown": 0, "mixed": false}}
+  ],
+  "expected": {
+    "dataset_type": "illumina_fastq",
+    "layout": "paired_end",
+    "sample_count": 1,
+    "lane_count": 1,
+    "original_names": ["illumina"],
+    "warning_codes": [],
+    "error_codes": []
+  }
+}

@@ -14,6 +14,14 @@ from typing import Any
 from . import PROTOCOL_VERSION, __version__
 from .config import ProbeConfig
 from .errors import ProbeFailure, ReturnCode
+from .fastq import (
+    FastqBudgetExceeded,
+    FastqContentBudget,
+    FastqFormatError,
+    detect_compression,
+    is_fastq_extension_candidate,
+    sample_fastq,
+)
 from .paths import OpenedDirectory, PathGuard
 from .protocol import (
     ProbeRequest,
@@ -86,7 +94,13 @@ def health(request: ProbeRequest, config: ProbeConfig) -> dict[str, Any]:
         "status": "ok",
         "probe_version": __version__,
         "protocol_version": PROTOCOL_VERSION,
-        "capabilities": ["health", "list_tree", "stat_files"],
+        "capabilities": [
+            "detect_formats",
+            "health",
+            "list_tree",
+            "stat_files",
+            "summarize_fastq",
+        ],
         "configuration": {
             "configured": bool(config.allowed_roots),
             "config_source": config.source,
@@ -99,6 +113,10 @@ def health(request: ProbeRequest, config: ProbeConfig) -> dict[str, Any]:
                 "max_response_bytes": config.limits.max_response_bytes,
                 "max_paths": config.limits.max_paths,
                 "max_path_bytes": config.limits.max_path_bytes,
+                "max_sample_records_total": config.limits.max_sample_records_total,
+                "max_content_bytes": config.limits.max_content_bytes,
+                "max_input_bytes": config.limits.max_input_bytes,
+                "max_fastq_line_bytes": config.limits.max_fastq_line_bytes,
             },
         },
     }
@@ -283,6 +301,226 @@ def stat_files(request: ProbeRequest, config: ProbeConfig) -> dict[str, Any]:
     )
 
 
+def detect_formats(request: ProbeRequest, config: ProbeConfig) -> dict[str, Any]:
+    """Classify explicit files from gzip magic and one bounded FASTQ record."""
+
+    budgets, deadline, content_budget = _content_budgets(request, config)
+    guard = PathGuard(config)
+    assert request.root is not None
+    files: list[dict[str, Any]] = []
+    serialized_item_bytes = 0
+
+    with guard.open_directory(request.root) as root:
+        initial = _content_result(
+            "detect_formats",
+            root.path,
+            [],
+            file_count=0,
+            budgets=budgets,
+        )
+        _ensure_collection_response_budget(
+            request.request_id,
+            initial,
+            serialized_items_bytes=0,
+            item_count=0,
+            config=config,
+        )
+        for value in request.paths:
+            deadline.check()
+            try:
+                with guard.open_file(value, base=root) as opened:
+                    try:
+                        compression = detect_compression(
+                            opened.fd,
+                            deadline,
+                            content_budget,
+                        )
+                        sample_fastq(
+                            opened.fd,
+                            compression,
+                            1,
+                            deadline,
+                            content_budget,
+                            config.limits.max_fastq_line_bytes,
+                        )
+                    except FastqBudgetExceeded as exc:
+                        raise _budget_failure(exc.budget, exc.limit) from exc
+                    except FastqFormatError:
+                        detected_format = "unknown"
+                    else:
+                        detected_format = "fastq"
+                    item = {
+                        "path": str(opened.path),
+                        "format": detected_format,
+                        "compression": compression,
+                        "extension_candidate": is_fastq_extension_candidate(opened.path),
+                    }
+            except OSError as exc:
+                raise _unavailable_failure() from exc
+            serialized_item_bytes = _append_bounded_content_item(
+                request,
+                config,
+                budgets,
+                root.path,
+                "detect_formats",
+                files,
+                item,
+                serialized_item_bytes,
+            )
+        deadline.check()
+
+    return _content_result(
+        "detect_formats",
+        root.path,
+        files,
+        file_count=len(files),
+        budgets=budgets,
+    )
+
+
+def summarize_fastq(request: ProbeRequest, config: ProbeConfig) -> dict[str, Any]:
+    """Return aggregate facts from a bounded sample of explicit FASTQ files."""
+
+    budgets, deadline, content_budget = _content_budgets(request, config)
+    guard = PathGuard(config)
+    assert request.root is not None
+    files: list[dict[str, Any]] = []
+    serialized_item_bytes = 0
+
+    with guard.open_directory(request.root) as root:
+        initial = _content_result(
+            "summarize_fastq",
+            root.path,
+            [],
+            file_count=0,
+            budgets=budgets,
+        )
+        _ensure_collection_response_budget(
+            request.request_id,
+            initial,
+            serialized_items_bytes=0,
+            item_count=0,
+            config=config,
+        )
+        for path_index, value in enumerate(request.paths):
+            deadline.check()
+            try:
+                with guard.open_file(value, base=root) as opened:
+                    try:
+                        compression = detect_compression(
+                            opened.fd,
+                            deadline,
+                            content_budget,
+                        )
+                        aggregate = sample_fastq(
+                            opened.fd,
+                            compression,
+                            request.policy.sample_fastq_records,
+                            deadline,
+                            content_budget,
+                            config.limits.max_fastq_line_bytes,
+                        )
+                    except FastqBudgetExceeded as exc:
+                        raise _budget_failure(exc.budget, exc.limit) from exc
+                    except FastqFormatError as exc:
+                        if exc.recognized_fastq or is_fastq_extension_candidate(opened.path):
+                            raise _invalid_fastq_failure(path_index) from exc
+                        raise _unsupported_format_failure(path_index) from exc
+                    item = aggregate.to_result(opened.path, compression)
+            except ProbeFailure:
+                raise
+            except OSError as exc:
+                raise _unavailable_failure() from exc
+            serialized_item_bytes = _append_bounded_content_item(
+                request,
+                config,
+                budgets,
+                root.path,
+                "summarize_fastq",
+                files,
+                item,
+                serialized_item_bytes,
+            )
+        deadline.check()
+
+    return _content_result(
+        "summarize_fastq",
+        root.path,
+        files,
+        file_count=len(files),
+        budgets=budgets,
+    )
+
+
+def _content_budgets(
+    request: ProbeRequest,
+    config: ProbeConfig,
+) -> tuple[EffectiveBudgets, Deadline, FastqContentBudget]:
+    if request.policy.follow_symlinks:
+        raise _symlink_policy_failure()
+    budgets = effective_budgets(request, config)
+    if len(request.paths) > config.limits.max_paths:
+        raise _budget_failure("max_paths", config.limits.max_paths)
+    if len(request.paths) > budgets.max_entries:
+        raise _budget_failure("max_entries", budgets.max_entries)
+    deadline = Deadline(budgets.max_runtime_seconds)
+    deadline.check()
+    content_budget = FastqContentBudget(
+        max_sample_records_total=config.limits.max_sample_records_total,
+        max_content_bytes=config.limits.max_content_bytes,
+        max_input_bytes=config.limits.max_input_bytes,
+    )
+    return budgets, deadline, content_budget
+
+
+def _append_bounded_content_item(
+    request: ProbeRequest,
+    config: ProbeConfig,
+    budgets: EffectiveBudgets,
+    root: Path,
+    operation: str,
+    files: list[dict[str, Any]],
+    item: dict[str, Any],
+    serialized_item_bytes: int,
+) -> int:
+    item_size = len(encode_json(item))
+    projected_count = len(files) + 1
+    projected = _content_result(
+        operation,
+        root,
+        [],
+        file_count=projected_count,
+        budgets=budgets,
+    )
+    projected_bytes = serialized_item_bytes + item_size
+    _ensure_collection_response_budget(
+        request.request_id,
+        projected,
+        serialized_items_bytes=projected_bytes,
+        item_count=projected_count,
+        config=config,
+    )
+    files.append(item)
+    return projected_bytes
+
+
+def _content_result(
+    operation: str,
+    root: Path,
+    files: list[dict[str, Any]],
+    *,
+    file_count: int,
+    budgets: EffectiveBudgets,
+) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "root": str(root),
+        "files": files,
+        "file_count": file_count,
+        "budgets": budgets.to_dict(),
+    }
+
+
 def _tree_result(
     root: Path,
     entries: list[dict[str, Any]],
@@ -372,7 +610,7 @@ def _symlink_policy_failure() -> ProbeFailure:
     return ProbeFailure(
         ReturnCode.SYMLINK_OR_ESCAPE,
         "SYMLINK_FORBIDDEN",
-        "M1 does not permit following symlinks",
+        "M2 does not permit following symlinks",
     )
 
 
@@ -382,11 +620,31 @@ def _unavailable_failure(
     return ProbeFailure(ReturnCode.PATH_UNAVAILABLE, "PATH_UNAVAILABLE", message)
 
 
+def _unsupported_format_failure(path_index: int) -> ProbeFailure:
+    return ProbeFailure(
+        ReturnCode.UNSUPPORTED_FORMAT,
+        "UNSUPPORTED_FORMAT",
+        "requested file is not a supported FASTQ stream",
+        context={"path_index": path_index},
+    )
+
+
+def _invalid_fastq_failure(path_index: int) -> ProbeFailure:
+    return ProbeFailure(
+        ReturnCode.INVALID_FASTQ,
+        "INVALID_FASTQ",
+        "sampled FASTQ content has invalid or truncated four-line structure",
+        context={"path_index": path_index},
+    )
+
+
 __all__ = [
     "Deadline",
     "EffectiveBudgets",
+    "detect_formats",
     "effective_budgets",
     "health",
     "list_tree",
     "stat_files",
+    "summarize_fastq",
 ]

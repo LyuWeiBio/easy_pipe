@@ -1,0 +1,22 @@
+{
+  "files": [
+    {
+      "path": "/srv/raw/orphan_R1.fastq.gz",
+      "compression": "gzip",
+      "structure_valid": true,
+      "read_length": {"minimum": 100, "median": 100.0, "maximum": 100},
+      "likely_quality_encoding": "phred33",
+      "header_family": "generic",
+      "mate_markers": {"read_1": 1, "read_2": 0, "unknown": 0, "mixed": false}
+    }
+  ],
+  "expected": {
+    "dataset_type": "generic_fastq",
+    "layout": "unknown",
+    "sample_count": 1,
+    "lane_count": 1,
+    "original_names": ["orphan"],
+    "warning_codes": [],
+    "error_codes": ["missing_mate"]
+  }
+}

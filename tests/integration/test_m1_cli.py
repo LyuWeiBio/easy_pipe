@@ -151,7 +151,7 @@ def test_inspect_cli_writes_metadata_response_atomically(
     assert list(tmp_path.glob(".inspection.json.*.tmp")) == []
 
 
-def test_inspect_cli_rejects_non_metadata_policy_without_contacting_probe(
+def test_inspect_cli_rejects_unknown_policy_without_contacting_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -167,7 +167,7 @@ def test_inspect_cli_rejects_non_metadata_policy_without_contacting_probe(
             "inspect",
             "synthetic-source:/srv/synthetic-raw",
             "--policy",
-            "format-summary",
+            "integrity-check",
             "--config-dir",
             str(tmp_path),
             "--json",

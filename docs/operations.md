@@ -1,8 +1,8 @@
-# M1 operations guide
+# M2 operations guide
 
-M1 provides a local controller, a manually installed Remote Probe, and fixed
-OpenSSH transport. It does not deploy software automatically and does not run
-analysis workflows.
+M2 provides a local controller, a manually installed Remote Probe, fixed
+OpenSSH transport, privacy-safe FASTQ detection, and auditable manifests. It
+does not deploy software automatically and does not run analysis workflows.
 
 ## Build the zipapp
 
@@ -78,6 +78,27 @@ Metadata-only inspection:
 biopipe inspect hpc01:/data/raw/run42 --policy metadata-only --json
 ```
 
+FASTQ format-summary inspection creates a full manifest, sanitized manifest,
+and—only when no blocking errors remain—a candidate samplesheet. The bundle is
+create-only: if any destination already exists, no new member is retained.
+
+```bash
+biopipe inspect hpc01:/data/raw/run42 \
+  --policy format-summary \
+  --sample-fastq-records 1000 \
+  --output projects/run42/dataset.manifest.json
+
+biopipe manifest show projects/run42/dataset.manifest.json
+biopipe manifest apply-overrides \
+  projects/run42/dataset.manifest.json \
+  --overrides projects/run42/manifest.overrides.yaml \
+  --output-dir projects/run42/resolved \
+  --name dataset
+```
+
+See the [manifest workflow](manifest-workflow.md) for artifact names, integrity
+checks, sanitization, and override rules.
+
 Unknown host keys and changed host keys are blocking errors. Add host keys
 through the operator's normal reviewed OpenSSH process; `biopipe` never accepts
 them automatically.
@@ -98,14 +119,14 @@ biopipe source remove hpc01
 
 ## Manual uninstall from a Source Host
 
-After confirming the exact host and paths, the operator may remove the two M1
+After confirming the exact host and paths, the operator may remove the two M2
 files manually:
 
 ```bash
 ssh hpc01 'rm ~/.local/bin/bioprobe.pyz ~/.config/bioprobe/config.json'
 ```
 
-M1 never removes remote files automatically. Removing the configuration does
+M2 never removes remote files automatically. Removing the configuration does
 not affect raw data.
 
 ## Troubleshooting
@@ -117,3 +138,7 @@ not affect raw data.
 - `PATH_OUTSIDE_ALLOWLIST`: update the host-local probe configuration only
   after reviewing the intended data boundary.
 - `SYMLINK_FORBIDDEN`: use a real canonical path below an allowed root.
+- `SCAN_BUDGET_EXCEEDED`: narrow the directory or have an operator review the
+  host-local FASTQ content ceilings; requests cannot raise them.
+- `INVALID_FASTQ`: repair the source file or record an explicit reviewed
+  exclusion; a malformed candidate is never silently accepted.
