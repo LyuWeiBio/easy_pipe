@@ -23,7 +23,12 @@ jobs:
       - name: Install package and development tools
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
       - name: Ruff lint
-        run: ruff check .
+        run: |
+          if ! ruff check .; then
+            ruff check . --fix
+            git diff -- .
+            exit 1
+          fi
       - name: Ruff format
         run: ruff format --check .
       - name: Mypy
