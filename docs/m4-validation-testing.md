@@ -32,9 +32,10 @@ source host; MultiQC is invoked with its remote version check disabled.
 
 ## Reproducible mamba environment
 
-The reviewed environment is
-[`environments/m4-test.yml`](../environments/m4-test.yml). From the repository
-root:
+The reviewed, human-readable environment input is
+[`environments/m4-test.yml`](../environments/m4-test.yml). It pins the intended
+direct versions, but creating from it performs a new platform solve. From the
+repository root:
 
 ```bash
 micromamba create --strict-channel-priority -f environments/m4-test.yml
@@ -53,6 +54,22 @@ python -m pip install --no-deps --no-build-isolation -e .
 Do not install these packages into the system Python. Creating the environment
 downloads public packages; the validation and synthetic runs themselves are
 offline.
+
+The committed
+[platform locks and supply-chain inventories](../environments/locks/README.md)
+bind the reviewed cross-platform solver transactions to exact package URLs,
+builds, channels, MD5 values, SHA-256 values, dependencies, and channel license
+metadata. Their integrity and internal agreement can be checked without a
+solver or network access:
+
+```bash
+python scripts/generate_supply_chain_inventory.py verify
+```
+
+The lock metadata deliberately records `resolution_scope` as
+`cross_platform_metadata_only` and native-runtime validation as `pending` for
+both platforms. A solved and integrity-valid lock is supply-chain evidence, not
+proof that the environment executed successfully on a native host.
 
 Confirm the selected executables before accepting E2E evidence:
 
@@ -96,7 +113,9 @@ The Linux solve requires glibc 2.17 or newer. nf-test tracing also requires a
 working `ps` command (normally supplied by the host's procps installation;
 macOS supplies `/bin/ps`). Builds are intentionally not embedded in the
 cross-platform YAML; exact versions are pinned and the solver selects the
-reviewed platform build.
+reviewed platform build. The explicit lock and matching inventory are the
+authoritative records of that selected artifact set; the table above remains a
+human-readable summary rather than a substitute for their hashes.
 
 ## Repository checks
 

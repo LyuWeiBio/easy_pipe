@@ -1,0 +1,80 @@
+{
+  "containers": [
+    {
+      "component_ids": [
+        "fastp_paired_v1",
+        "fastp_single_v1"
+      ],
+      "declared_component_license": "MIT",
+      "digest": "sha256:cbbe2402b6b6704df470d7d77dcb498eefd5bcd01f4c38be0ec69899e79ac134",
+      "digest_verification": {
+        "reason": "exact_image_not_fetched_or_inspected_by_this_generator",
+        "status": "pending"
+      },
+      "image": "quay.io/biocontainers/fastp:1.3.6--h43da1c4_0",
+      "license_review": {
+        "evidence_sha256": null,
+        "reviewed_at": null,
+        "reviewer": null,
+        "scope": "exact_container_contents",
+        "status": "pending"
+      },
+      "name": "fastp",
+      "version": "1.3.6"
+    },
+    {
+      "component_ids": [
+        "fastqc_post_trim_v1",
+        "fastqc_raw_v1"
+      ],
+      "declared_component_license": "GPL-3.0-or-later",
+      "digest": "sha256:e194048df39c3145d9b4e0a14f4da20b59d59250465b6f2a9cb698445fd45900",
+      "digest_verification": {
+        "reason": "exact_image_not_fetched_or_inspected_by_this_generator",
+        "status": "pending"
+      },
+      "image": "quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0",
+      "license_review": {
+        "evidence_sha256": null,
+        "reviewed_at": null,
+        "reviewer": null,
+        "scope": "exact_container_contents",
+        "status": "pending"
+      },
+      "name": "fastqc",
+      "version": "0.12.1"
+    },
+    {
+      "component_ids": [
+        "multiqc_v1"
+      ],
+      "declared_component_license": "GPL-3.0-or-later",
+      "digest": "sha256:b65e3fe879df27b92334dda0fd987a6e21bdee09a2848551d4f287099a93b7ac",
+      "digest_verification": {
+        "reason": "exact_image_not_fetched_or_inspected_by_this_generator",
+        "status": "pending"
+      },
+      "image": "quay.io/biocontainers/multiqc:1.35--pyhdfd78af_1",
+      "license_review": {
+        "evidence_sha256": null,
+        "reviewed_at": null,
+        "reviewer": null,
+        "scope": "exact_container_contents",
+        "status": "pending"
+      },
+      "name": "multiqc",
+      "version": "1.35"
+    }
+  ],
+  "format_version": "1",
+  "registry": {
+    "path": "src/biopipe/registry/data/fastq_qc.v1.yaml",
+    "registry_schema_version": "1.0",
+    "registry_version": "1.0.0",
+    "sha256": "fae85bef0574b552d65647bdfe8f2f1a5fe271752df446f47f5083a8ae44e8d4"
+  },
+  "release_readiness": {
+    "reason": "digest_material_and_exact_image_license_reviews_are_pending",
+    "status": "blocked"
+  }
+}

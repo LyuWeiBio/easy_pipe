@@ -1,0 +1,70 @@
+{
+  "channel_priority": "strict",
+  "channels": [
+    {
+      "base_url": "https://conda.anaconda.org/conda-forge",
+      "name": "conda-forge"
+    },
+    {
+      "base_url": "https://conda.anaconda.org/bioconda",
+      "name": "bioconda"
+    }
+  ],
+  "direct_dependencies": {
+    "path": "environments/locks/direct-dependencies.json",
+    "sha256": "e5648a7109a973893c179fca24ddbf93386c6485672be9da77bba90cbce0d8b4"
+  },
+  "format_version": "1",
+  "platforms": [
+    {
+      "explicit_lock": {
+        "path": "environments/locks/linux-64.explicit.txt",
+        "sha256": "09b6615bc452d2a48474c20e8b27b7ab5002b795b50a20a060e66f1dc58d7f14"
+      },
+      "inventory": {
+        "path": "environments/locks/linux-64.inventory.json",
+        "sha256": "63e242b67581cc0cb2c6c56b201b0fcf61585c7b78365de3e9b29d59ae00409d"
+      },
+      "native_runtime_validation": "pending",
+      "package_count": 183,
+      "resolution_status": "resolved_cross_platform",
+      "target_platform": "linux-64",
+      "virtual_packages": [
+        "__unix=0=0",
+        "__linux=5.15=0",
+        "__glibc=2.17=0",
+        "__archspec=1=x86_64-v2"
+      ]
+    },
+    {
+      "explicit_lock": {
+        "path": "environments/locks/osx-arm64.explicit.txt",
+        "sha256": "d30353e380bbab1776e5a213727870d7c27a1d5473392299778cfc3beb593291"
+      },
+      "inventory": {
+        "path": "environments/locks/osx-arm64.inventory.json",
+        "sha256": "0056597cf8591811327ee8453aa32821c90f8fc44ae9f64994ed81b796dca59d"
+      },
+      "native_runtime_validation": "pending",
+      "package_count": 149,
+      "resolution_status": "resolved_cross_platform",
+      "target_platform": "osx-arm64",
+      "virtual_packages": [
+        "__unix=0=0",
+        "__osx=11.0=0",
+        "__archspec=1=arm64"
+      ]
+    }
+  ],
+  "resolution_scope": "cross_platform_metadata_only",
+  "solver": {
+    "executable_sha256": "0d214de96cba11cb18a63ba3d9ba3c0d4e2f57212210c4970f2ce975e8d343aa",
+    "libmamba_version": "1.5.6",
+    "name": "micromamba",
+    "version": "1.5.6"
+  },
+  "source_environment": {
+    "path": "environments/m4-test.yml",
+    "sha256": "344819daa1fb46262e65c54633be0e8ace753590d6e93a06a56855bc106468bc"
+  }
+}

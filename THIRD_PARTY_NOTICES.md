@@ -20,14 +20,20 @@ into this repository or the remote zipapps.
 | [Rich](https://github.com/Textualize/rich) | `>=13,<15` | MIT | CLI presentation dependency |
 | [Typer](https://github.com/fastapi/typer) | `>=0.12,<1` | MIT | CLI command tree |
 
-Each installer resolves additional transitive packages. Their exact versions
-and licenses depend on the selected environment. Before redistributing an
-installed environment, produce an inventory from that environment and retain
-the license metadata supplied by the package source. The release reference
-environment pins exact versions in `environments/m4-test.yml`.
+Each installer resolves additional transitive packages. The human-readable
+`environments/m4-test.yml` pins the intended direct versions, while
+`environments/locks/direct-dependencies.json`, the platform explicit locks,
+and the platform inventories record the exact cross-platform solver results,
+including package URLs, builds, channels, and hashes. The inventory license
+fields are channel metadata, not an independent legal review or permission to
+redistribute. Native-runtime validation of both platform locks remains
+`pending`. Before redistributing an installed environment, compare its actual
+inventory with the matching lock and retain the license metadata and notices
+supplied by the package source.
 
 The source build uses [Setuptools](https://github.com/pypa/setuptools)
 `>=77` (MIT). The optional `dev` extra directly declares
+[build](https://github.com/pypa/build) (MIT),
 [pytest](https://github.com/pytest-dev/pytest) (MIT),
 [pytest-cov](https://github.com/pytest-dev/pytest-cov) (MIT),
 [mypy](https://github.com/python/mypy) (MIT),
@@ -52,6 +58,11 @@ Container images include their own operating-system and language dependencies;
 the table above is not a complete bill of materials for an image. Operators who
 mirror or redistribute an image must inspect that exact digest, preserve its
 notices/source offers, and satisfy every included license.
+
+`environments/locks/containers.json` inventories the registry identities and
+their declared component licenses, but exact-image digest verification and
+container-content license review remain `pending`; its release-readiness state
+is deliberately `blocked`. It must not be cited as an approval record.
 
 ## Workflow validation toolchain
 
@@ -90,10 +101,16 @@ operator's content; a tool's output may include its own notices or attribution.
 
 Before a release or internal redistribution:
 
-1. compare `pyproject.toml`, `environments/m4-test.yml`, the packaged registry,
-   and this inventory;
-2. export the exact installed package list and license metadata;
-3. inspect every distributed container digest and remote artifact;
-4. retain upstream copyright/license texts and source offers where required;
+1. compare `pyproject.toml`, `environments/m4-test.yml`,
+   `environments/locks/direct-dependencies.json`, the packaged registry, and
+   this inventory;
+2. run `python scripts/generate_supply_chain_inventory.py verify` and review
+   `environments/locks/SHA256SUMS`, both explicit locks, and both complete
+   package inventories;
+3. export the exact installed package list and license metadata and compare it
+   with the matching platform inventory;
+4. inspect every distributed container digest and remote artifact rather than
+   treating a `pending` or `blocked` inventory record as approval;
+5. retain upstream copyright/license texts and source offers where required;
    and
-5. record reviewer, date, scope, and exceptions in the release checklist.
+6. record reviewer, date, scope, and exceptions in the release checklist.
