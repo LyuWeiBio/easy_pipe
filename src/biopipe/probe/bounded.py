@@ -6,7 +6,7 @@ import math
 import subprocess
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import IO, Final
@@ -48,6 +48,7 @@ def run_bounded(
     timeout: float,
     stdout_limit: int,
     stderr_limit: int,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run an argument array with bounded pipe readers and no shell.
 
@@ -69,6 +70,7 @@ def run_bounded(
         shell=False,
         text=False,
         bufsize=0,
+        env=None if env is None else dict(env),
     )
     assert process.stdin is not None
     assert process.stdout is not None

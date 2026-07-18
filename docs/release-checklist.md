@@ -75,7 +75,11 @@ Run from the repository root in the pinned `easy-pipe-m4` environment:
 ruff format --check .
 ruff check .
 mypy src remote_probe/src remote_probe/build_zipapp.py \
-  remote_executor/src remote_executor/build_zipapp.py
+  remote_executor/src remote_executor/build_zipapp.py \
+  scripts/create_release_acceptance_evidence.py \
+  scripts/generate_supply_chain_inventory.py \
+  scripts/verify_installed_package.py \
+  scripts/verify_release_acceptance_junit.py
 python -m pytest
 ```
 
@@ -90,7 +94,9 @@ python -m pytest
       exact candidate commit, including full-SHA Action policy, byte-identical
       double zipapp builds, and separate dependency-resolving wheel and sdist
       installations that pass `pip check`, version/schema/resource checks, and
-      a minimal `plan` to `generate` smoke test.
+      a minimal `plan` to `generate` smoke test; the separate release-acceptance
+      workflow also passes from the exact native Linux and macOS arm64 locks,
+      with zero required-tool skips on Linux and controller-only scope on macOS.
 
 ## Reproducible remote artifacts
 
@@ -181,7 +187,9 @@ bash scripts/demo_release_acceptance.sh
       generation, approval, deployment, submission, status, and completion
       events without raw sequence, quality, full read identifiers, secrets, or
       signatures.
-- [ ] Retained demo artifacts and checksums are linked to the release record.
+- [ ] The fixed sanitized CI acceptance bundle and aggregate checksum are
+      linked to the release record; the retained raw demo/JUnit tree remains
+      outside uploaded evidence and follows local secure retention policy.
 
 ## Documentation and operator handoff
 

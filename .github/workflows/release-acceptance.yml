@@ -1,0 +1,309 @@
+name: Release acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Optional controller-version-rcN identity for this unreviewed evidence run
+        required: false
+        type: string
+  push:
+    branches: [main]
+    tags: ["v*-rc*"]
+    paths:
+      - ".github/workflows/release-acceptance.yml"
+      - "MANIFEST.in"
+      - "pyproject.toml"
+      - "environments/**"
+      - "examples/demo/**"
+      - "registry/**"
+      - "release-evidence/**"
+      - "remote_executor/**"
+      - "remote_probe/**"
+      - "scripts/**"
+      - "src/biopipe/**"
+      - "templates/**"
+      - "tests/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-acceptance.yml"
+      - "MANIFEST.in"
+      - "pyproject.toml"
+      - "environments/**"
+      - "examples/demo/**"
+      - "registry/**"
+      - "release-evidence/**"
+      - "remote_executor/**"
+      - "remote_probe/**"
+      - "scripts/**"
+      - "src/biopipe/**"
+      - "templates/**"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+env:
+  BIOPIPE_REQUIRE_REAL_TOOLS: "1"
+  NXF_OFFLINE: "true"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONNOUSERSITE: "1"
+  PYTHONPATH: ""
+  SOURCE_DATE_EPOCH: "315532800"
+
+jobs:
+  linux-release-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install reviewed micromamba
+        env:
+          MICROMAMBA_SHA256: 444efe033b145aff00c0e577c111fcc33c3e1e4051de4a98a85ae452cef1a356
+          MICROMAMBA_URL: https://github.com/mamba-org/micromamba-releases/releases/download/1.5.6-0/micromamba-linux-64
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/easy-pipe-micromamba/bin"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "$MICROMAMBA_URL" --output "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba"
+          printf '%s  %s\n' "$MICROMAMBA_SHA256" \
+            "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba" | sha256sum --check --strict
+          chmod 700 "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba"
+          printf 'MAMBA_EXE=%s\n' "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba" >> "$GITHUB_ENV"
+          printf 'MAMBA_ROOT_PREFIX=%s\n' "$RUNNER_TEMP/easy-pipe-micromamba/root" >> "$GITHUB_ENV"
+      - name: Create exact Linux environment
+        run: |
+          set -euo pipefail
+          umask 077
+          "$MAMBA_EXE" create --yes --no-rc \
+            --root-prefix "$MAMBA_ROOT_PREFIX" \
+            --name release-acceptance \
+            --file environments/locks/linux-64.explicit.txt
+          environment_prefix="$MAMBA_ROOT_PREFIX/envs/release-acceptance"
+          test -x "$environment_prefix/bin/python"
+          printf '%s\n' "$environment_prefix/bin" >> "$GITHUB_PATH"
+          printf 'CONDA_PREFIX=%s\n' "$environment_prefix" >> "$GITHUB_ENV"
+      - name: Verify native lock and runtime identities
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-release-acceptance"
+          install -d -m 700 "$release_root"
+          "$MAMBA_EXE" env export --explicit --prefix "$CONDA_PREFIX" \
+            > "$release_root/environment-explicit.raw.txt"
+          python scripts/create_release_acceptance_evidence.py verify-export \
+            --platform linux-64 \
+            --environment-export "$release_root/environment-explicit.raw.txt"
+          python scripts/generate_supply_chain_inventory.py verify
+          test "$(python --version 2>&1)" = "Python 3.12.11"
+          command -v ps >/dev/null
+          (
+            cd "$release_root"
+            java -version
+            nextflow -version
+            nf-test version
+            fastqc --version
+            fastp --version
+            multiqc --version
+          )
+      - name: Build reproducible release artifacts
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-release-acceptance"
+          source_root="$release_root/source"
+          install -d -m 700 "$release_root/dist" "$release_root/zipapps" "$source_root"
+          git --no-replace-objects archive --format=tar HEAD | tar -xf - -C "$source_root"
+          python -m build --no-isolation --wheel --sdist \
+            --outdir "$release_root/dist" "$source_root"
+          python remote_probe/build_zipapp.py --output "$release_root/zipapps/bioprobe-a.pyz"
+          python remote_probe/build_zipapp.py --output "$release_root/zipapps/bioprobe-b.pyz"
+          cmp "$release_root/zipapps/bioprobe-a.pyz" "$release_root/zipapps/bioprobe-b.pyz"
+          python remote_executor/build_zipapp.py --output "$release_root/zipapps/bioexec-a.pyz"
+          python remote_executor/build_zipapp.py --output "$release_root/zipapps/bioexec-b.pyz"
+          cmp "$release_root/zipapps/bioexec-a.pyz" "$release_root/zipapps/bioexec-b.pyz"
+      - name: Verify isolated wheel and sdist installs
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-release-acceptance"
+          shopt -s nullglob
+          wheels=("$release_root"/dist/easy_pipe-*.whl)
+          sdists=("$release_root"/dist/easy_pipe-*.tar.gz)
+          test "${#wheels[@]}" -eq 1
+          test "${#sdists[@]}" -eq 1
+
+          smoke_artifact() {
+            artifact="$1"
+            label="$2"
+            venv="$release_root/$label-venv"
+            work_dir="$release_root/$label-work"
+            python -m venv "$venv"
+            "$venv/bin/python" -m pip install "$artifact"
+            "$venv/bin/python" -m pip check
+            "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/verify_installed_package.py" \
+              --repository-root "$GITHUB_WORKSPACE" \
+              --sdist "${sdists[0]}" \
+              --fixture "$GITHUB_WORKSPACE/tests/fixtures/package_install/dataset.manifest.json" \
+              --work-dir "$work_dir"
+          }
+
+          smoke_artifact "${wheels[0]}" wheel
+          smoke_artifact "${sdists[0]}" sdist
+      - name: Run forced real-tool acceptance
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-release-acceptance"
+          BIOPIPE_ACCEPTANCE_RESULT="$release_root/test-result.json" \
+            TMPDIR="$RUNNER_TEMP" \
+            bash scripts/demo_release_acceptance.sh
+      - name: Create sanitized acceptance evidence
+        env:
+          REQUESTED_RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-release-acceptance"
+          candidate_version=$("$release_root/wheel-venv/bin/python" -I -c \
+            'from biopipe.version import CONTROLLER_VERSION; print(CONTROLLER_VERSION)')
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_id=${GITHUB_REF_NAME#v}
+          elif [[ -n "${REQUESTED_RELEASE_ID:-}" ]]; then
+            release_id=$REQUESTED_RELEASE_ID
+          else
+            release_id="${candidate_version}-rc${GITHUB_RUN_NUMBER}"
+          fi
+          [[ "$release_id" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$ ]]
+          test "${release_id%-rc*}" = "$candidate_version"
+          created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          install -d -m 700 "$release_root/evidence-parent"
+          shopt -s nullglob
+          wheels=("$release_root"/dist/easy_pipe-*.whl)
+          sdists=("$release_root"/dist/easy_pipe-*.tar.gz)
+          test "${#wheels[@]}" -eq 1
+          test "${#sdists[@]}" -eq 1
+          python scripts/create_release_acceptance_evidence.py create \
+            --output "$release_root/evidence-parent/release-acceptance" \
+            --release-id "$release_id" \
+            --created-at "$created_at" \
+            --ci-run-id "$GITHUB_RUN_ID" \
+            --environment-export "$release_root/environment-explicit.raw.txt" \
+            --test-result "$release_root/test-result.json" \
+            --wheel "${wheels[0]}" \
+            --sdist "${sdists[0]}" \
+            --bioprobe-first "$release_root/zipapps/bioprobe-a.pyz" \
+            --bioprobe-second "$release_root/zipapps/bioprobe-b.pyz" \
+            --bioexec-first "$release_root/zipapps/bioexec-a.pyz" \
+            --bioexec-second "$release_root/zipapps/bioexec-b.pyz"
+          python scripts/create_release_acceptance_evidence.py verify \
+            --directory "$release_root/evidence-parent/release-acceptance"
+      - name: Upload sanitized unreviewed evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-acceptance-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/easy-pipe-release-acceptance/evidence-parent/release-acceptance
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false
+          archive: true
+
+  macos-controller:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Confirm native arm64 runner
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = "ARM64"
+          test "$(uname -m)" = "arm64"
+      - name: Install reviewed micromamba
+        env:
+          MICROMAMBA_SHA256: 4651dc08f3ac271e1e3aa7db4bd2a934be2732f94cc6764a4c5710505dbbdd78
+          MICROMAMBA_URL: https://github.com/mamba-org/micromamba-releases/releases/download/1.5.6-0/micromamba-osx-arm64
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/easy-pipe-micromamba/bin"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "$MICROMAMBA_URL" --output "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba"
+          observed=$(shasum -a 256 "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba")
+          test "${observed%% *}" = "$MICROMAMBA_SHA256"
+          chmod 700 "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba"
+          printf 'MAMBA_EXE=%s\n' "$RUNNER_TEMP/easy-pipe-micromamba/bin/micromamba" >> "$GITHUB_ENV"
+          printf 'MAMBA_ROOT_PREFIX=%s\n' "$RUNNER_TEMP/easy-pipe-micromamba/root" >> "$GITHUB_ENV"
+      - name: Create exact macOS arm64 environment
+        run: |
+          set -euo pipefail
+          umask 077
+          "$MAMBA_EXE" create --yes --no-rc \
+            --root-prefix "$MAMBA_ROOT_PREFIX" \
+            --name controller-macos \
+            --file environments/locks/osx-arm64.explicit.txt
+          environment_prefix="$MAMBA_ROOT_PREFIX/envs/controller-macos"
+          test -x "$environment_prefix/bin/python"
+          printf '%s\n' "$environment_prefix/bin" >> "$GITHUB_PATH"
+          printf 'CONDA_PREFIX=%s\n' "$environment_prefix" >> "$GITHUB_ENV"
+      - name: Verify native macOS lock
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/easy-pipe-macos-controller"
+          "$MAMBA_EXE" env export --explicit --prefix "$CONDA_PREFIX" \
+            > "$RUNNER_TEMP/easy-pipe-macos-controller/environment-explicit.raw.txt"
+          python scripts/create_release_acceptance_evidence.py verify-export \
+            --platform osx-arm64 \
+            --environment-export \
+              "$RUNNER_TEMP/easy-pipe-macos-controller/environment-explicit.raw.txt"
+          python scripts/generate_supply_chain_inventory.py verify
+          test "$(python --version 2>&1)" = "Python 3.12.11"
+      - name: Verify installed controller package and schemas
+        run: |
+          set -euo pipefail
+          umask 077
+          release_root="$RUNNER_TEMP/easy-pipe-macos-controller"
+          source_root="$release_root/source"
+          install -d -m 700 "$release_root/dist" "$source_root"
+          git --no-replace-objects archive --format=tar HEAD | tar -xf - -C "$source_root"
+          python -m build --no-isolation --wheel --sdist \
+            --outdir "$release_root/dist" "$source_root"
+          shopt -s nullglob
+          wheels=("$release_root"/dist/easy_pipe-*.whl)
+          sdists=("$release_root"/dist/easy_pipe-*.tar.gz)
+          test "${#wheels[@]}" -eq 1
+          test "${#sdists[@]}" -eq 1
+          python -m venv "$release_root/package-venv"
+          package_python="$release_root/package-venv/bin/python"
+          "$package_python" -m pip install "${wheels[0]}"
+          "$package_python" -m pip check
+          "$package_python" -I "$GITHUB_WORKSPACE/scripts/verify_installed_package.py" \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --sdist "${sdists[0]}" \
+            --fixture "$GITHUB_WORKSPACE/tests/fixtures/package_install/dataset.manifest.json" \
+            --work-dir "$release_root/package-work"
+          "$release_root/package-venv/bin/biopipe" version --json
+          "$release_root/package-venv/bin/biopipe" schema list --json
+      - name: Run controller-only compatibility tests
+        run: |
+          python -m pytest -q \
+            tests/unit/test_models.py \
+            tests/unit/test_schemas.py \
+            tests/unit/test_manifests.py \
+            tests/unit/test_m3_planner_registry.py \
+            tests/unit/test_compiler.py \
+            tests/unit/test_m6_dry_run.py \
+            tests/integration/test_source_registry.py \
+            tests/integration/test_m1_cli.py \
+            tests/integration/test_m2_cli.py \
+            tests/integration/test_m3_cli.py \
+            tests/integration/test_m5_cli.py

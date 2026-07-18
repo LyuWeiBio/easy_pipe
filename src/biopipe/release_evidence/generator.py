@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -42,6 +43,9 @@ from biopipe.version import (
 EVIDENCE_MANIFEST_NAME: Final[str] = "SHA256SUMS"
 _MAX_RESOURCE_BYTES: Final[int] = 4 * 1024 * 1024
 _MAX_BUNDLE_BYTES: Final[int] = 16 * 1024 * 1024
+_MAX_GIT_INDEX_BYTES: Final[int] = 4 * 1024 * 1024
+_MAX_TRACKED_FILE_BYTES: Final[int] = 512 * 1024 * 1024
+_MAX_TRACKED_TREE_BYTES: Final[int] = 1024 * 1024 * 1024
 _GIT_TIMEOUT_SECONDS: Final[float] = 10.0
 _RUNTIME_REPOSITORY_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _TEMPLATE_DIRECTORY: Final[Path] = Path("release-evidence/template")
@@ -71,6 +75,14 @@ _SECRET_PATTERNS: Final[tuple[re.Pattern[bytes], ...]] = (
     re.compile(rb"Authorization\s*:\s*\S+", re.IGNORECASE),
     re.compile(rb"Bearer\s+[A-Za-z0-9._~+/-]{8,}", re.IGNORECASE),
     re.compile(rb"(?:HMAC|SSH|APPROVAL)[_-]?KEY\s*[:=]\s*(?!PENDING_)\S+", re.IGNORECASE),
+)
+_GIT_TREE_ENTRY = re.compile(
+    r"^(?P<mode>[0-9]{6}) blob (?P<oid>[0-9a-f]{40})\t"
+    r"(?P<path>[A-Za-z0-9._/@+-]+)$"
+)
+_GIT_INDEX_ENTRY = re.compile(
+    r"^(?P<mode>[0-9]{6}) (?P<oid>[0-9a-f]{40}) 0\t"
+    r"(?P<path>[A-Za-z0-9._/@+-]+)$"
 )
 
 
@@ -337,8 +349,12 @@ def verify_release_evidence(directory: str | Path) -> EvidenceVerification:
     return _verify_payloads(payloads)
 
 
-def resolve_clean_repository_commit(repository: str | Path) -> str:
-    """Return exact HEAD only when the selected worktree is clean."""
+def resolve_clean_repository_commit(
+    repository: str | Path,
+    *,
+    require_no_ignored_untracked: bool = False,
+) -> str:
+    """Return exact HEAD only when the selected worktree meets the clean policy."""
 
     root = Path(repository).absolute()
     try:
@@ -347,25 +363,217 @@ def resolve_clean_repository_commit(repository: str | Path) -> str:
             raise OSError("unsafe repository root")
     except OSError as exc:
         raise _repository_error("repository_identity") from exc
+    top_level = _run_git(root, ("rev-parse", "--show-toplevel"), stdout_limit=4096)
+    try:
+        observed_root = Path(top_level.stdout.strip()).resolve(strict=True)
+    except OSError as exc:
+        raise _repository_error("repository_identity") from exc
+    if top_level.returncode != 0 or observed_root != root:
+        raise _repository_error("repository_identity")
     revision = _run_git(root, ("rev-parse", "--verify", "HEAD^{commit}"), stdout_limit=64)
     commit = revision.stdout.strip()
     if revision.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
         raise _repository_error("git_commit")
-    status = _run_git(
-        root,
-        (
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ),
-        stdout_limit=1,
+    _require_raw_head_worktree(root, commit)
+    untracked_arguments = (
+        ("ls-files", "--others", "-z")
+        if require_no_ignored_untracked
+        else ("ls-files", "--others", "--exclude-standard", "-z")
     )
-    if status.stdout:
+    untracked = _run_git(root, untracked_arguments, stdout_limit=1)
+    if untracked.stdout:
         raise _repository_error("git_worktree_clean")
-    if status.returncode != 0:
-        raise _repository_error("git_status")
+    if untracked.returncode != 0:
+        raise _repository_error("git_untracked")
+    _require_raw_head_worktree(root, commit)
+    final_revision = _run_git(root, ("rev-parse", "--verify", "HEAD^{commit}"), stdout_limit=64)
+    if final_revision.returncode != 0 or final_revision.stdout.strip() != commit:
+        raise _repository_error("git_repository_changed")
     return commit
+
+
+def release_git_environment() -> dict[str, str]:
+    """Return a Git environment isolated from caller-selected repositories."""
+
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
+    return environment
+
+
+def _require_normal_git_index(repository: Path) -> None:
+    result = _run_git(repository, ("ls-files", "-v", "-z"), stdout_limit=_MAX_GIT_INDEX_BYTES)
+    entries = result.stdout.split("\0")
+    if (
+        result.returncode != 0
+        or not result.stdout.endswith("\0")
+        or any(not entry.startswith("H ") for entry in entries[:-1])
+    ):
+        raise _repository_error("git_index")
+
+
+def _require_raw_head_worktree(repository: Path, commit: str) -> None:
+    expected = _git_tree_entries(repository, commit)
+    observed_index = _git_index_entries(repository)
+    if observed_index != expected:
+        raise _repository_error("git_index")
+    _require_normal_git_index(repository)
+
+    root_descriptor: int | None = None
+    total_size = 0
+    try:
+        root_descriptor = os.open(
+            repository,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        for path, (expected_mode, expected_oid) in sorted(expected.items()):
+            observed_oid, size = _hash_raw_tracked_path(
+                root_descriptor,
+                path=path,
+                expected_mode=expected_mode,
+            )
+            total_size += size
+            if total_size > _MAX_TRACKED_TREE_BYTES or observed_oid != expected_oid:
+                raise OSError("tracked worktree differs from HEAD")
+    except (OSError, ValueError) as exc:
+        raise _repository_error("git_worktree_raw") from exc
+    finally:
+        if root_descriptor is not None:
+            with suppress(OSError):
+                os.close(root_descriptor)
+
+
+def _git_tree_entries(repository: Path, commit: str) -> dict[str, tuple[str, str]]:
+    result = _run_git(
+        repository,
+        ("ls-tree", "-r", "-z", "--full-tree", commit),
+        stdout_limit=_MAX_GIT_INDEX_BYTES,
+    )
+    return _parse_git_entries(result, pattern=_GIT_TREE_ENTRY, operation="git_tree")
+
+
+def _git_index_entries(repository: Path) -> dict[str, tuple[str, str]]:
+    result = _run_git(
+        repository,
+        ("ls-files", "--stage", "-z"),
+        stdout_limit=_MAX_GIT_INDEX_BYTES,
+    )
+    return _parse_git_entries(result, pattern=_GIT_INDEX_ENTRY, operation="git_index")
+
+
+def _parse_git_entries(
+    result: subprocess.CompletedProcess[str],
+    *,
+    pattern: re.Pattern[str],
+    operation: str,
+) -> dict[str, tuple[str, str]]:
+    if result.returncode != 0 or not result.stdout.endswith("\0"):
+        raise _repository_error(operation)
+    entries: dict[str, tuple[str, str]] = {}
+    for record in result.stdout.split("\0")[:-1]:
+        match = pattern.fullmatch(record)
+        if match is None:
+            raise _repository_error(operation)
+        path = match.group("path")
+        mode = match.group("mode")
+        if path in entries or mode not in {"100644", "100755", "120000"}:
+            raise _repository_error(operation)
+        entries[path] = (mode, match.group("oid"))
+    if not entries:
+        raise _repository_error(operation)
+    return entries
+
+
+def _hash_raw_tracked_path(
+    root_descriptor: int,
+    *,
+    path: str,
+    expected_mode: str,
+) -> tuple[str, int]:
+    components = path.split("/")
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise ValueError("tracked path is invalid")
+    directory_descriptor = os.dup(root_descriptor)
+    file_descriptor: int | None = None
+    try:
+        for component in components[:-1]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory_descriptor,
+            )
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        leaf = components[-1]
+        before = os.stat(leaf, dir_fd=directory_descriptor, follow_symlinks=False)
+        if expected_mode == "120000":
+            if not stat.S_ISLNK(before.st_mode):
+                raise OSError("tracked symlink type changed")
+            payload = os.fsencode(os.readlink(leaf, dir_fd=directory_descriptor))
+            after = os.stat(leaf, dir_fd=directory_descriptor, follow_symlinks=False)
+            _require_stable_stat(before, after)
+            return _git_blob_oid(payload), len(payload)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > _MAX_TRACKED_FILE_BYTES:
+            raise OSError("tracked regular file is unsafe")
+        executable = bool(stat.S_IMODE(before.st_mode) & stat.S_IXUSR)
+        if executable != (expected_mode == "100755"):
+            raise OSError("tracked executable mode changed")
+        file_descriptor = os.open(
+            leaf,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_descriptor,
+        )
+        opened = os.fstat(file_descriptor)
+        _require_stable_stat(before, opened)
+        digest = hashlib.sha1(usedforsecurity=False)
+        digest.update(f"blob {before.st_size}\0".encode("ascii"))
+        consumed = 0
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            consumed += len(chunk)
+            if consumed > _MAX_TRACKED_FILE_BYTES:
+                raise OSError("tracked regular file exceeds limit")
+            digest.update(chunk)
+        closed_over = os.fstat(file_descriptor)
+        current = os.stat(leaf, dir_fd=directory_descriptor, follow_symlinks=False)
+        _require_stable_stat(before, closed_over)
+        _require_stable_stat(before, current)
+        if consumed != before.st_size:
+            raise OSError("tracked regular file changed while hashing")
+        return digest.hexdigest(), consumed
+    finally:
+        if file_descriptor is not None:
+            with suppress(OSError):
+                os.close(file_descriptor)
+        with suppress(OSError):
+            os.close(directory_descriptor)
+
+
+def _git_blob_oid(payload: bytes) -> str:
+    digest = hashlib.sha1(usedforsecurity=False)
+    digest.update(f"blob {len(payload)}\0".encode("ascii"))
+    digest.update(payload)
+    return digest.hexdigest()
+
+
+def _require_stable_stat(before: os.stat_result, after: os.stat_result) -> None:
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in fields):
+        raise OSError("tracked path changed while hashing")
 
 
 def _validate_runtime_source_binding(repository: Path, commit: str) -> None:
@@ -382,6 +590,25 @@ def _validate_runtime_source_binding(repository: Path, commit: str) -> None:
         raise _validation_error(
             "candidate repository source does not match the running release tool"
         )
+
+
+def validate_runtime_repository_binding(repository: str | Path, commit: str) -> None:
+    """Require the selected commit to contain the exact running repository tree."""
+
+    repository_path = Path(repository).absolute()
+    try:
+        candidate_tree = _git_repository_tree_oid(repository_path, commit)
+        runtime_commit = resolve_clean_repository_commit(
+            _RUNTIME_REPOSITORY_ROOT,
+            require_no_ignored_untracked=True,
+        )
+        runtime_tree = _git_repository_tree_oid(_RUNTIME_REPOSITORY_ROOT, runtime_commit)
+    except BioPipeError as exc:
+        raise _validation_error(
+            "candidate repository does not match the running release tool"
+        ) from exc
+    if candidate_tree != runtime_tree:
+        raise _validation_error("candidate repository does not match the running release tool")
 
 
 def _runtime_source_tree_oid() -> str:
@@ -408,6 +635,25 @@ def _git_source_tree_oid(repository: Path, commit: str) -> str:
     return tree_oid
 
 
+def _git_repository_tree_oid(repository: Path, commit: str) -> str:
+    result = _run_git(
+        repository,
+        ("rev-parse", "--verify", f"{commit}^{{tree}}"),
+        stdout_limit=64,
+    )
+    tree_oid = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", tree_oid) is None:
+        raise _repository_error("git_repository_tree")
+    object_type = _run_git(
+        repository,
+        ("cat-file", "-t", tree_oid),
+        stdout_limit=8,
+    )
+    if object_type.returncode != 0 or object_type.stdout.strip() != "tree":
+        raise _repository_error("git_repository_tree")
+    return tree_oid
+
+
 def _require_repository_unchanged(repository: Path, expected_commit: str) -> None:
     try:
         observed_commit = resolve_clean_repository_commit(repository)
@@ -427,9 +673,30 @@ def _run_git(
         return run_bounded(
             (
                 "git",
+                "--no-replace-objects",
                 "--no-pager",
                 "-c",
                 "core.fsmonitor=false",
+                "-c",
+                "core.bare=false",
+                "-c",
+                f"core.worktree={os.fspath(repository)}",
+                "-c",
+                "core.sparseCheckout=false",
+                "-c",
+                "core.sparseCheckoutCone=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-c",
+                "core.trustctime=true",
+                "-c",
+                "core.checkStat=default",
+                "-c",
+                "core.fileMode=true",
+                "-c",
+                "core.symlinks=true",
+                "-c",
+                f"core.excludesFile={os.devnull}",
                 "-C",
                 os.fspath(repository),
                 *arguments,
@@ -438,6 +705,7 @@ def _run_git(
             timeout=_GIT_TIMEOUT_SECONDS,
             stdout_limit=stdout_limit,
             stderr_limit=1,
+            env=release_git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise _repository_error("git_command") from exc
@@ -767,5 +1035,6 @@ __all__ = [
     "instantiate_release_checklist_file",
     "resolve_clean_repository_commit",
     "seal_release_evidence",
+    "validate_runtime_repository_binding",
     "verify_release_evidence",
 ]

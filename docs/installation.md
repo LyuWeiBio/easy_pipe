@@ -13,9 +13,12 @@ operator-controlled step.
 | Source Host | Linux/POSIX | Python 3.11+, OpenSSH server |
 | Execution Host | Linux/POSIX | Python 3.9+, Java, pinned Nextflow JAR, Docker or Apptainer |
 
-The complete validation and synthetic E2E environment is tested on macOS and
-Linux through `environments/m4-test.yml`. The Linux solve requires glibc 2.17
-or newer. Windows is not an MVP target.
+The complete real local-tool validation and synthetic E2E path is tested on
+Linux. A native macOS arm64 CI job covers the installed controller, schemas,
+local source profiles, manifests, planning, compilation, and existing dry-run
+surfaces without claiming Remote Probe/Executor or container E2E. Both jobs are
+created from their exact explicit locks; the Linux solve requires glibc 2.17 or
+newer. Windows is not an MVP target.
 
 ## Controller-only installation
 

@@ -33,11 +33,15 @@ that contains the generated evidence.
 The candidate checkout's tracked `src/biopipe` Git tree object must match the
 clean checkout that supplies the running repository-local release tool. This
 prevents a clean but unrelated checkout from borrowing another installation's
-version, registry, or schema identity. Binding uses Git tree-object identity; it
-does not walk or read ignored or untracked files under `src/biopipe`.
-Immediately before publication, the tool checks the candidate's clean `HEAD`
-again and requires the same commit; a source-tree mismatch or intervening
-repository change aborts without publishing the destination.
+version, registry, or schema identity. The clean-check compares the committed
+tree, index, raw tracked bytes, executable modes, and symlink targets without
+running repository-configured clean filters. The general collector retains
+Git-standard ignore semantics and does not read ignored private files. The
+release-acceptance CI collector uses a stricter clean policy: any untracked file,
+including a normally ignored file, blocks collection. Immediately before
+publication, the tool checks the candidate's clean `HEAD` again and requires the
+same commit; a source-tree mismatch or intervening repository change aborts
+without publishing the destination.
 
 A file cannot contain the hash of the Git commit that contains that file: adding
 or changing the file changes the commit hash. Consequently, actual candidate
@@ -91,6 +95,41 @@ hostnames, internal raw-data paths, sample names, complete read identifiers, raw
 FASTQ content, or full operational reports. Keep even a correctly redacted
 bundle under the release evidence retention policy.
 
+## Release-acceptance CI evidence
+
+The independent `.github/workflows/release-acceptance.yml` workflow creates a
+fresh Linux environment from `linux-64.explicit.txt`, compares the environment's
+native explicit export with the committed lock, forces real local workflow
+tools, builds wheel/sdist from a clean `git archive` plus both zipapps, checks
+double-build equality, and tests wheel and sdist in separate venvs. A native
+macOS arm64 job uses the
+matching lock for controller-only installation, schema, source-profile,
+manifest, planner/compiler, and existing dry-run coverage.
+
+After every required Linux step succeeds, the workflow creates a separate
+fixed-format bundle with:
+
+- `acceptance-summary.json`;
+- a normalized native `environment-explicit.txt`;
+- source and remote artifact checksum manifests;
+- a path-free test count summary requiring three passes and zero skips; and
+- an aggregate `SHA256SUMS`.
+
+Create and offline-verify operations are available through:
+
+```bash
+python scripts/create_release_acceptance_evidence.py --help
+python scripts/create_release_acceptance_evidence.py verify --directory BUNDLE
+```
+
+The uploaded artifact is deliberately `CI_GENERATED_UNREVIEWED` and
+`BLOCKED`. It states that the run is synthetic and local, that Nextflow's
+offline policy was enforced rather than claiming OS network isolation, and
+that real SSH, a real remote host, and a real container runtime were not
+exercised. The raw JUnit XML, retained pytest directory, synthetic FASTQs,
+approval-key fixture, complete manifests, paths, and operational reports are
+never uploaded.
+
 ## Aggregate checksum semantics
 
 The deterministic aggregate checksum manifest covers every fixed evidence file
@@ -136,18 +175,16 @@ until the named people actually complete and review them. Do not turn an
 unchecked box into a checked box merely because a command started, a file
 exists, or aggregate integrity verifies.
 
-## Scope of the M6.1 release-evidence PR
+## Scope of the M6.1 evidence and acceptance CI work
 
-This small PR provides local release-evidence scaffolding: candidate identity,
-fixed-role artifact hashing, deterministic aggregate checksums, create-only
-publication, offline verification, explicitly incomplete templates, and their
-documentation and tests.
+The first small M6.1 PR provided local release-evidence scaffolding. The next
+packaging/lock PR added exact platform inventories and reproducibility gates.
+The release-acceptance CI PR adds native locked-environment execution, sanitized
+CI evidence upload, and macOS controller-only compatibility while preserving
+the incomplete operator and reviewer templates.
 
 It does not provide or claim:
 
-- platform-specific mamba/conda lock generation or dependency/license review;
-- release-acceptance GitHub Actions, macOS CI, action SHA pinning, or artifact
-  publication;
 - real-host deployment or acceptance execution;
 - reviewer or operator sign-off, a release tag, or owner assignments;
 - `run --dry-run` gate hardening;

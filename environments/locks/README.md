@@ -6,11 +6,13 @@ trees. Run `python scripts/generate_supply_chain_inventory.py verify` for a
 fully offline integrity and contract check.
 
 The explicit locks are cross-platform solver transactions, not proof that the
-environments ran on native hosts. Native Linux and macOS runtime validation is
-`pending` and belongs to release-acceptance CI. Container identities come from
-the reviewed registry, but exact-image digest material verification and full
-container-content license review are also `pending`; this directory does not
-authorize a release or replace reviewer sign-off.
+environments ran on native hosts. Their committed metadata remains `pending`;
+the separate release-acceptance workflow creates a fresh environment from each
+exact platform lock, compares the native export with the committed URLs and
+MD5 values, and records candidate-specific CI evidence. Container identities
+come from the reviewed registry, but exact-image digest material verification
+and full container-content license review are also `pending`; neither this
+directory nor one CI run authorizes a release or replaces reviewer sign-off.
 
 Generation uses only the public `conda-forge` and `bioconda` channels, fixed
 virtual packages, an empty temporary solver root, and strict channel priority.

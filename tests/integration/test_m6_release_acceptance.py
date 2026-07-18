@@ -195,12 +195,14 @@ def _require_real_tools() -> None:
 
 def _runtime_identity_mismatches() -> list[str]:
     mismatched: list[str] = []
+    identity_cwd = os.environ.get("BIOPIPE_TOOL_IDENTITY_CWD")
     for name, (command, expected_version) in _LOCKED_RUNTIME_IDENTITIES.items():
         try:
             completed = subprocess.run(
                 command,
                 check=False,
                 capture_output=True,
+                cwd=identity_cwd,
                 text=True,
                 timeout=30,
             )

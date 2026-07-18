@@ -74,6 +74,12 @@ The pinned synthetic-test environment also installs these independent tools:
 | [Nextflow](https://github.com/nextflow-io/nextflow) | 26.04.6 | Apache-2.0 | Workflow engine |
 | [nf-test](https://github.com/askimed/nf-test) | 0.9.5 | MIT | Generated workflow tests |
 
+Release-acceptance CI downloads the standalone
+[micromamba](https://github.com/mamba-org/micromamba-releases) 1.5.6 executable
+(BSD-3-Clause) for the runner platform and verifies its reviewed SHA-256 before
+using it to install an explicit lock. The executable is a CI bootstrap tool and
+is not included in the `easy_pipe` source or Python distributions.
+
 The mamba/conda packages may carry build-time patches and dependencies. Retain
 the metadata and notices supplied by the selected channels when redistributing
 that environment.
@@ -107,8 +113,9 @@ Before a release or internal redistribution:
 2. run `python scripts/generate_supply_chain_inventory.py verify` and review
    `environments/locks/SHA256SUMS`, both explicit locks, and both complete
    package inventories;
-3. export the exact installed package list and license metadata and compare it
-   with the matching platform inventory;
+3. export the exact installed package list and license metadata, compare it
+   with the matching platform inventory, and retain the candidate-specific
+   native release-acceptance evidence;
 4. inspect every distributed container digest and remote artifact rather than
    treating a `pending` or `blocked` inventory record as approval;
 5. retain upstream copyright/license texts and source offers where required;
