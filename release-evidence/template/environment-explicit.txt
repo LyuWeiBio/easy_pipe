@@ -1,0 +1,8 @@
+# DRAFT — PENDING ENVIRONMENT EVIDENCE — RELEASE BLOCKED
+#
+# This tracked placeholder is not an explicit environment lock or package
+# inventory. Use it only as a guide when the reviewed evidence workflow creates
+# a candidate-specific file from the exact environment. Do not add credentials,
+# private channel tokens, hostnames, user-home paths, or other site identifiers.
+
+PENDING_EXACT_ENVIRONMENT_EXPORT

@@ -178,6 +178,7 @@ remote account access to data.
 - [Security and threat model](docs/security-model.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Known limitations](docs/known-limitations.md)
+- [Release evidence workflow and trust boundary](docs/release-evidence.md)
 - [Release checklist](docs/release-checklist.md)
 - [Probe protocol](docs/probe-protocol.md)
 - [Architecture decision record](docs/adr/0001-architecture.md)

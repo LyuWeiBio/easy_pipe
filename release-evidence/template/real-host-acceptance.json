@@ -1,0 +1,11 @@
+{
+  "acceptance_status": "PENDING_OPERATOR_EXECUTION",
+  "evidence_status": "DRAFT_UNREVIEWED",
+  "executed_at": null,
+  "note": "This template does not claim that a real host, SSH, ForceCommand, executor, workflow engine, container runtime, or workflow tool was exercised.",
+  "release_decision": "BLOCKED",
+  "release_id": "PENDING_RELEASE_ID",
+  "review_status": "PENDING_INDEPENDENT_REVIEW",
+  "source_git_commit": "PENDING_SOURCE_GIT_COMMIT",
+  "template_version": "1"
+}
