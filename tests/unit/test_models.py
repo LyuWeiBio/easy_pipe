@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
+import json
 
 import pytest
 from pydantic import BaseModel, ValidationError

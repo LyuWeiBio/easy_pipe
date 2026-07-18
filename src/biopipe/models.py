@@ -769,10 +769,10 @@ __all__ = [
     "DatasetManifest",
     "ExecutionPlan",
     "ManifestOverrides",
+    "PUBLIC_MODELS",
     "PipelineSpec",
     "ProbeRequest",
     "ProbeResponse",
-    "PUBLIC_MODELS",
     "SoftwareLock",
     "SourceProfile",
 ]

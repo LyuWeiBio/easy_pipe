@@ -8,8 +8,8 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from biopipe.cli import app as exported_app
 from biopipe.cli.app import app
+from biopipe.cli import app as exported_app
 
 
 runner = CliRunner()
