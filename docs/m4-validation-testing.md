@@ -71,6 +71,15 @@ The lock metadata deliberately records `resolution_scope` as
 both platforms. A solved and integrity-valid lock is supply-chain evidence, not
 proof that the environment executed successfully on a native host.
 
+`.github/workflows/release-acceptance.yml` supplies candidate-specific native
+execution evidence without rewriting that historical lock metadata. It creates
+Linux x86_64 and macOS arm64 environments directly from the explicit files and
+compares each native `micromamba env export --explicit` package set with its
+reviewed lock. Linux then runs the real local workflow-tool acceptance; macOS
+runs only controller installation, schema, source-profile, manifest,
+planner/compiler, and dry-run tests. A passing macOS job is not remote-agent or
+container-runtime evidence.
+
 Confirm the selected executables before accepting E2E evidence:
 
 ```bash

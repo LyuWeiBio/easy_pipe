@@ -59,6 +59,14 @@ These locks record cross-platform metadata solves. Their native-runtime
 validation remains `pending`; neither the locks nor a successful offline
 integrity check claim that the environments ran on native hosts.
 
+The separate `Release acceptance` workflow creates fresh native environments
+from the exact Linux x86_64 and macOS arm64 explicit locks. Linux runs the
+forced real local-tool demo plus isolated wheel/sdist and reproducible zipapp
+checks; macOS runs the controller-only compatibility set. A successful Linux
+job uploads only a create-only, path-free summary and artifact hashes. It does
+not upload the retained demo directory and does not claim real SSH, a real
+remote host, a container runtime, independent review, or release sign-off.
+
 Verify the installed controller and inspect its frozen public schemas:
 
 ```bash

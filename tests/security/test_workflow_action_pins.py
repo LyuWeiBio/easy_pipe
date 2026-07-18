@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -18,6 +19,10 @@ APPROVED_ACTIONS = {
     "actions/setup-python": (
         "ece7cb06caefa5fff74198d8649806c4678c61a1",
         "v6.3.0",
+    ),
+    "actions/upload-artifact": (
+        "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "v7.0.1",
     ),
 }
 
@@ -36,12 +41,37 @@ def _workflow_paths() -> list[Path]:
     return sorted([*WORKFLOW_ROOT.rglob("*.yml"), *WORKFLOW_ROOT.rglob("*.yaml")])
 
 
+def _semantic_uses(workflow_path: Path) -> list[str]:
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    assert isinstance(workflow, dict), f"invalid workflow document: {workflow_path}"
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), f"workflow has no jobs mapping: {workflow_path}"
+    references: list[str] = []
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        job_reference = job.get("uses")
+        if job_reference is not None:
+            assert isinstance(job_reference, str), f"job uses must be a string: {workflow_path}"
+            references.append(job_reference)
+        steps = job.get("steps", [])
+        assert isinstance(steps, list), f"job steps must be a list: {workflow_path}"
+        for step in steps:
+            if not isinstance(step, dict) or "uses" not in step:
+                continue
+            reference = step["uses"]
+            assert isinstance(reference, str), f"step uses must be a string: {workflow_path}"
+            references.append(reference)
+    return references
+
+
 def test_external_workflow_actions_are_full_sha_pinned_and_allowlisted() -> None:
     violations: list[str] = []
     observed_actions: set[str] = set()
 
     for workflow_path in _workflow_paths():
         relative_path = workflow_path.relative_to(REPOSITORY_ROOT)
+        canonical_references: list[str] = []
         for line_number, line in enumerate(
             workflow_path.read_text(encoding="utf-8").splitlines(),
             start=1,
@@ -55,6 +85,7 @@ def test_external_workflow_actions_are_full_sha_pinned_and_allowlisted() -> None
                 continue
 
             reference = invocation.group("reference")
+            canonical_references.append(reference)
             if reference.startswith("./"):
                 continue
             if reference.startswith("docker://"):
@@ -81,6 +112,12 @@ def test_external_workflow_actions_are_full_sha_pinned_and_allowlisted() -> None
                 violations.append(
                     f"{location}: {action} must be annotated with # {expected_version}"
                 )
+
+        semantic_references = _semantic_uses(workflow_path)
+        if Counter(canonical_references) != Counter(semantic_references):
+            violations.append(
+                f"{relative_path}: every uses reference must use canonical block-style syntax"
+            )
 
     missing_actions = sorted(set(APPROVED_ACTIONS) - observed_actions)
     if missing_actions:
