@@ -373,7 +373,7 @@ class NextflowCompiler:
             ),
             "tests/nextflow.config": self._renderer.render(
                 "project/tests/nextflow.config.j2",
-                {},
+                {"max_cpus": spec.execution.max_cpus},
             ),
             "tests/pipeline.nf.test": self._renderer.render(
                 "project/tests/pipeline.nf.test.j2",

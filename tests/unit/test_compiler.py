@@ -202,6 +202,7 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
     test_config = (first / "tests/nextflow.config").read_text()
     assert "docker.enabled = false" in test_config
     assert "apptainer.enabled = false" in test_config
+    assert "executor.cpus = 8" in test_config
 
     base_config = (first / "conf/base.config").read_text()
     for digest in (
