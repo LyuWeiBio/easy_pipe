@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from biopipe.errors import BioPipeError, ErrorCode
-from biopipe.models import ProbePolicy, ProbeRequest, ProbeResponse, SourceProfile
+from biopipe.models import ProbeError, ProbePolicy, ProbeRequest, ProbeResponse, SourceProfile
 from biopipe.probe.bounded import run_bounded
 from biopipe.probe.results import (
     HealthResult,
@@ -70,8 +70,33 @@ _CONNECTION_MARKERS: Final[tuple[str, ...]] = (
     "connection reset",
     "kex_exchange_identification",
 )
-_M1_FAILURE_RETURN_CODES: Final[frozenset[int]] = frozenset(
-    {10, 11, 20, 21, 22, 30, 31, 40, 41, 50}
+_FAILURE_RETURN_CODES: Final[frozenset[int]] = frozenset({10, 11, 20, 21, 22, 30, 31, 40, 41, 50})
+_REMOTE_FAILURE_RETURN_CODES: Final[dict[str, int]] = {
+    "ARGUMENTS_FORBIDDEN": 10,
+    "CONFIG_INVALID": 10,
+    "INTERNAL_ERROR": 50,
+    "INVALID_FASTQ": 41,
+    "INVALID_JSON": 10,
+    "MOUNT_BOUNDARY_FORBIDDEN": 22,
+    "PATH_OUTSIDE_ALLOWLIST": 20,
+    "PATH_OUTSIDE_REQUEST_ROOT": 20,
+    "PATH_TOO_LONG": 10,
+    "PATH_UNAVAILABLE": 21,
+    "PLATFORM_UNSUPPORTED": 50,
+    "RAW_CONTENT_FORBIDDEN": 10,
+    "REQUEST_BUDGET_EXCEEDED": 30,
+    "RESPONSE_BUDGET_EXCEEDED": 30,
+    "SCAN_BUDGET_EXCEEDED": 30,
+    "SCAN_TIMEOUT": 31,
+    "SCHEMA_ERROR": 10,
+    "SYMLINK_FORBIDDEN": 22,
+    "UNSAFE_PATH": 10,
+    "UNSUPPORTED_FORMAT": 40,
+    "UNSUPPORTED_OPERATION": 11,
+}
+_REMOTE_FAILURE_MESSAGE: Final[str] = "The remote probe rejected the bounded request."
+_REMOTE_FAILURE_REMEDIATION: Final[tuple[str, ...]] = (
+    "Review the stable probe code and the local source configuration before retrying.",
 )
 
 
@@ -240,13 +265,15 @@ class OpenSSHProbeClient:
                 )
             if not response.success:
                 assert response.error is not None
+                expected_return_code = _REMOTE_FAILURE_RETURN_CODES.get(response.error.code)
                 if (
                     response.result is not None
-                    or response.return_code not in _M1_FAILURE_RETURN_CODES
+                    or response.return_code not in _FAILURE_RETURN_CODES
+                    or expected_return_code != response.return_code
                 ):
                     raise ProbeProtocolError(
                         ErrorCode.PROBE_PROTOCOL_ERROR,
-                        "The failed probe envelope violates the fixed M1 protocol.",
+                        "The failed probe envelope violates the fixed protocol.",
                         context=_error_context(
                             source,
                             return_code=completed.returncode,
@@ -254,27 +281,36 @@ class OpenSSHProbeClient:
                         ),
                         remediation=["Verify that the installed remote probe is compatible."],
                     )
-                remote_message = _redact_text(response.error.message, sensitive_paths)
-                remote_remediation = [
-                    _redact_text(item, sensitive_paths) for item in response.error.remediation
-                ]
+                sanitized_response = ProbeResponse(
+                    protocol_version=response.protocol_version,
+                    request_id=response.request_id,
+                    success=False,
+                    return_code=response.return_code,
+                    result=None,
+                    error=ProbeError(
+                        code=response.error.code,
+                        message=_REMOTE_FAILURE_MESSAGE,
+                        context={},
+                        remediation=list(_REMOTE_FAILURE_REMEDIATION),
+                    ),
+                )
                 raise RemoteProbeError(
                     ErrorCode.PROBE_REMOTE_FAILED,
-                    remote_message or "The remote probe rejected the request.",
+                    _REMOTE_FAILURE_MESSAGE,
                     context={
                         "source_id": source.source_id,
                         "probe_code": response.error.code,
                         "return_code": response.return_code,
                     },
-                    remediation=remote_remediation,
-                    response=response,
+                    remediation=_REMOTE_FAILURE_REMEDIATION,
+                    response=sanitized_response,
                 )
             try:
                 validated_result = validate_success_result(source, request, response.result)
             except ProbeResultValidationError as exc:
                 raise ProbeProtocolError(
                     ErrorCode.PROBE_PROTOCOL_ERROR,
-                    "The probe success result violates its fixed metadata contract.",
+                    "The probe success result violates its fixed operation contract.",
                     context=_error_context(
                         source,
                         return_code=completed.returncode,
@@ -386,6 +422,48 @@ class OpenSSHProbeClient:
         )
         return self.invoke(source, request)
 
+    def detect_formats(
+        self,
+        source: SourceProfile,
+        root: str,
+        paths: Sequence[str],
+        *,
+        request_id: str | None = None,
+    ) -> ProbeResponse:
+        """Detect formats from bounded content reads without exporting raw records."""
+
+        request = ProbeRequest(
+            request_id=request_id or _request_id("detect-formats"),
+            operation="detect_formats",
+            root=root,
+            paths=list(paths),
+            policy=_format_policy(source, sample_fastq_records=1),
+        )
+        return self.invoke(source, request)
+
+    def summarize_fastq(
+        self,
+        source: SourceProfile,
+        root: str,
+        paths: Sequence[str],
+        *,
+        sample_fastq_records: int = 1_000,
+        request_id: str | None = None,
+    ) -> ProbeResponse:
+        """Return privacy-safe aggregates from a bounded FASTQ sample."""
+
+        request = ProbeRequest(
+            request_id=request_id or _request_id("summarize-fastq"),
+            operation="summarize_fastq",
+            root=root,
+            paths=list(paths),
+            policy=_format_policy(
+                source,
+                sample_fastq_records=sample_fastq_records,
+            ),
+        )
+        return self.invoke(source, request)
+
     @staticmethod
     def _parse_response(
         source: SourceProfile,
@@ -462,6 +540,44 @@ def stat_files(
     )
 
 
+def detect_formats(
+    source: SourceProfile,
+    root: str,
+    paths: Sequence[str],
+    *,
+    client: OpenSSHProbeClient | None = None,
+    request_id: str | None = None,
+) -> ProbeResponse:
+    """Return bounded per-file format classifications under *root*."""
+
+    return (client or OpenSSHProbeClient()).detect_formats(
+        source,
+        root,
+        paths,
+        request_id=request_id,
+    )
+
+
+def summarize_fastq(
+    source: SourceProfile,
+    root: str,
+    paths: Sequence[str],
+    *,
+    sample_fastq_records: int = 1_000,
+    client: OpenSSHProbeClient | None = None,
+    request_id: str | None = None,
+) -> ProbeResponse:
+    """Return privacy-safe FASTQ aggregates for explicit remote paths."""
+
+    return (client or OpenSSHProbeClient()).summarize_fastq(
+        source,
+        root,
+        paths,
+        sample_fastq_records=sample_fastq_records,
+        request_id=request_id,
+    )
+
+
 def _positive_optional_limit(value: int | None, field_name: str) -> int | None:
     if value is not None and value < 1:
         raise ValueError(f"{field_name} must be positive")
@@ -534,6 +650,20 @@ def _metadata_policy(source: SourceProfile) -> ProbePolicy:
         max_runtime_seconds=source.probe.max_runtime_seconds,
         follow_symlinks=source.probe.follow_symlinks,
         sample_fastq_records=0,
+        return_sequences=False,
+        return_qualities=False,
+        return_read_names=False,
+    )
+
+
+def _format_policy(source: SourceProfile, *, sample_fastq_records: int) -> ProbePolicy:
+    return ProbePolicy(
+        inspection_level="format_summary",
+        max_depth=source.probe.max_depth,
+        max_entries=source.probe.max_entries,
+        max_runtime_seconds=source.probe.max_runtime_seconds,
+        follow_symlinks=source.probe.follow_symlinks,
+        sample_fastq_records=sample_fastq_records,
         return_sequences=False,
         return_qualities=False,
         return_read_names=False,
@@ -719,7 +849,9 @@ __all__ = [
     "ProbeTransportError",
     "RemoteProbeError",
     "SubprocessRunner",
+    "detect_formats",
     "list_tree",
     "stat_files",
+    "summarize_fastq",
     "verify",
 ]

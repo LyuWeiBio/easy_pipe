@@ -8,6 +8,7 @@ import typer
 
 from biopipe import __version__
 from biopipe.cli.inspect import inspect_command
+from biopipe.cli.manifest import manifest_app
 from biopipe.cli.source import source_app
 
 app = typer.Typer(
@@ -16,10 +17,9 @@ app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
 )
-manifest_app = typer.Typer(help="Inspect and resolve dataset manifests.", no_args_is_help=True)
 app.add_typer(source_app, name="source")
 app.add_typer(manifest_app, name="manifest")
-app.command("inspect", help="Inspect Source Host metadata with the read-only M1 probe.")(
+app.command("inspect", help="Inspect Source Host metadata or build an M2 FASTQ manifest.")(
     inspect_command
 )
 
@@ -43,20 +43,6 @@ def root(
     if version:
         typer.echo(__version__)
         raise typer.Exit()
-
-
-@manifest_app.command("show")
-def manifest_show(as_json: bool = typer.Option(False, "--json")) -> None:
-    """Show a manifest summary (M2 placeholder)."""
-
-    _placeholder("manifest show", as_json)
-
-
-@manifest_app.command("apply-overrides")
-def manifest_apply_overrides(as_json: bool = typer.Option(False, "--json")) -> None:
-    """Resolve explicit manifest overrides (M2 placeholder)."""
-
-    _placeholder("manifest apply-overrides", as_json)
 
 
 def _register_placeholder(name: str, help_text: str, milestone: str) -> None:

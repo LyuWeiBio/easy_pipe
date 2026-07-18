@@ -78,3 +78,24 @@ def test_read_model_rejects_unknown_fields(tmp_path: Path) -> None:
         read_model(source, RoundTripModel)
 
     assert exc_info.value.code is ErrorCode.ARTIFACT_READ_FAILED
+
+
+@pytest.mark.parametrize(
+    ("suffix", "payload"),
+    [
+        (".json", '{"name":"first","name":"second","count":1}'),
+        (".yaml", "name: first\nname: second\ncount: 1\n"),
+    ],
+)
+def test_read_model_rejects_duplicate_mapping_keys(
+    tmp_path: Path,
+    suffix: str,
+    payload: str,
+) -> None:
+    source = tmp_path / f"duplicate{suffix}"
+    source.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(BioPipeError) as captured:
+        read_model(source, RoundTripModel)
+
+    assert captured.value.code is ErrorCode.ARTIFACT_READ_FAILED

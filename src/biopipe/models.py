@@ -200,6 +200,15 @@ class ProbeRequest(StrictModel):
         operations_without_root = {"health", "check_runtime"}
         if self.operation == "stat_files" and not self.paths:
             raise ValueError("operation 'stat_files' requires at least one path")
+        if self.operation in {"detect_formats", "summarize_fastq"}:
+            if not self.paths:
+                raise ValueError(f"operation {self.operation!r} requires at least one path")
+            if self.policy.inspection_level != "format_summary":
+                raise ValueError(
+                    f"operation {self.operation!r} requires inspection_level 'format_summary'"
+                )
+        if self.operation == "summarize_fastq" and self.policy.sample_fastq_records < 1:
+            raise ValueError("operation 'summarize_fastq' requires sample_fastq_records >= 1")
         if self.operation not in operations_without_root | {"stat_files"} and self.root is None:
             raise ValueError(f"operation {self.operation!r} requires root")
         return self
@@ -436,6 +445,32 @@ class DatasetManifest(StrictModel):
     @model_validator(mode="after")
     def validate_layout(self) -> DatasetManifest:
         lanes = [lane for sample in self.samples for lane in sample.lanes]
+        if not lanes and self.classification.layout != "unknown":
+            raise ValueError("manifests without lanes require layout unknown")
+        if self.classification.layout == "unknown" and not self.errors:
+            raise ValueError("unknown-layout manifests require a blocking error")
+        sample_ids = [sample.sample_id for sample in self.samples]
+        if len(sample_ids) != len(set(sample_ids)):
+            raise ValueError("manifest sample_id values must be unique")
+        root = PurePosixPath(self.source.root)
+        assigned_paths: set[str] = set()
+        for sample in self.samples:
+            slots = [(lane.lane, lane.chunk) for lane in sample.lanes]
+            if len(slots) != len(set(slots)):
+                raise ValueError("manifest lane/chunk slots must be unique within a sample")
+            for lane in sample.lanes:
+                for value in (lane.read1, lane.read2):
+                    if value is None:
+                        continue
+                    try:
+                        relative = PurePosixPath(value).relative_to(root)
+                    except ValueError as exc:
+                        raise ValueError("manifest read paths must stay below source.root") from exc
+                    if relative == PurePosixPath("."):
+                        raise ValueError("manifest read paths must stay below source.root")
+                    if value in assigned_paths:
+                        raise ValueError("manifest read paths must be assigned exactly once")
+                    assigned_paths.add(value)
         if self.classification.layout == "paired_end" and any(lane.read2 is None for lane in lanes):
             raise ValueError("paired_end manifests require read2 for every lane")
         if self.classification.layout == "single_end" and any(

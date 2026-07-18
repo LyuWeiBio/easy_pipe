@@ -1,4 +1,4 @@
-"""Strict M1 success-result contracts for the controller trust boundary."""
+"""Strict probe success-result contracts for the controller trust boundary."""
 
 from __future__ import annotations
 
@@ -15,11 +15,17 @@ from biopipe.models import ProbeRequest, SourceProfile
 _MODE_PATTERN = re.compile(r"^[0-7]{4}$")
 _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$")
 _MAX_RESULT_PATH_BYTES = 65_536
-_M1_CAPABILITIES = {"health", "list_tree", "stat_files"}
+_CAPABILITIES = {
+    "detect_formats",
+    "health",
+    "list_tree",
+    "stat_files",
+    "summarize_fastq",
+}
 
 
 class ProbeResultValidationError(ValueError):
-    """A success payload is not one of the fixed metadata-only M1 shapes."""
+    """A success payload is not one of the fixed M2 operation shapes."""
 
 
 class StrictResultModel(BaseModel):
@@ -44,7 +50,7 @@ class ProbeBudgets(StrictResultModel):
 
 
 class FileMetadata(StrictResultModel):
-    """The complete allowlist of fields that M1 may return for one path."""
+    """The complete metadata allowlist that the probe may return for one path."""
 
     path: str
     relative_path: str
@@ -115,6 +121,10 @@ class HealthLimits(ProbeBudgets):
     max_response_bytes: int = Field(ge=512, le=67_108_864)
     max_paths: int = Field(ge=1, le=1_000_000)
     max_path_bytes: int = Field(ge=256, le=65_536)
+    max_sample_records_total: int = Field(ge=1, le=10_000_000)
+    max_content_bytes: int = Field(ge=1, le=1_099_511_627_776)
+    max_input_bytes: int = Field(ge=1, le=1_099_511_627_776)
+    max_fastq_line_bytes: int = Field(ge=1, le=67_108_864)
 
 
 class HealthConfiguration(StrictResultModel):
@@ -143,9 +153,17 @@ class HealthResult(StrictResultModel):
     status: Literal["ok"]
     probe_version: str
     protocol_version: Literal["1.0"]
-    capabilities: list[Literal["health", "list_tree", "stat_files"]] = Field(
-        min_length=3,
-        max_length=3,
+    capabilities: list[
+        Literal[
+            "detect_formats",
+            "health",
+            "list_tree",
+            "stat_files",
+            "summarize_fastq",
+        ]
+    ] = Field(
+        min_length=5,
+        max_length=5,
     )
     configuration: HealthConfiguration
 
@@ -160,10 +178,26 @@ class HealthResult(StrictResultModel):
     @classmethod
     def complete_capabilities(
         cls,
-        values: list[Literal["health", "list_tree", "stat_files"]],
-    ) -> list[Literal["health", "list_tree", "stat_files"]]:
-        if set(values) != _M1_CAPABILITIES:
-            raise ValueError("health must report every fixed M1 capability exactly once")
+        values: list[
+            Literal[
+                "detect_formats",
+                "health",
+                "list_tree",
+                "stat_files",
+                "summarize_fastq",
+            ]
+        ],
+    ) -> list[
+        Literal[
+            "detect_formats",
+            "health",
+            "list_tree",
+            "stat_files",
+            "summarize_fastq",
+        ]
+    ]:
+        if set(values) != _CAPABILITIES:
+            raise ValueError("health must report every fixed capability exactly once")
         return values
 
 
@@ -226,7 +260,160 @@ class StatFilesResult(StrictResultModel):
         return self
 
 
-ProbeSuccessResult = HealthResult | ListTreeResult | StatFilesResult
+class DetectedFormat(StrictResultModel):
+    """One content-backed format classification without raw file content."""
+
+    path: str
+    format: Literal["fastq", "unknown"]
+    compression: Literal["gzip", "none", "unknown"]
+    extension_candidate: bool
+
+    @field_validator("path")
+    @classmethod
+    def safe_path(cls, value: str) -> str:
+        return _absolute_result_path(value, "path")
+
+    @model_validator(mode="after")
+    def consistent_detection(self) -> DetectedFormat:
+        if self.format == "fastq" and self.compression == "unknown":
+            raise ValueError("a detected FASTQ must report its compression")
+        expected_candidate = (
+            PurePosixPath(self.path).name.lower().endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz"))
+        )
+        if self.extension_candidate is not expected_candidate:
+            raise ValueError("extension_candidate does not match the returned path suffix")
+        return self
+
+
+class DetectFormatsResult(StrictResultModel):
+    """Validated result for bounded content-backed format detection."""
+
+    operation: Literal["detect_formats"]
+    root: str
+    files: list[DetectedFormat]
+    file_count: int = Field(ge=0, le=100_000)
+    budgets: ProbeBudgets
+
+    @field_validator("root")
+    @classmethod
+    def safe_root(cls, value: str) -> str:
+        return _absolute_result_path(value, "root")
+
+    @model_validator(mode="after")
+    def internally_consistent(self) -> DetectFormatsResult:
+        if self.file_count != len(self.files):
+            raise ValueError("file_count does not match files")
+        if self.file_count > self.budgets.max_entries:
+            raise ValueError("files exceed the reported budget")
+        _validate_paths_below_root([item.path for item in self.files], self.root)
+        _reject_duplicate_values([item.path for item in self.files], "format paths")
+        return self
+
+
+class FastqReadLength(StrictResultModel):
+    """Read-length aggregates that cannot reveal sequence content."""
+
+    minimum: int = Field(ge=0, le=10_000_000)
+    median: float = Field(ge=0.0, le=10_000_000.0)
+    maximum: int = Field(ge=0, le=10_000_000)
+
+    @field_validator("median")
+    @classmethod
+    def finite_median(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("median must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def ordered(self) -> FastqReadLength:
+        if not self.minimum <= self.median <= self.maximum:
+            raise ValueError("read lengths must be ordered")
+        return self
+
+
+class MateMarkerCounts(StrictResultModel):
+    """Aggregate mate-marker counts without exporting read identifiers."""
+
+    read_1: int = Field(ge=0, le=100_000)
+    read_2: int = Field(ge=0, le=100_000)
+    unknown: int = Field(ge=0, le=100_000)
+    mixed: bool
+
+
+class FastqFileSummary(StrictResultModel):
+    """One bounded FASTQ summary with an explicit privacy-safe field allowlist."""
+
+    path: str
+    format: Literal["fastq"]
+    compression: Literal["gzip", "none"]
+    records_sampled: int = Field(ge=1, le=100_000)
+    structure_valid: Literal[True]
+    read_length: FastqReadLength
+    likely_quality_encoding: Literal["phred33", "phred64", "unknown"]
+    header_family: Literal[
+        "illumina_casava_1_8",
+        "illumina_legacy",
+        "generic",
+        "unknown",
+    ]
+    mate_markers: MateMarkerCounts
+
+    @field_validator("path")
+    @classmethod
+    def safe_path(cls, value: str) -> str:
+        return _absolute_result_path(value, "path")
+
+    @model_validator(mode="after")
+    def marker_counts_match_sample(self) -> FastqFileSummary:
+        marker_total = (
+            self.mate_markers.read_1 + self.mate_markers.read_2 + self.mate_markers.unknown
+        )
+        if marker_total != self.records_sampled:
+            raise ValueError("mate marker counts must match records_sampled")
+        expected_mixed = (
+            sum(
+                count > 0
+                for count in (
+                    self.mate_markers.read_1,
+                    self.mate_markers.read_2,
+                    self.mate_markers.unknown,
+                )
+            )
+            > 1
+        )
+        if self.mate_markers.mixed != expected_mixed:
+            raise ValueError("mixed does not match mate marker counts")
+        return self
+
+
+class SummarizeFastqResult(StrictResultModel):
+    """Validated result for bounded FASTQ record sampling."""
+
+    operation: Literal["summarize_fastq"]
+    root: str
+    files: list[FastqFileSummary]
+    file_count: int = Field(ge=0, le=100_000)
+    budgets: ProbeBudgets
+
+    @field_validator("root")
+    @classmethod
+    def safe_root(cls, value: str) -> str:
+        return _absolute_result_path(value, "root")
+
+    @model_validator(mode="after")
+    def internally_consistent(self) -> SummarizeFastqResult:
+        if self.file_count != len(self.files):
+            raise ValueError("file_count does not match files")
+        if self.file_count > self.budgets.max_entries:
+            raise ValueError("files exceed the reported budget")
+        _validate_paths_below_root([item.path for item in self.files], self.root)
+        _reject_duplicate_values([item.path for item in self.files], "FASTQ summary paths")
+        return self
+
+
+ProbeSuccessResult = (
+    DetectFormatsResult | HealthResult | ListTreeResult | StatFilesResult | SummarizeFastqResult
+)
 
 
 def validate_success_result(
@@ -256,10 +443,25 @@ def validate_success_result(
             _validate_budget_caps(source, request, stats.budgets)
             _validate_stat_request(source, request, stats)
             return stats
-        raise ValueError("operation has no M1 success-result contract")
+        if request.operation == "detect_formats":
+            formats = DetectFormatsResult.model_validate(result)
+            _validate_budget_caps(source, request, formats.budgets)
+            _validate_content_request(source, request, formats.root, formats.files)
+            return formats
+        if request.operation == "summarize_fastq":
+            summaries = SummarizeFastqResult.model_validate(result)
+            _validate_budget_caps(source, request, summaries.budgets)
+            _validate_content_request(source, request, summaries.root, summaries.files)
+            if any(
+                item.records_sampled > request.policy.sample_fastq_records
+                for item in summaries.files
+            ):
+                raise ValueError("records_sampled exceeds the requested ceiling")
+            return summaries
+        raise ValueError("operation has no fixed success-result contract")
     except (TypeError, ValueError) as exc:
         raise ProbeResultValidationError(
-            "probe success result failed its fixed M1 metadata contract"
+            "probe success result failed its fixed M2 operation contract"
         ) from exc
 
 
@@ -326,6 +528,36 @@ def _validate_stat_request(
         unmatched_paths.pop(match_index)
 
 
+def _validate_content_request(
+    source: SourceProfile,
+    request: ProbeRequest,
+    result_root: str,
+    files: list[DetectedFormat] | list[FastqFileSummary],
+) -> None:
+    if request.root is None:
+        raise ValueError("content request is missing its root")
+    if len(files) != len(request.paths):
+        raise ValueError("content result count does not match requested paths")
+    _require_canonical_suffix(
+        PurePosixPath(result_root),
+        _expected_canonical_suffix(source, PurePosixPath(request.root)),
+    )
+    unmatched_paths = [PurePosixPath(item.path) for item in files]
+    for requested in request.paths:
+        suffix = _expected_canonical_suffix(source, PurePosixPath(requested))
+        match_index = next(
+            (
+                index
+                for index, returned in enumerate(unmatched_paths)
+                if _has_canonical_suffix(returned, suffix)
+            ),
+            None,
+        )
+        if match_index is None:
+            raise ValueError("content result returned an unrelated canonical path")
+        unmatched_paths.pop(match_index)
+
+
 def _profile_root_and_relative(
     source: SourceProfile,
     path: PurePosixPath,
@@ -385,8 +617,21 @@ def _validate_metadata_below_root(entries: list[FileMetadata], root: str) -> Non
 
 def _reject_duplicate_paths(entries: list[FileMetadata]) -> None:
     paths = [entry.path for entry in entries]
-    if len(paths) != len(set(paths)):
-        raise ValueError("metadata contains duplicate paths")
+    _reject_duplicate_values(paths, "metadata paths")
+
+
+def _validate_paths_below_root(paths: list[str], root: str) -> None:
+    root_path = PurePosixPath(root)
+    for value in paths:
+        try:
+            PurePosixPath(value).relative_to(root_path)
+        except ValueError as exc:
+            raise ValueError("result path is outside the result root") from exc
+
+
+def _reject_duplicate_values(values: list[str], label: str) -> None:
+    if len(values) != len(set(values)):
+        raise ValueError(f"{label} contain duplicates")
 
 
 def _absolute_result_path(value: str, field_name: str) -> str:
@@ -414,15 +659,21 @@ def _safe_path_text(value: str, field_name: str) -> None:
 
 
 __all__ = [
+    "DetectFormatsResult",
+    "DetectedFormat",
+    "FastqFileSummary",
+    "FastqReadLength",
     "FileMetadata",
     "HealthConfiguration",
     "HealthLimits",
     "HealthResult",
     "ListTreeResult",
+    "MateMarkerCounts",
     "ProbeBudgets",
     "ProbeResultValidationError",
     "ProbeSuccessResult",
     "StatFilesResult",
     "StrictResultModel",
+    "SummarizeFastqResult",
     "validate_success_result",
 ]

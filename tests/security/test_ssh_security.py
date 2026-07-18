@@ -146,10 +146,10 @@ def test_failed_probe_response_is_a_structured_remote_error() -> None:
                 "return_code": 20,
                 "result": None,
                 "error": {
-                    "code": "PATH_OUTSIDE_ALLOWED_ROOT",
+                    "code": "PATH_OUTSIDE_ALLOWLIST",
                     "message": "Synthetic remote rejection.",
-                    "context": {},
-                    "remediation": ["Use an allowed synthetic path."],
+                    "context": {"sequence": "ACGTSENSITIVE"},
+                    "remediation": ["Quality IIIISENSITIVE"],
                 },
             }
         )
@@ -170,6 +170,40 @@ def test_failed_probe_response_is_a_structured_remote_error() -> None:
     assert _error_code(exc_info.value) == ProbeClientErrorCode.PROBE_REMOTE_FAILED.value
     assert exc_info.value.response is not None
     assert exc_info.value.response.return_code == 20
+    serialized = exc_info.value.to_json() + exc_info.value.response.model_dump_json()
+    assert "Synthetic remote rejection" not in serialized
+    assert "ACGTSENSITIVE" not in serialized
+    assert "IIIISENSITIVE" not in serialized
+    assert "PATH_OUTSIDE_ALLOWLIST" in serialized
+
+
+def test_unknown_remote_failure_code_is_a_protocol_error() -> None:
+    stdout = (
+        json.dumps(
+            {
+                "protocol_version": "1.0",
+                "request_id": "health-001",
+                "success": False,
+                "return_code": 20,
+                "result": None,
+                "error": {
+                    "code": "PATH_OUTSIDE_ALLOWED_ROOT",
+                    "message": "Untrusted text.",
+                    "context": {},
+                    "remediation": [],
+                },
+            }
+        )
+        + "\n"
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(args=[], returncode=20, stdout=stdout, stderr="")
+    )
+
+    with pytest.raises(ProbeClientError) as exc_info:
+        OpenSSHProbeClient(runner=runner).invoke(_source_profile(), _health_request())
+
+    assert _error_code(exc_info.value) == ProbeClientErrorCode.PROBE_PROTOCOL_ERROR.value
 
 
 @pytest.mark.parametrize("process_return_code", [0, 50, 255])
