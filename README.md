@@ -6,26 +6,32 @@ without moving reads to the controller, produce reviewed file-based artifacts,
 and deterministically generate a constrained Nextflow DSL2 quality-control
 workflow.
 
-> **Project status: M0 engineering skeleton.** The repository currently
-> provides foundational contracts and CLI placeholders. It does **not** connect
-> to remote hosts, inspect FASTQ data, generate Nextflow projects, or run real
-> data.
+> **Project status: M1 secure remote inspection.** The repository now provides
+> a manually deployed, metadata-only Remote Probe plus a constrained OpenSSH
+> controller. FASTQ interpretation, manifest generation, Nextflow generation,
+> and real-data execution remain future milestones.
 
 ## Current scope
 
-M0 establishes the interfaces that later milestones will build on:
+The completed M0 foundation and M1 security boundary provide:
 
 - a Python 3.11+ package and Typer CLI skeleton;
 - versioned, strict Pydantic data contracts;
 - stable structured errors and JSON/YAML serialization helpers;
 - SHA-256 artifact hashing and append-only JSONL audit records;
-- test, lint, formatting, and type-checking configuration;
-- an architecture decision record describing security and trust boundaries.
+- a local, atomic SourceProfile registry that stores no SSH credentials;
+- fixed `health`, `list_tree`, and `stat_files` JSONL operations;
+- canonical allowlists, descriptor-based symlink rejection, and
+  request/response/mount/depth/entry/runtime budgets;
+- a fixed OpenSSH invocation using argument arrays, strict host-key checking,
+  JSONL standard input, timeouts, bounded diagnostics, and redaction;
+- a byte-reproducible, standard-library-only `bioprobe.pyz` build;
+- security, integration, lint, formatting, and type-checking checks.
 
 The following capabilities are intentionally deferred:
 
-- SSH connections and remote probe deployment;
-- directory scanning, FASTQ parsing, sample/lane inference, and pairing;
+- automatic remote probe deployment;
+- FASTQ parsing, sample/lane inference, and pairing;
 - manifest review and override workflows;
 - pipeline planning, component resolution, and Nextflow generation;
 - preflight checks, schedulers, containers, or real-data execution;
@@ -57,8 +63,8 @@ biopipe --version
 python -m biopipe --help
 ```
 
-M0 exposes placeholders for the planned workflow surface. Use `--help` to
-inspect a command without performing work:
+M1 implements source management and metadata-only inspection. Later workflow
+commands remain explicit placeholders:
 
 ```bash
 biopipe source --help
@@ -72,7 +78,7 @@ biopipe preflight --help
 biopipe run --help
 ```
 
-The placeholder hierarchy is:
+The command hierarchy is:
 
 ```text
 source add | list | show | remove | verify
@@ -86,12 +92,23 @@ preflight
 run
 ```
 
-These names reserve the intended stages: source configuration, metadata-only
-inspection, manifest review, planning, deterministic generation, validation,
-testing, execution-host checks, and gated execution.
+`source add/list/show/remove/verify` and `inspect` are implemented. The
+`manifest`, `plan`, `generate`, `validate`, `test`, `preflight`, and `run`
+surfaces reserve later milestones and must not be interpreted as real-data
+execution support.
 
-A placeholder confirms the intended interface only; it must not be interpreted
-as support for remote access or real-data execution.
+Register an existing SSH alias and inspect one approved directory:
+
+```bash
+biopipe source add hpc01 --host hpc01 --allowed-root /data/raw
+biopipe source verify hpc01
+biopipe inspect hpc01:/data/raw/run42 --policy metadata-only --json
+```
+
+The Remote Probe must first be built, reviewed, configured, and installed by
+the operator. `biopipe` never writes to the Source Host. See the
+[M1 operations guide](docs/operations.md) and
+[protocol reference](docs/probe-protocol.md).
 
 ## Development checks
 
@@ -101,7 +118,7 @@ Run the checks from the repository root:
 python -m pytest
 ruff check .
 ruff format --check .
-mypy src
+mypy src remote_probe/src remote_probe/build_zipapp.py
 ```
 
 Apply the configured formatter with `ruff format .`.
@@ -116,13 +133,13 @@ machine.
   credentials must not enter controller artifacts or logs.
 - SSH will use an existing OpenSSH configuration, agent, and strict host-key
   verification. The project must not store passwords or private keys.
-- A future remote probe will expose fixed read-only operations over a bounded
-  JSONL protocol. There is no general-purpose shell, `eval`, plugin loader, or
+- The Remote Probe exposes only fixed read-only operations over a bounded JSONL
+  protocol. There is no general-purpose shell, `eval`, plugin loader, or
   arbitrary Python interface.
-- Future subprocesses must use argument arrays, timeouts, and checked return
-  codes; user input must never be interpolated into shell command strings.
+- OpenSSH uses an argument array, timeout, and checked return code. User data
+  paths travel only in JSON standard input and never enter the SSH arguments.
 - Real-data execution will require validation, preflight checks, and an
-  explicit approval gate. M0 contains no execution path.
+  explicit approval gate. M1 contains no workflow execution path.
 - Audit records are append-only and exclude secrets and raw biological data.
 
 See [ADR 0001](docs/adr/0001-architecture.md) for the architectural rationale
@@ -142,7 +159,8 @@ remote data directory
   -> execution near the data
 ```
 
-Only the foundational contracts around this flow are in scope for M0.
+M1 ends at constrained metadata inspection; subsequent stages are scheduled
+for M2-M6.
 
 ## License
 
