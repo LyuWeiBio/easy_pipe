@@ -38,15 +38,17 @@ _POLICY_FIELDS = {
 class RequestPolicy:
     """Client-requested limits, later capped by server configuration."""
 
+    inspection_level: str = "metadata_only"
     max_depth: int | None = None
     max_entries: int | None = None
     max_runtime_seconds: float | None = None
     follow_symlinks: bool = False
+    sample_fastq_records: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeRequest:
-    """Validated M1 request independent of controller-side dependencies."""
+    """Validated M2 request independent of controller-side dependencies."""
 
     request_id: str
     operation: str
@@ -75,7 +77,7 @@ def decode_json_line(data: bytes) -> Any:
 
 
 def parse_request(payload: Any) -> ProbeRequest:
-    """Validate an object against the fixed M1 request schema."""
+    """Validate an object against the fixed M2 request schema."""
 
     if not isinstance(payload, dict):
         raise _schema_error("request must be a JSON object")
@@ -100,6 +102,8 @@ def parse_request(payload: Any) -> ProbeRequest:
         isinstance(value, str) for value in paths_value
     ):
         raise _schema_error("paths must be an array of strings")
+    if len(paths_value) != len(set(paths_value)):
+        raise _schema_error("paths must not contain duplicates")
 
     policy_value = payload.get("policy", {})
     if not isinstance(policy_value, dict):
@@ -112,6 +116,15 @@ def parse_request(payload: Any) -> ProbeRequest:
         raise _schema_error("list_tree requires root")
     if operation == "stat_files" and not paths_value:
         raise _schema_error("stat_files requires at least one path")
+    if operation in {"detect_formats", "summarize_fastq"}:
+        if root_value is None:
+            raise _schema_error(f"{operation} requires root")
+        if not paths_value:
+            raise _schema_error(f"{operation} requires at least one path")
+        if policy.inspection_level != "format_summary":
+            raise _schema_error(f"{operation} requires inspection_level format_summary")
+    if operation == "summarize_fastq" and policy.sample_fastq_records < 1:
+        raise _schema_error("summarize_fastq requires sample_fastq_records >= 1")
 
     return ProbeRequest(
         request_id=request_id,
@@ -227,7 +240,7 @@ def _parse_policy(value: dict[str, Any]) -> RequestPolicy:
             raise ProbeFailure(
                 ReturnCode.PROTOCOL_ERROR,
                 "RAW_CONTENT_FORBIDDEN",
-                "M1 never returns FASTQ records or file contents",
+                "M2 never returns FASTQ records or file contents",
             )
 
     follow_symlinks = value.get("follow_symlinks", False)
@@ -237,16 +250,18 @@ def _parse_policy(value: dict[str, Any]) -> RequestPolicy:
         raise ProbeFailure(
             ReturnCode.SYMLINK_OR_ESCAPE,
             "SYMLINK_FORBIDDEN",
-            "M1 does not permit following symlinks",
+            "M2 does not permit following symlinks",
         )
     max_depth = _optional_int(value, "max_depth", 0, 64)
     max_entries = _optional_int(value, "max_entries", 1, 10_000_000)
     max_runtime = _optional_number(value, "max_runtime_seconds", 0.000001, 3_600.0)
     return RequestPolicy(
+        inspection_level=inspection,
         max_depth=max_depth,
         max_entries=max_entries,
         max_runtime_seconds=max_runtime,
         follow_symlinks=follow_symlinks,
+        sample_fastq_records=sample_records,
     )
 
 

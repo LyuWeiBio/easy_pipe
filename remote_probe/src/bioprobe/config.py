@@ -27,6 +27,10 @@ class ProbeLimits:
     max_response_bytes: int = 10_485_760
     max_paths: int = 10_000
     max_path_bytes: int = 4_096
+    max_sample_records_total: int = 100_000
+    max_content_bytes: int = 268_435_456
+    max_input_bytes: int = 268_435_456
+    max_fastq_line_bytes: int = 1_048_576
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +166,10 @@ def _parse_config(payload: dict[str, Any], source: str) -> ProbeConfig:
         "max_response_bytes",
         "max_paths",
         "max_path_bytes",
+        "max_sample_records_total",
+        "max_content_bytes",
+        "max_input_bytes",
+        "max_fastq_line_bytes",
     }
     _reject_unknown(limits_value, limit_keys, "limits")
     limits = ProbeLimits(
@@ -178,6 +186,34 @@ def _parse_config(payload: dict[str, Any], source: str) -> ProbeConfig:
         ),
         max_paths=_bounded_int(limits_value, "max_paths", 10_000, 1, 1_000_000),
         max_path_bytes=_bounded_int(limits_value, "max_path_bytes", 4_096, 256, 65_536),
+        max_sample_records_total=_bounded_int(
+            limits_value,
+            "max_sample_records_total",
+            100_000,
+            1,
+            10_000_000,
+        ),
+        max_content_bytes=_bounded_int(
+            limits_value,
+            "max_content_bytes",
+            268_435_456,
+            1,
+            1_099_511_627_776,
+        ),
+        max_input_bytes=_bounded_int(
+            limits_value,
+            "max_input_bytes",
+            268_435_456,
+            1,
+            1_099_511_627_776,
+        ),
+        max_fastq_line_bytes=_bounded_int(
+            limits_value,
+            "max_fastq_line_bytes",
+            1_048_576,
+            1,
+            67_108_864,
+        ),
     )
 
     follow_symlinks = payload.get("follow_symlinks", False)
@@ -185,7 +221,7 @@ def _parse_config(payload: dict[str, Any], source: str) -> ProbeConfig:
     if not isinstance(follow_symlinks, bool):
         raise _config_error("follow_symlinks must be a boolean")
     if follow_symlinks:
-        raise _config_error("M1 does not permit enabling follow_symlinks")
+        raise _config_error("M2 does not permit enabling follow_symlinks")
     if not isinstance(allow_mount_crossing, bool):
         raise _config_error("allow_mount_crossing must be a boolean")
 

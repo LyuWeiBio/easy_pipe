@@ -7,7 +7,7 @@ from typing import Any
 
 from .config import ProbeConfig
 from .errors import ProbeFailure, ReturnCode
-from .operations import health, list_tree, stat_files
+from .operations import detect_formats, health, list_tree, stat_files, summarize_fastq
 from .protocol import (
     enforce_response_limit,
     parse_request,
@@ -25,9 +25,11 @@ def handle_request(payload: Mapping[str, object] | object, config: ProbeConfig) 
         request = parse_request(payload)
         request_id = request.request_id
         handlers = {
+            "detect_formats": detect_formats,
             "health": health,
             "list_tree": list_tree,
             "stat_files": stat_files,
+            "summarize_fastq": summarize_fastq,
         }
         handler = handlers.get(request.operation)
         if handler is None:
