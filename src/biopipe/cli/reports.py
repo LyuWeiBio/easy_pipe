@@ -13,7 +13,17 @@ from typing import Any
 
 from biopipe.errors import BioPipeError, ErrorCode
 
-_REPORT_NAMES = frozenset({"validation.json", "test.json"})
+_REPORT_NAMES = frozenset(
+    {
+        "validation.json",
+        "test.json",
+        "preflight.json",
+        "run.json",
+        "status.json",
+    }
+)
+_PRIVATE_STATE_NAMES = frozenset({".preflight-state.json", ".run-state.json"})
+_MAX_PRIVATE_STATE_BYTES = 1024 * 1024
 _DIRECTORY_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_CLOEXEC", 0)
@@ -47,6 +57,48 @@ def write_project_report_atomic(
 
     if report_name not in _REPORT_NAMES:
         raise ValueError("report name is not allowlisted")
+    path, _created = _write_project_json_atomic(project_directory, report_name, payload)
+    return path
+
+
+def write_project_report_create_only_atomic(
+    project_directory: str | Path,
+    report_name: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    """Publish one complete report without replacing an existing regular file."""
+
+    if report_name not in _REPORT_NAMES:
+        raise ValueError("report name is not allowlisted")
+    _path, created = _write_project_json_atomic(
+        project_directory,
+        report_name,
+        payload,
+        create_only=True,
+    )
+    return created
+
+
+def write_project_private_state_atomic(
+    project_directory: str | Path,
+    state_name: str,
+    payload: Mapping[str, Any],
+) -> Path:
+    """Atomically replace one private controller state file with mode 0600."""
+
+    if state_name not in _PRIVATE_STATE_NAMES:
+        raise ValueError("private state name is not allowlisted")
+    path, _created = _write_project_json_atomic(project_directory, state_name, payload)
+    return path
+
+
+def _write_project_json_atomic(
+    project_directory: str | Path,
+    report_name: str,
+    payload: Mapping[str, Any],
+    *,
+    create_only: bool = False,
+) -> tuple[Path, bool]:
     root = Path(project_directory).expanduser().absolute()
     root_descriptor: int | None = None
     reports_descriptor: int | None = None
@@ -86,12 +138,27 @@ def write_project_report_atomic(
             reports_metadata,
         )
         _validate_destination(reports_descriptor, report_name)
-        os.replace(
-            temporary_name,
-            report_name,
-            src_dir_fd=reports_descriptor,
-            dst_dir_fd=reports_descriptor,
-        )
+        created = True
+        if create_only:
+            try:
+                os.link(
+                    temporary_name,
+                    report_name,
+                    src_dir_fd=reports_descriptor,
+                    dst_dir_fd=reports_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                _validate_destination(reports_descriptor, report_name)
+                created = False
+            os.unlink(temporary_name, dir_fd=reports_descriptor)
+        else:
+            os.replace(
+                temporary_name,
+                report_name,
+                src_dir_fd=reports_descriptor,
+                dst_dir_fd=reports_descriptor,
+            )
         temporary_name = None
         os.fsync(reports_descriptor)
         _assert_directory_binding(root, root_descriptor, root_metadata)
@@ -101,7 +168,7 @@ def write_project_report_atomic(
             reports_descriptor,
             reports_metadata,
         )
-        return root / "reports" / report_name
+        return root / "reports" / report_name, created
     except BioPipeError:
         raise
     except (OSError, TypeError, ValueError) as exc:
@@ -110,6 +177,119 @@ def write_project_report_atomic(
         if temporary_name is not None and reports_descriptor is not None:
             with suppress(FileNotFoundError):
                 os.unlink(temporary_name, dir_fd=reports_descriptor)
+        if reports_descriptor is not None:
+            os.close(reports_descriptor)
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+
+
+def read_project_private_state(
+    project_directory: str | Path,
+    state_name: str,
+) -> dict[str, Any]:
+    """Read one bounded private state file through bound directory descriptors."""
+
+    if state_name not in _PRIVATE_STATE_NAMES:
+        raise ValueError("private state name is not allowlisted")
+    try:
+        value = _read_project_json_file(project_directory, state_name, missing_ok=False)
+        assert value is not None
+        return value
+    except (OSError, UnicodeError, TypeError, ValueError, RecursionError) as exc:
+        raise BioPipeError(
+            ErrorCode.ARTIFACT_READ_FAILED,
+            "The private execution state is missing, unsafe, or invalid.",
+            remediation=["Run preflight again before submitting an approved run."],
+        ) from exc
+
+
+def read_project_report_optional(
+    project_directory: str | Path,
+    report_name: str,
+) -> dict[str, Any] | None:
+    """Read one optional bounded controlled report without following symlinks."""
+
+    if report_name not in _REPORT_NAMES:
+        raise ValueError("report name is not allowlisted")
+    try:
+        return _read_project_json_file(project_directory, report_name, missing_ok=True)
+    except (OSError, UnicodeError, TypeError, ValueError, RecursionError) as exc:
+        raise BioPipeError(
+            ErrorCode.ARTIFACT_READ_FAILED,
+            "The controlled project report is unsafe or invalid.",
+            context={"report_name": report_name},
+        ) from exc
+
+
+def _read_project_json_file(
+    project_directory: str | Path,
+    filename: str,
+    *,
+    missing_ok: bool,
+) -> dict[str, Any] | None:
+    root = Path(project_directory).expanduser().absolute()
+    root_descriptor: int | None = None
+    reports_descriptor: int | None = None
+    state_descriptor: int | None = None
+    try:
+        root_descriptor, root_metadata = _open_bound_directory(root)
+        reports_descriptor, reports_metadata = _open_reports_directory(
+            root_descriptor,
+            root,
+            root_metadata,
+        )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            state_descriptor = os.open(filename, flags, dir_fd=reports_descriptor)
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+            _assert_directory_binding(root, root_descriptor, root_metadata)
+            _assert_child_binding(
+                root_descriptor,
+                "reports",
+                reports_descriptor,
+                reports_metadata,
+            )
+            return None
+        metadata = os.fstat(state_descriptor)
+        current = os.stat(filename, dir_fd=reports_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or not _same_inode(metadata, current)
+            or not 0 < metadata.st_size <= _MAX_PRIVATE_STATE_BYTES
+        ):
+            raise OSError("project JSON path is unsafe")
+        raw = bytearray()
+        while len(raw) <= _MAX_PRIVATE_STATE_BYTES:
+            chunk = os.read(
+                state_descriptor,
+                min(64 * 1024, _MAX_PRIVATE_STATE_BYTES + 1 - len(raw)),
+            )
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > _MAX_PRIVATE_STATE_BYTES:
+            raise OSError("project JSON exceeds its size limit")
+        value = json.loads(
+            bytes(raw).decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        if not isinstance(value, dict):
+            raise ValueError("project JSON must be an object")
+        _assert_directory_binding(root, root_descriptor, root_metadata)
+        _assert_child_binding(
+            root_descriptor,
+            "reports",
+            reports_descriptor,
+            reports_metadata,
+        )
+        return value
+    finally:
+        if state_descriptor is not None:
+            os.close(state_descriptor)
         if reports_descriptor is not None:
             os.close(reports_descriptor)
         if root_descriptor is not None:
@@ -229,6 +409,19 @@ def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
     return first.st_dev == second.st_dev and first.st_ino == second.st_ino
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON number is forbidden: {value}")
+
+
 def _report_write_error() -> BioPipeError:
     return BioPipeError(
         ErrorCode.ARTIFACT_WRITE_FAILED,
@@ -239,4 +432,11 @@ def _report_write_error() -> BioPipeError:
     )
 
 
-__all__ = ["reportable_project_root", "write_project_report_atomic"]
+__all__ = [
+    "read_project_private_state",
+    "read_project_report_optional",
+    "reportable_project_root",
+    "write_project_private_state_atomic",
+    "write_project_report_atomic",
+    "write_project_report_create_only_atomic",
+]

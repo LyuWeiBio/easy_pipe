@@ -50,8 +50,28 @@ _CORE_ARTIFACTS: Mapping[str, type[BaseModel]] = {
 _AUDIT_ARTIFACT = "audit/events.jsonl"
 _ALLOWED_REPORT_ARTIFACTS = frozenset(
     {
+        "reports/.preflight-state.json",
+        "reports/.run-state.json",
+        "reports/preflight.json",
+        "reports/run.json",
+        "reports/status.json",
         "reports/test.json",
         "reports/validation.json",
+    }
+)
+_RUNTIME_AUDIT_TYPES = frozenset(
+    {
+        "REAL_DATA_APPROVED",
+        "PIPELINE_DEPLOYED",
+        "PIPELINE_DEPLOY_FAILED",
+        "RUN_SUBMISSION_STARTED",
+        "RUN_SUBMITTED",
+        "RUN_SUBMISSION_FAILED",
+        "RUN_SUBMISSION_ABANDONED",
+        "RUN_STATUS_QUERIED",
+        "RUN_COMPLETED",
+        "RUN_FAILED",
+        "RUN_RESUMED",
     }
 )
 _MAX_PROJECT_ENTRIES = 512
@@ -823,6 +843,10 @@ class StaticProjectValidator:
         if expected is None:
             return
         for artifact, expected_payload in sorted(expected.items()):
+            if artifact == _AUDIT_ARTIFACT:
+                # The generation record is validated as the first append-only
+                # JSONL event below; reviewed M5 events may follow it.
+                continue
             actual = payloads.get(artifact)
             if actual is None or actual == expected_payload:
                 continue
@@ -850,10 +874,13 @@ class StaticProjectValidator:
         try:
             text = payload.decode("utf-8")
             lines = text.splitlines()
-            if len(lines) != 1 or not lines[0]:
-                raise ValueError("generation audit must contain exactly one event")
-            data = json.loads(lines[0], object_pairs_hook=_unique_json_object)
-            event = AuditEvent.model_validate(data)
+            if not lines or any(not line for line in lines):
+                raise ValueError("audit must contain complete non-empty JSONL events")
+            events = [
+                AuditEvent.model_validate(json.loads(line, object_pairs_hook=_unique_json_object))
+                for line in lines
+            ]
+            event = events[0]
         except (
             UnicodeError,
             json.JSONDecodeError,
@@ -874,6 +901,20 @@ class StaticProjectValidator:
         )
         if metadata_invalid:
             self._collector.add(FindingCode.AUDIT_RECORD_INVALID, artifact=_AUDIT_ARTIFACT)
+
+        previous_timestamp = event.timestamp
+        for runtime_event in events[1:]:
+            if (
+                runtime_event.project_id != event.project_id
+                or runtime_event.event_type not in _RUNTIME_AUDIT_TYPES
+                or runtime_event.timestamp < previous_timestamp
+            ):
+                self._collector.add(
+                    FindingCode.AUDIT_RECORD_INVALID,
+                    artifact=_AUDIT_ARTIFACT,
+                )
+                break
+            previous_timestamp = runtime_event.timestamp
 
         if expected is not None:
             core = set(_CORE_ARTIFACTS)
