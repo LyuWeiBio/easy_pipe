@@ -1,0 +1,32 @@
+process {
+    errorStrategy = 'terminate'
+    maxRetries = 0
+{% for process in processes %}
+    withLabel: {{ process.label | groovy_quote }} {
+        cpus = {{ process.cpus }}
+        memory = {{ process.memory | groovy_quote }}
+        container = {{ process.container | groovy_quote }}
+    }
+{% endfor %}
+}
+
+timeline {
+    enabled = true
+    file = "${params.output_dir}/pipeline_info/timeline.html"
+    overwrite = false
+}
+report {
+    enabled = true
+    file = "${params.output_dir}/pipeline_info/execution_report.html"
+    overwrite = false
+}
+trace {
+    enabled = true
+    file = "${params.output_dir}/pipeline_info/execution_trace.txt"
+    overwrite = false
+}
+dag {
+    enabled = true
+    file = "${params.output_dir}/pipeline_info/pipeline_dag.html"
+    overwrite = false
+}

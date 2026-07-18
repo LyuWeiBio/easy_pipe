@@ -1,0 +1,36 @@
+includeConfig 'conf/base.config'
+
+params {
+    samplesheet = "${projectDir}/assets/samplesheet.csv"
+    source_root = {{ source_root | groovy_quote }}
+    output_dir = {{ output_dir | groovy_quote }}
+}
+
+workDir = {{ work_dir | groovy_quote }}
+
+{% if apptainer_enabled %}
+apptainer {
+    enabled = true
+    autoMounts = true
+    cacheDir = {{ container_cache | groovy_quote }}
+}
+docker.enabled = false
+{% else %}
+docker.enabled = true
+apptainer.enabled = false
+{% endif %}
+
+profiles {
+    local {
+        includeConfig 'conf/local.config'
+    }
+    slurm {
+        includeConfig 'conf/slurm.config'
+    }
+}
+
+manifest {
+    name = {{ project_name | groovy_quote }}
+    description = 'Deterministically generated FASTQ quality-control workflow'
+    nextflowVersion = '>=24.10.0'
+}

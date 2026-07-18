@@ -1,0 +1,39 @@
+process FASTP {
+    tag "${meta.id}:${meta.lane}:${meta.chunk}"
+    label 'fastp'
+    publishDir "${params.output_dir}/fastp/${meta.id}/${meta.lane}/${meta.chunk}", mode: 'copy', overwrite: false
+
+    input:
+{% if paired_end %}
+    tuple val(meta), path(read1, name: "${meta.read1_stage}"), path(read2, name: "${meta.read2_stage}")
+{% else %}
+    tuple val(meta), path(read1, name: "${meta.read1_stage}")
+{% endif %}
+
+    output:
+{% if paired_end %}
+    tuple val(meta), path('*.R1.trimmed.fastq.gz', arity: '1'), path('*.R2.trimmed.fastq.gz', arity: '1'), emit: reads
+{% else %}
+    tuple val(meta), path('*.trimmed.fastq.gz', arity: '1'), emit: reads
+{% endif %}
+    path('*.fastp.json', arity: '1'), emit: json
+    path('*.fastp.html', arity: '1'), emit: html
+
+    script:
+    def prefix = "${meta.id}_${meta.lane}_${meta.chunk}"
+    """
+    fastp \\
+        --thread ${task.cpus} \\
+        --length_required {{ minimum_length }} \\
+        --in1 "${read1}" \\
+{% if paired_end %}
+        --in2 "${read2}" \\
+        --out1 "${prefix}.R1.trimmed.fastq.gz" \\
+        --out2 "${prefix}.R2.trimmed.fastq.gz" \\
+{% else %}
+        --out1 "${prefix}.trimmed.fastq.gz" \\
+{% endif %}
+        --json "${prefix}.fastp.json" \\
+        --html "${prefix}.fastp.html"
+    """
+}

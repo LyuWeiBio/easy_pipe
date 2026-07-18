@@ -1,0 +1,82 @@
+nextflow.enable.dsl = 2
+
+include { FASTQC_RAW } from './modules/fastqc/raw'
+{% if trimming_enabled %}
+include { FASTP } from './modules/fastp/main'
+include { FASTQC_POST_TRIM } from './modules/fastqc/post_trim'
+{% endif %}
+include { MULTIQC } from './modules/multiqc/main'
+
+def requireIdentifier(value, label) {
+    def candidate = value == null ? '' : value.toString()
+    if (!(candidate ==~ /[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/)) {
+        error "Invalid ${label} in the generated samplesheet"
+    }
+    return candidate
+}
+
+def requireInputPath(value, sourceRoot) {
+    def root = java.nio.file.Paths.get(sourceRoot).toAbsolutePath().normalize()
+    def candidate = java.nio.file.Paths.get(value.toString()).toAbsolutePath().normalize()
+    if (!candidate.startsWith(root) || candidate == root) {
+        error 'A samplesheet path is outside the planned execution root'
+    }
+    return file(candidate.toString(), checkIfExists: true)
+}
+
+workflow FASTQ_QC {
+    take:
+    samplesheet
+
+    main:
+    reads_ch = samplesheet
+        .splitCsv(header: true)
+        .map { row ->
+            def read1Text = row.read1.toString()
+{% if paired_end %}
+            if (!row.read2) {
+                error 'A paired-end samplesheet row is missing read2'
+            }
+{% endif %}
+            def meta = [
+                id: requireIdentifier(row.sample_id, 'sample_id'),
+                lane: requireIdentifier(row.lane, 'lane'),
+                chunk: row.chunk ? requireIdentifier(row.chunk, 'chunk') : 'unchunked',
+                read1_stage: read1Text.toLowerCase().endsWith('.gz') ? 'read1.fastq.gz' : 'read1.fastq'{% if paired_end %},
+                read2_stage: row.read2.toString().toLowerCase().endsWith('.gz') ? 'read2.fastq.gz' : 'read2.fastq'{% endif %}
+
+            ]
+            def read1 = requireInputPath(read1Text, params.source_root)
+{% if paired_end %}
+            def read2 = requireInputPath(row.read2, params.source_root)
+            tuple(meta, read1, read2)
+{% else %}
+            if (row.read2) {
+                error 'A single-end samplesheet row unexpectedly contains read2'
+            }
+            tuple(meta, read1)
+{% endif %}
+        }
+
+    FASTQC_RAW(reads_ch)
+    raw_fastqc_reports = FASTQC_RAW.out.zip
+        .flatMap { meta, reports -> reports instanceof List ? reports : [reports] }
+{% if trimming_enabled %}
+    FASTP(reads_ch)
+    FASTQC_POST_TRIM(FASTP.out.reads)
+    trimmed_fastqc_reports = FASTQC_POST_TRIM.out.zip
+        .flatMap { meta, reports -> reports instanceof List ? reports : [reports] }
+    multiqc_inputs = raw_fastqc_reports
+        .mix(FASTP.out.json)
+        .mix(trimmed_fastqc_reports)
+        .collect()
+{% else %}
+    multiqc_inputs = raw_fastqc_reports.collect()
+{% endif %}
+    MULTIQC(multiqc_inputs)
+}
+
+workflow {
+    samplesheet_ch = Channel.fromPath(params.samplesheet, checkIfExists: true)
+    FASTQ_QC(samplesheet_ch)
+}
