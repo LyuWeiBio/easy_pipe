@@ -1,0 +1,55 @@
+"""Tests for stable, machine-readable application errors."""
+
+from __future__ import annotations
+
+import json
+import re
+
+from biopipe.errors import BioPipeError, ErrorCode
+
+EXPECTED_ERROR_CODES = {
+    "ARTIFACT_READ_FAILED": "ARTIFACT_READ_FAILED",
+    "ARTIFACT_WRITE_FAILED": "ARTIFACT_WRITE_FAILED",
+    "AUDIT_WRITE_FAILED": "AUDIT_WRITE_FAILED",
+    "INTERNAL_ERROR": "INTERNAL_ERROR",
+    "NOT_IMPLEMENTED": "NOT_IMPLEMENTED",
+    "SERIALIZATION_FAILED": "SERIALIZATION_FAILED",
+    "VALIDATION_FAILED": "VALIDATION_FAILED",
+}
+
+
+def test_error_codes_are_unique_stable_identifiers() -> None:
+    values = [code.value for code in ErrorCode]
+
+    assert values
+    assert len(values) == len(set(values))
+    assert all(re.fullmatch(r"[A-Z][A-Z0-9_]*", value) for value in values)
+    assert {code.name: code.value for code in ErrorCode} == EXPECTED_ERROR_CODES
+
+
+def test_biopipe_error_has_stable_json_shape() -> None:
+    code = ErrorCode.VALIDATION_FAILED
+    error = BioPipeError(
+        code=code,
+        message="Synthetic blocking failure.",
+        severity="blocking",
+        context={"fixture": "safe"},
+        remediation=["Review the synthetic fixture."],
+    )
+
+    first = error.to_json()
+    second = error.to_json()
+    payload = json.loads(first)
+
+    assert isinstance(error, Exception)
+    assert first == second
+    assert payload == {
+        "error": {
+            "code": code.value,
+            "severity": "blocking",
+            "message": "Synthetic blocking failure.",
+            "context": {"fixture": "safe"},
+            "remediation": ["Review the synthetic fixture."],
+        }
+    }
+    assert error.to_dict() == payload
