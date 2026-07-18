@@ -206,6 +206,18 @@ class WorkflowTestRunner:
                 project=project.root,
                 fixture=fixture.root,
             )
+            project_snapshot = runtime / "project"
+            NextflowCompiler().compile_planned(
+                project_snapshot,
+                manifest=project.manifest,
+                planned=project.planned,
+                registry=load_default_registry(),
+            )
+            project = _ProjectContext(
+                root=project_snapshot,
+                manifest=project.manifest,
+                planned=project.planned,
+            )
             syntax_case = _prepare_case(runtime / "syntax", fixture, syntax_only=True)
             run_case = (
                 None
@@ -213,7 +225,7 @@ class WorkflowTestRunner:
                 else _prepare_case(runtime / "run", fixture, syntax_only=False)
             )
             environment = _restricted_environment(runtime, self._parent_environment)
-        except (OSError, ValueError) as exc:
+        except (BioPipeError, OSError, ValueError) as exc:
             check = _blocked_check(
                 "runtime_directory",
                 WorkflowTestCode.RUNTIME_DIRECTORY_CONFLICT,
@@ -287,7 +299,7 @@ class WorkflowTestRunner:
                 project.root,
                 syntax_case,
                 runtime / "nextflow-syntax.log",
-                source_root=fixture.root,
+                source_root=syntax_case / "inputs",
                 preview=True,
                 stub=False,
                 add_config=True,
@@ -335,7 +347,7 @@ class WorkflowTestRunner:
                     project.root,
                     run_case,
                     runtime / f"nextflow-{mode}.log",
-                    source_root=fixture.root,
+                    source_root=run_case / "inputs",
                     preview=False,
                     stub=mode == "stub",
                     add_config=True,
@@ -719,12 +731,28 @@ def _prepare_case(
     root.mkdir(mode=0o700)
     assets = root / "assets"
     assets.mkdir(mode=0o700)
-    _write_exclusive(assets / "samplesheet.csv", render_synthetic_samplesheet(fixture))
+    inputs = root / "inputs"
+    inputs.mkdir(mode=0o700)
+    for row in fixture.rows:
+        _snapshot_read(inputs, fixture.root, row.read1, row.read1_payload)
+        if row.read2 is not None and row.read2_payload is not None:
+            _snapshot_read(inputs, fixture.root, row.read2, row.read2_payload)
+    _write_exclusive(
+        assets / "samplesheet.csv",
+        render_synthetic_samplesheet(fixture, source_root=inputs),
+    )
     _write_exclusive(
         root / "test.config",
         _SYNTAX_CONFIG if syntax_only else _NO_CONTAINER_CONFIG,
     )
     return root
+
+
+def _snapshot_read(root: Path, fixture_root: Path, source: Path, payload: bytes) -> None:
+    relative = source.relative_to(fixture_root)
+    destination = root.joinpath(*relative.parts)
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_exclusive_bytes(destination, payload)
 
 
 def _restricted_environment(
@@ -785,13 +813,16 @@ def _nextflow_run_argv(
 
 
 def _write_exclusive(path: Path, text: str) -> None:
+    _write_exclusive_bytes(path, text.encode("utf-8"))
+
+
+def _write_exclusive_bytes(path: Path, payload: bytes) -> None:
     descriptor = os.open(
         path,
         os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
-        payload = text.encode("utf-8")
         remaining = memoryview(payload)
         while remaining:
             written = os.write(descriptor, remaining)

@@ -13,6 +13,7 @@ process MULTIQC {
     script:
     """
     multiqc \\
+        --no-version-check \\
         --force \\
         --filename multiqc.html \\
         --outdir . \\

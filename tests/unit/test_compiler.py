@@ -180,6 +180,7 @@ def test_compile_paired_multilane_trimming_bundle_is_fully_deterministic(
         in (first / "modules/fastp/main.nf").read_text()
     )
     assert "mv multiqc.html multiqc_report.html" in (first / "modules/multiqc/main.nf").read_text()
+    assert "--no-version-check" in (first / "modules/multiqc/main.nf").read_text()
 
     nf_test_config = (first / "nf-test.config").read_text()
     assert '"nf-test": "0.9.5"' in nf_test_config

@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import biopipe.workflow_test.runner as workflow_runner_module
 from biopipe.compiler import NextflowCompiler
 from biopipe.manifests import finalize_manifest
 from biopipe.models import (
@@ -343,6 +345,14 @@ def test_validate_uses_only_synthetic_overrides_and_stable_degraded_report(
     assert "--samplesheet" in syntax_argv
     assert "--source_root" in syntax_argv
     assert "/srv/private-real-data" not in "\n".join(syntax_argv)
+    snapshot_project = tmp_path / "validate-one/project"
+    assert str(snapshot_project) in config_argv
+    assert str(project) not in config_argv
+    assert syntax_argv[syntax_argv.index("--source_root") + 1] == str(
+        tmp_path / "validate-one/syntax/inputs"
+    )
+    snapshot_sheet = tmp_path / "validate-one/syntax/assets/samplesheet.csv"
+    assert str(FIXTURES) not in snapshot_sheet.read_text(encoding="utf-8")
     environment = first_commands.calls[0][2]
     assert set(environment) == {
         "JAVA_HOME",
@@ -510,6 +520,42 @@ def test_tampered_generated_code_is_rejected_before_any_command(tmp_path: Path) 
     assert not (tmp_path / "never-created").exists()
 
 
+def test_runtime_uses_verified_project_and_fixture_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _generated_project(tmp_path, layout="single_end", trimming=False)
+    fixture_root = tmp_path / "fixture"
+    shutil.copytree(FIXTURES / "single_end", fixture_root)
+    validated_fixture = load_synthetic_fixture(fixture_root)
+    original_payload = validated_fixture.rows[0].read1_payload
+    validated_fixture.rows[0].read1.write_text(
+        "@UNVALIDATED_REAL_IDENTIFIER\nACGT\n+\nIIII\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        workflow_runner_module,
+        "load_synthetic_fixture",
+        lambda _root: validated_fixture,
+    )
+
+    commands = _FakeCommandRunner()
+    runtime = tmp_path / "snapshot-runtime"
+    report = _runner(commands).validate(
+        project,
+        fixture_root=fixture_root,
+        runtime_directory=runtime,
+    )
+
+    assert report.status is WorkflowTestStatus.DEGRADED
+    snapshot_read = runtime / "syntax/inputs/reads/synthetic_se_R1.fastq"
+    assert snapshot_read.read_bytes() == original_payload
+    assert b"UNVALIDATED_REAL_IDENTIFIER" not in snapshot_read.read_bytes()
+    for arguments, _cwd, _environment, _timeout, _limit in commands.calls:
+        assert str(project) not in arguments
+        assert str(runtime / "project") in arguments
+
+
 def test_layout_mismatch_and_runtime_overlap_are_rejected(tmp_path: Path) -> None:
     project = _generated_project(tmp_path, layout="single_end", trimming=False)
 
@@ -544,7 +590,7 @@ def test_nf_test_suite_runs_from_project_with_isolated_work_and_log(tmp_path: Pa
     assert report.status is WorkflowTestStatus.PASSED
     nf_test_call = next(call for call in commands.calls if Path(call[0][0]).name == "nf-test")
     assert "tests/pipeline.nf.test" in nf_test_call[0]
-    assert nf_test_call[1] == project
+    assert nf_test_call[1] == runtime / "project"
     assert nf_test_call[2]["BIOPIPE_NF_TEST_WORK_DIR"] == str(runtime / "nf-test/work")
     assert str(runtime / "nf-test/nf-test.log") in nf_test_call[0]
     assert not (project / ".nf-test").exists()

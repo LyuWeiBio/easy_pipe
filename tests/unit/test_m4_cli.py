@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -324,3 +325,80 @@ def test_report_writer_refuses_unallowlisted_name_and_symlink_directory(
         write_project_report_atomic(project, "test.json", {"status": "passed"})
     assert raised.value.code == ErrorCode.ARTIFACT_WRITE_FAILED
     assert not (external / "test.json").exists()
+
+
+def test_report_writer_rejects_reports_directory_swap_without_escaping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "generated"
+    reports = project / "reports"
+    external = tmp_path / "external"
+    detached = tmp_path / "detached-reports"
+    reports.mkdir(parents=True)
+    external.mkdir()
+    real_replace = os.replace
+
+    def racing_replace(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        reports.rename(detached)
+        reports.symlink_to(external, target_is_directory=True)
+        real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr("biopipe.cli.reports.os.replace", racing_replace)
+
+    with pytest.raises(BioPipeError) as raised:
+        write_project_report_atomic(project, "test.json", {"status": "passed"})
+
+    assert raised.value.code == ErrorCode.ARTIFACT_WRITE_FAILED
+    assert not (external / "test.json").exists()
+    assert not list(detached.glob(".*.tmp"))
+
+
+def test_report_writer_rejects_project_root_swap_without_escaping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "generated"
+    reports = project / "reports"
+    external = tmp_path / "external"
+    detached = tmp_path / "detached-project"
+    reports.mkdir(parents=True)
+    external.mkdir()
+    real_replace = os.replace
+
+    def racing_replace(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        project.rename(detached)
+        project.mkdir()
+        (project / "reports").symlink_to(external, target_is_directory=True)
+        real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr("biopipe.cli.reports.os.replace", racing_replace)
+
+    with pytest.raises(BioPipeError) as raised:
+        write_project_report_atomic(project, "validation.json", {"status": "passed"})
+
+    assert raised.value.code == ErrorCode.ARTIFACT_WRITE_FAILED
+    assert not (external / "validation.json").exists()
+    assert not list((detached / "reports").glob(".*.tmp"))

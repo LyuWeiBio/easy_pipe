@@ -101,6 +101,8 @@ class SyntheticFastqRow:
     chunk: str | None
     read1: Path
     read2: Path | None
+    read1_payload: bytes
+    read2_payload: bytes | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,15 +143,16 @@ def load_synthetic_fixture(root: str | Path) -> SyntheticFastqFixture:
     total_bytes = 0
     for row in document.rows:
         read1 = _resolve_read(fixture_root, row.read1)
-        read1_headers, read1_size = _validate_fastq(
+        read1_headers, read1_payload = _validate_fastq(
             read1, expected_mate=None if document.layout == "single_end" else 1
         )
-        total_bytes += read1_size
+        total_bytes += len(read1_payload)
         read2: Path | None = None
+        read2_payload: bytes | None = None
         if row.read2 is not None:
             read2 = _resolve_read(fixture_root, row.read2)
-            read2_headers, read2_size = _validate_fastq(read2, expected_mate=2)
-            total_bytes += read2_size
+            read2_headers, read2_payload = _validate_fastq(read2, expected_mate=2)
+            total_bytes += len(read2_payload)
             if read1_headers != read2_headers:
                 raise FixtureValidationError("synthetic paired FASTQ record IDs do not match")
         rows.append(
@@ -159,6 +162,8 @@ def load_synthetic_fixture(root: str | Path) -> SyntheticFastqFixture:
                 chunk=row.chunk,
                 read1=read1,
                 read2=read2,
+                read1_payload=read1_payload,
+                read2_payload=read2_payload,
             )
         )
     if total_bytes > _MAX_FIXTURE_BYTES:
@@ -170,23 +175,37 @@ def load_synthetic_fixture(root: str | Path) -> SyntheticFastqFixture:
     )
 
 
-def render_synthetic_samplesheet(fixture: SyntheticFastqFixture) -> str:
+def render_synthetic_samplesheet(
+    fixture: SyntheticFastqFixture,
+    *,
+    source_root: Path | None = None,
+) -> str:
     """Render absolute, synthetic-only inputs for an isolated Nextflow test run."""
 
     stream = io.StringIO(newline="")
     writer = csv.writer(stream, lineterminator="\n")
     writer.writerow(("sample_id", "lane", "chunk", "read1", "read2"))
     for row in fixture.rows:
+        read1 = _display_read_path(row.read1, fixture.root, source_root)
+        read2 = (
+            None if row.read2 is None else _display_read_path(row.read2, fixture.root, source_root)
+        )
         writer.writerow(
             (
                 row.sample_id,
                 row.lane,
                 row.chunk or "",
-                str(row.read1),
-                "" if row.read2 is None else str(row.read2),
+                str(read1),
+                "" if read2 is None else str(read2),
             )
         )
     return stream.getvalue()
+
+
+def _display_read_path(path: Path, fixture_root: Path, source_root: Path | None) -> Path:
+    if source_root is None:
+        return path
+    return source_root.joinpath(*path.relative_to(fixture_root).parts)
 
 
 def _resolve_read(root: Path, relative: str) -> Path:
@@ -201,8 +220,8 @@ def _resolve_read(root: Path, relative: str) -> Path:
     return resolved
 
 
-def _validate_fastq(path: Path, expected_mate: int | None) -> tuple[tuple[str, ...], int]:
-    payload, size = _read_bounded_regular_file(path)
+def _validate_fastq(path: Path, expected_mate: int | None) -> tuple[tuple[str, ...], bytes]:
+    payload, _size = _read_bounded_regular_file(path)
     try:
         text = payload.decode("ascii")
     except UnicodeDecodeError as exc:
@@ -228,7 +247,7 @@ def _validate_fastq(path: Path, expected_mate: int | None) -> tuple[tuple[str, .
         if len(sequence) != len(quality) or any(not 33 <= ord(value) <= 126 for value in quality):
             raise FixtureValidationError("synthetic FASTQ quality structure is invalid")
         normalized_headers.append(header.removesuffix(mate_suffix))
-    return tuple(normalized_headers), size
+    return tuple(normalized_headers), payload
 
 
 def _read_bounded_regular_file(path: Path) -> tuple[bytes, int]:
