@@ -1020,16 +1020,25 @@ The output directory is published atomically and must not already exist.
 
 
 def _assert_no_private_data(payloads: Mapping[str, bytes], repository: Path | None = None) -> None:
-    candidates = {
-        str(Path.home()),
+    private_paths = {str(Path.home())}
+    if repository is not None:
+        private_paths.update({str(repository.absolute()), str(repository.resolve())})
+    path_tokens = [item.encode("utf-8") for item in private_paths if len(item) >= 4]
+    identifiers = {
         socket.gethostname(),
         os.environ.get("USER", ""),
     }
-    if repository is not None:
-        candidates.update({str(repository.absolute()), str(repository.resolve())})
-    tokens = [item.encode("utf-8") for item in candidates if len(item) >= 4]
+    identifier_patterns = [
+        re.compile(
+            rb"(?<![A-Za-z0-9_.-])" + re.escape(item.encode("utf-8")) + rb"(?![A-Za-z0-9_.-])"
+        )
+        for item in identifiers
+        if len(item) >= 4
+    ]
     for payload in payloads.values():
-        if any(token in payload for token in tokens):
+        if any(token in payload for token in path_tokens):
+            _fail("PRIVATE_DATA_IN_GENERATED_ARTIFACT")
+        if any(pattern.search(payload) is not None for pattern in identifier_patterns):
             _fail("PRIVATE_DATA_IN_GENERATED_ARTIFACT")
         if any(marker in payload for marker in (b"/Users/", b"/home/", b"file://")):
             _fail("PRIVATE_DATA_IN_GENERATED_ARTIFACT")

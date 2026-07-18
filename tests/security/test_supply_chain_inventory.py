@@ -218,6 +218,16 @@ def test_private_path_is_rejected_before_publication(tmp_path: Path) -> None:
         inventory._assert_no_private_data(payload, repository)
 
 
+def test_private_identifier_scan_does_not_reject_filename_substrings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USER", "runner")
+
+    inventory._assert_no_private_data({"artifact.json": b'{"name":"bioexec/runner.py"}\n'})
+    with pytest.raises(inventory.SupplyChainError, match="PRIVATE_DATA_IN_GENERATED_ARTIFACT"):
+        inventory._assert_no_private_data({"artifact.json": b'{"owner":"runner"}\n'})
+
+
 def test_subprocess_output_is_bounded_while_process_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
