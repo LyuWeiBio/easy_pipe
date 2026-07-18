@@ -1,0 +1,8 @@
+# DRAFT — PENDING COVERAGE REVIEW — RELEASE BLOCKED
+#
+# This tracked placeholder is not a coverage result and records no reviewed
+# threshold. A final summary must be derived from the exact source candidate
+# and must not include checkout paths, source-host details, sample identifiers,
+# credentials, or raw command output.
+
+PENDING_EXACT_CANDIDATE_COVERAGE_SUMMARY

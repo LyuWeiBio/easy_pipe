@@ -5,6 +5,13 @@ commit, reviewer, date, host platforms, and links to retained CI/demo evidence.
 A checked box means the stated evidence was reviewed, not merely that a command
 was started.
 
+Use the create-only [release evidence workflow](release-evidence.md) to bind
+generated candidate facts and artifact hashes to the exact source commit. Its
+instantiated `release-checklist.completed.md` remains `DRAFT_UNREVIEWED` and
+`BLOCKED` with every box unchecked until an operator supplies the required
+external evidence and an independent reviewer actually reviews it. A successful
+offline checksum verification proves byte integrity, not release sign-off.
+
 ## Candidate identity
 
 - [ ] Release identifier: `________________`

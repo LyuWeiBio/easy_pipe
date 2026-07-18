@@ -1,0 +1,9 @@
+{
+  "acceptance_status": "PENDING_RELEASE_ACCEPTANCE",
+  "evidence_status": "DRAFT_UNREVIEWED",
+  "note": "This template records no acceptance execution or result.",
+  "release_decision": "BLOCKED",
+  "release_id": "PENDING_RELEASE_ID",
+  "source_git_commit": "PENDING_SOURCE_GIT_COMMIT",
+  "template_version": "1"
+}

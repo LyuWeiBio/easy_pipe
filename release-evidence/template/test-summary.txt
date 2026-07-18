@@ -1,0 +1,8 @@
+# DRAFT — PENDING TEST EVIDENCE — RELEASE BLOCKED
+#
+# This tracked placeholder makes no claim that a test command ran or passed.
+# A final summary must identify the exact source candidate, command class,
+# result counts, skips, and retained evidence without copying unbounded command
+# output, internal paths, hostnames, sample identifiers, or secrets.
+
+PENDING_EXACT_CANDIDATE_TEST_SUMMARY
