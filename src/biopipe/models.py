@@ -1,8 +1,4 @@
-"""Strict, versioned domain contracts for the M0 controller foundation.
-
-The models in this module describe artifacts only. They do not perform network,
-filesystem-discovery, workflow-generation, or execution operations.
-"""
+"""Strict, versioned domain contracts for the controller and probe protocol."""
 
 from __future__ import annotations
 
@@ -49,6 +45,8 @@ def _safe_text(value: str, field_name: str) -> str:
 
 def _absolute_posix_path(value: str, field_name: str) -> str:
     _safe_text(value, field_name)
+    if len(value.encode("utf-8")) > 4096:
+        raise ValueError(f"{field_name} exceeds the supported path length")
     path = PurePosixPath(value)
     if not path.is_absolute():
         raise ValueError(f"{field_name} must be an absolute POSIX path")
@@ -58,12 +56,16 @@ def _absolute_posix_path(value: str, field_name: str) -> str:
 
 
 class ProbeConfiguration(StrictModel):
-    """Bounded, fail-closed defaults for a future fixed remote probe."""
+    """Bounded, fail-closed defaults for the fixed Remote Probe."""
 
     remote_path: str = "~/.local/bin/bioprobe.pyz"
     max_runtime_seconds: int = Field(default=300, ge=1, le=3600)
     max_depth: int = Field(default=6, ge=0, le=64)
     max_entries: int = Field(default=100_000, ge=1, le=10_000_000)
+    max_request_bytes: int = Field(default=1024 * 1024, ge=1024, le=16 * 1024 * 1024)
+    max_paths: int = Field(default=10_000, ge=1, le=100_000)
+    max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    stderr_limit_bytes: int = Field(default=4096, ge=256, le=1024 * 1024)
     follow_symlinks: bool = False
 
     @field_validator("remote_path")
@@ -94,7 +96,7 @@ class SourceProfile(StrictModel):
     ssh_alias: str
     username: str | None = None
     port: int | None = Field(default=None, ge=1, le=65_535)
-    allowed_roots: list[str] = Field(min_length=1)
+    allowed_roots: list[str] = Field(min_length=1, max_length=1024)
     probe: ProbeConfiguration = Field(default_factory=ProbeConfiguration)
     privacy: SourcePrivacy = Field(default_factory=SourcePrivacy)
 
@@ -151,6 +153,7 @@ class ProbePolicy(StrictModel):
     inspection_level: InspectionLevel = "format_summary"
     max_depth: int = Field(default=6, ge=0, le=64)
     max_entries: int = Field(default=100_000, ge=1, le=10_000_000)
+    max_runtime_seconds: int = Field(default=300, ge=1, le=3600)
     follow_symlinks: bool = False
     sample_fastq_records: int = Field(default=1_000, ge=0, le=100_000)
     return_sequences: bool = False
@@ -160,7 +163,7 @@ class ProbePolicy(StrictModel):
     @model_validator(mode="after")
     def forbid_raw_content_export(self) -> ProbePolicy:
         if self.return_sequences or self.return_qualities or self.return_read_names:
-            raise ValueError("the M0/MVP protocol forbids exporting raw FASTQ content")
+            raise ValueError("the MVP protocol forbids exporting raw FASTQ content")
         return self
 
 
@@ -171,6 +174,7 @@ class ProbeRequest(StrictModel):
     request_id: str
     operation: ProbeOperation
     root: str | None = None
+    paths: list[str] = Field(default_factory=list, max_length=100_000)
     policy: ProbePolicy = Field(default_factory=ProbePolicy)
 
     @field_validator("request_id")
@@ -183,10 +187,20 @@ class ProbeRequest(StrictModel):
     def validate_root(cls, value: str | None) -> str | None:
         return None if value is None else _absolute_posix_path(value, "root")
 
+    @field_validator("paths")
+    @classmethod
+    def validate_paths(cls, values: list[str]) -> list[str]:
+        normalized = [_absolute_posix_path(value, "paths") for value in values]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("paths must not contain duplicates")
+        return normalized
+
     @model_validator(mode="after")
     def require_root_for_path_operations(self) -> ProbeRequest:
         operations_without_root = {"health", "check_runtime"}
-        if self.operation not in operations_without_root and self.root is None:
+        if self.operation == "stat_files" and not self.paths:
+            raise ValueError("operation 'stat_files' requires at least one path")
+        if self.operation not in operations_without_root | {"stat_files"} and self.root is None:
             raise ValueError(f"operation {self.operation!r} requires root")
         return self
 
