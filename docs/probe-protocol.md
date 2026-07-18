@@ -83,6 +83,11 @@ M1 supports:
 Other protocol names are reserved for later milestones and return an
 unsupported-operation response until implemented.
 
+Each input line is capped by the host-local `max_request_bytes` setting. JSON
+nesting is additionally capped at 128 container levels before decoding so that
+maliciously deep input is rejected consistently across supported Python
+versions with `INVALID_JSON`.
+
 ## Response envelope
 
 Success:

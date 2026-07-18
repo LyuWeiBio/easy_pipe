@@ -12,6 +12,7 @@ from . import PROTOCOL_VERSION
 from .errors import ProbeFailure, ReturnCode
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_MAX_JSON_NESTING = 128
 _TOP_LEVEL_FIELDS = {
     "protocol_version",
     "request_id",
@@ -59,6 +60,7 @@ def decode_json_line(data: bytes) -> Any:
 
     try:
         text = data.decode("utf-8")
+        _reject_excessive_nesting(text)
         return json.loads(
             text,
             object_pairs_hook=_unique_object,
@@ -284,6 +286,31 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_constant(value: str) -> Any:
     raise ValueError(f"non-finite JSON number is forbidden: {value}")
+
+
+def _reject_excessive_nesting(value: str) -> None:
+    """Enforce a deterministic nesting limit before the version-specific decoder."""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_JSON_NESTING:
+                raise ValueError("JSON nesting limit exceeded")
+        elif character in "]}" and depth:
+            depth -= 1
 
 
 def _schema_error(message: str) -> ProbeFailure:

@@ -11,7 +11,7 @@ import pytest
 from bioprobe.config import AllowedRoot, load_config
 from bioprobe.errors import ProbeFailure, ReturnCode
 from bioprobe.paths import AuthorizedStat, OpenedDirectory, PathGuard
-from bioprobe.protocol import encode_response_line
+from bioprobe.protocol import decode_json_line, encode_response_line
 from bioprobe.service import handle_request
 
 
@@ -32,6 +32,18 @@ def _config(tmp_path: Path, root: Path, *, max_response_bytes: int = 4096) -> Pa
         encoding="utf-8",
     )
     return config
+
+
+def test_json_nesting_limit_is_deterministic_and_ignores_string_content() -> None:
+    accepted = b"[" * 128 + b"0" + b"]" * 128
+    assert decode_json_line(accepted) is not None
+    assert decode_json_line(json.dumps({"value": "[{" * 1000}).encode()) == {"value": "[{" * 1000}
+
+    with pytest.raises(ProbeFailure) as captured:
+        decode_json_line(b"[" * 129 + b"0" + b"]" * 129)
+
+    assert captured.value.return_code == ReturnCode.PROTOCOL_ERROR
+    assert captured.value.code == "INVALID_JSON"
 
 
 @pytest.mark.parametrize("operation", ["list_tree", "stat_files"])
