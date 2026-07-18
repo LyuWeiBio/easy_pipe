@@ -237,6 +237,8 @@ def test_source_profile_has_deny_by_default_security_settings() -> None:
     )
 
     assert profile.probe.follow_symlinks is False
+    assert profile.probe.max_request_bytes == 1024 * 1024
+    assert profile.probe.max_paths == 10_000
     assert profile.privacy.allow_external_llm is False
 
 
@@ -283,6 +285,43 @@ def test_probe_policy_rejects_raw_fastq_export_flags(raw_export_flag: str) -> No
                 "policy": {raw_export_flag: True},
             }
         )
+
+
+def test_stat_files_requires_unique_safe_absolute_paths() -> None:
+    request = ProbeRequest.model_validate(
+        {
+            "request_id": "stat-001",
+            "operation": "stat_files",
+            "paths": ["/srv/synthetic-raw/sample.fastq.gz"],
+        }
+    )
+
+    assert request.paths == ["/srv/synthetic-raw/sample.fastq.gz"]
+    with pytest.raises(ValidationError):
+        ProbeRequest.model_validate({"request_id": "stat-002", "operation": "stat_files"})
+    with pytest.raises(ValidationError):
+        ProbeRequest.model_validate(
+            {
+                "request_id": "stat-003",
+                "operation": "stat_files",
+                "paths": ["/srv/raw/../private"],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ssh_alias", "-oProxyCommand=unsafe"),
+        ("probe", {"remote_path": "~/.local/bin/probe;unsafe"}),
+    ],
+)
+def test_source_profile_rejects_command_option_injection(field: str, value: object) -> None:
+    payload = deepcopy(VALID_MODEL_PAYLOAD_BY_TYPE[SourceProfile])
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        SourceProfile.model_validate(payload)
 
 
 def test_execution_contracts_default_to_no_real_data_run() -> None:

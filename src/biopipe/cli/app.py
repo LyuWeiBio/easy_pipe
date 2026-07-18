@@ -1,4 +1,4 @@
-"""Typer command tree for the M0 project skeleton."""
+"""Typer command tree for implemented and reserved MVP milestones."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import json
 import typer
 
 from biopipe import __version__
+from biopipe.cli.inspect import inspect_command
+from biopipe.cli.source import source_app
 
 app = typer.Typer(
     name="biopipe",
@@ -14,14 +16,16 @@ app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
 )
-source_app = typer.Typer(help="Manage source-host profiles.", no_args_is_help=True)
 manifest_app = typer.Typer(help="Inspect and resolve dataset manifests.", no_args_is_help=True)
 app.add_typer(source_app, name="source")
 app.add_typer(manifest_app, name="manifest")
+app.command("inspect", help="Inspect Source Host metadata with the read-only M1 probe.")(
+    inspect_command
+)
 
 
 def _placeholder(command: str, as_json: bool) -> None:
-    message = f"{command} is defined by the M0 CLI contract and will be implemented later."
+    message = f"{command} is reserved by the MVP CLI contract and will be implemented later."
     if as_json:
         typer.echo(
             json.dumps({"status": "not_implemented", "command": command, "message": message})
@@ -39,50 +43,6 @@ def root(
     if version:
         typer.echo(__version__)
         raise typer.Exit()
-
-
-@source_app.command("add")
-def source_add(as_json: bool = typer.Option(False, "--json")) -> None:
-    """Register a source profile (M1 placeholder)."""
-
-    _placeholder("source add", as_json)
-
-
-@source_app.command("list")
-def source_list(as_json: bool = typer.Option(False, "--json")) -> None:
-    """List source profiles (M1 placeholder)."""
-
-    _placeholder("source list", as_json)
-
-
-@source_app.command("show")
-def source_show(
-    source_id: str | None = typer.Argument(None),
-    as_json: bool = typer.Option(False, "--json"),
-) -> None:
-    """Show a source profile (M1 placeholder)."""
-
-    _placeholder(f"source show{f' {source_id}' if source_id else ''}", as_json)
-
-
-@source_app.command("remove")
-def source_remove(
-    source_id: str | None = typer.Argument(None),
-    as_json: bool = typer.Option(False, "--json"),
-) -> None:
-    """Remove a source profile (M1 placeholder)."""
-
-    _placeholder(f"source remove{f' {source_id}' if source_id else ''}", as_json)
-
-
-@source_app.command("verify")
-def source_verify(
-    source_id: str | None = typer.Argument(None),
-    as_json: bool = typer.Option(False, "--json"),
-) -> None:
-    """Verify a source profile (M1 placeholder)."""
-
-    _placeholder(f"source verify{f' {source_id}' if source_id else ''}", as_json)
 
 
 @manifest_app.command("show")
@@ -111,7 +71,6 @@ def _register_placeholder(name: str, help_text: str, milestone: str) -> None:
 
 
 for _name, _help, _milestone in (
-    ("inspect", "Inspect a source dataset", "M1/M2"),
     ("plan", "Create a constrained pipeline specification", "M3"),
     ("generate", "Generate a Nextflow project", "M3"),
     ("validate", "Validate a generated project", "M4"),
