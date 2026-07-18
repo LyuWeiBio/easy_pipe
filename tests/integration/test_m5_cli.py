@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from click import unstyle
 from typer.testing import CliRunner
 
 from biopipe.cli.app import app
@@ -15,6 +15,11 @@ from biopipe.registry import load_default_registry
 
 runner = CliRunner()
 _HELP_ENV = {"COLUMNS": "160", "FORCE_COLOR": None, "NO_COLOR": "1"}
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _compact_terminal_output(value: str) -> str:
+    return "".join(_ANSI_ESCAPE.sub("", value).split())
 
 
 def test_execution_profile_create_and_show_are_create_only(tmp_path: Path) -> None:
@@ -112,9 +117,9 @@ def test_m5_commands_are_real_help_surfaces_not_placeholders() -> None:
         terminal_width=160,
     )
     run = runner.invoke(app, ["run", "--help"], env=_HELP_ENV, terminal_width=160)
-    root_help = "".join(unstyle(root.stdout).split())
-    preflight_help = "".join(unstyle(preflight.stdout).split())
-    run_help = "".join(unstyle(run.stdout).split())
+    root_help = _compact_terminal_output(root.stdout)
+    preflight_help = _compact_terminal_output(preflight.stdout)
+    run_help = _compact_terminal_output(run.stdout)
 
     assert root.exit_code == preflight.exit_code == run.exit_code == 0
     assert "execution-profile" in root_help
