@@ -48,7 +48,7 @@ jobs:
         run: |
           release_dir="$(mktemp -d)"
           mkdir -p "$release_dir/wheels"
-          python -m pip wheel --no-deps --no-build-isolation \
+          python -m pip wheel --no-deps \
             --wheel-dir "$release_dir/wheels" .
           python -m venv --system-site-packages "$release_dir/venv"
           "$release_dir/venv/bin/python" -m pip install \
