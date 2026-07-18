@@ -25,14 +25,19 @@ from biopipe.cli.reports import (
 )
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution.client import ExecutionOperation, OpenSSHExecutionClient
-from biopipe.execution.gate import ApprovalGate
+from biopipe.execution.deploy import DeploymentBundle
+from biopipe.execution.gate import ApprovalGate, LocalGateEvidence
 from biopipe.execution.models import (
     ApprovalArtifactPaths,
     ApprovalRequest,
     RunAuthorization,
     RunPolicy,
 )
-from biopipe.execution.preflight import ExecutionContext, load_execution_context
+from biopipe.execution.preflight import (
+    ExecutionContext,
+    compute_deployment_directory,
+    load_execution_context,
+)
 from biopipe.execution.reports import ReconciliationReport, RunReport, StatusReport
 from biopipe.execution.signing import sign_run_payload
 from biopipe.models import AuditEvent, SourceProfile
@@ -88,6 +93,65 @@ class ExecutionClient(Protocol):
         """Invoke one fixed operation."""
 
 
+def validate_local_run_state(
+    project_directory: str | Path,
+    execution_profile_path: str | Path,
+    evidence: LocalGateEvidence,
+    *,
+    bundle_hash: str,
+    resume_run_id: str | None,
+) -> None:
+    """Validate private submit/resume state without building or mutating a deployment."""
+
+    project = Path(project_directory).expanduser().absolute()
+    if not _SHA256.fullmatch(bundle_hash):
+        raise _preflight_state_error()
+    preflight_state = read_project_private_state(project, ".preflight-state.json")
+    context = ExecutionContext(
+        project=project,
+        profile_path=Path(execution_profile_path).expanduser().absolute(),
+        profile=evidence.profile,
+        bundle=DeploymentBundle(files=(), bundle_hash=bundle_hash),
+        manifest=evidence.manifest,
+        spec=evidence.spec,
+        plan=evidence.plan,
+        software_lock=evidence.software_lock,
+        core_hashes=evidence.core_hashes,
+        project_hash=evidence.preflight.project_hash,
+        connection=SourceProfile(
+            source_id=evidence.profile.profile_id,
+            ssh_alias=evidence.profile.ssh_alias,
+            username=evidence.profile.username,
+            port=evidence.profile.port,
+            allowed_roots=sorted(
+                set(
+                    evidence.profile.allowed_roots.deploy
+                    + evidence.profile.allowed_roots.work
+                    + evidence.profile.allowed_roots.output
+                    + evidence.profile.allowed_roots.cache
+                )
+            ),
+        ),
+    )
+    _require_no_pending_submission(context)
+    previous_state: dict[str, Any] | None = None
+    if resume_run_id is not None:
+        previous_state = _load_run_state(context, resume_run_id)
+        _require_terminal_resume_source(previous_state)
+        previous_authorization = RunAuthorization.model_validate(previous_state["authorization"])
+        evidence.validate_resume_compatibility(
+            previous_authorization,
+            bundle_hash=bundle_hash,
+        )
+    _validate_preflight_state(
+        context,
+        evidence,
+        state=preflight_state,
+        resume_run_id=resume_run_id,
+        previous_state=previous_state,
+    )
+
+
 def submit_approved_run(
     project_directory: str | Path,
     execution_profile_path: str | Path,
@@ -128,7 +192,7 @@ def submit_approved_run(
         if previous_state is None
         else RunAuthorization.model_validate(previous_state["authorization"])
     )
-    authorization = ApprovalGate().authorize(
+    authorization, evidence = ApprovalGate().authorize_with_evidence(
         _approval_paths(context),
         ApprovalRequest(
             policy=RunPolicy(
@@ -147,8 +211,9 @@ def submit_approved_run(
     _require_context_authorization(context, authorization)
     preflight_state = _load_preflight_state(
         context,
-        authorization,
+        evidence,
         resume_run_id=resume_run_id,
+        previous_state=previous_state,
     )
     audit = AuditWriter(context.project / "audit" / "events.jsonl")
     _append_audit(
@@ -488,11 +553,29 @@ def _require_context_authorization(
 
 def _load_preflight_state(
     context: ExecutionContext,
-    authorization: RunAuthorization,
+    authorization: RunAuthorization | LocalGateEvidence,
     *,
     resume_run_id: str | None,
+    previous_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = read_project_private_state(context.project, ".preflight-state.json")
+    return _validate_preflight_state(
+        context,
+        authorization,
+        state=state,
+        resume_run_id=resume_run_id,
+        previous_state=previous_state,
+    )
+
+
+def _validate_preflight_state(
+    context: ExecutionContext,
+    authorization: RunAuthorization | LocalGateEvidence,
+    *,
+    state: dict[str, Any],
+    resume_run_id: str | None,
+    previous_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     required = {
         "state_version",
         "preflight_id",
@@ -509,6 +592,28 @@ def _load_preflight_state(
     }
     token = state.get("preflight_token")
     deployment_dir = state.get("deployment_dir")
+    preflight_id = state.get("preflight_id")
+    expected_preflight_id = (
+        authorization.preflight.preflight_id
+        if isinstance(authorization, LocalGateEvidence)
+        else None
+    )
+    expected_checked_at = (
+        authorization.preflight_checked_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    )
+    expected_deployment_dir: str | None = None
+    expected_deployment_id: str | None = None
+    if isinstance(authorization, LocalGateEvidence):
+        if resume_run_id is None and isinstance(preflight_id, str):
+            expected_deployment_dir = compute_deployment_directory(
+                context.profile,
+                context.spec,
+                context.project_hash,
+                preflight_id,
+            )
+        elif previous_state is not None:
+            expected_deployment_dir = str(previous_state["deployment_dir"])
+            expected_deployment_id = str(previous_state["deployment_id"])
     if (
         set(state) != required
         or state.get("state_version") != "1.0"
@@ -518,17 +623,24 @@ def _load_preflight_state(
         or state.get("bundle_hash") != context.bundle.bundle_hash
         or state.get("preflight_report_sha256") != authorization.artifact_hashes.preflight_report
         or state.get("resume_run_id") != resume_run_id
-        or not isinstance(state.get("preflight_id"), str)
+        or not isinstance(preflight_id, str)
+        or not _PREFLIGHT_ID.fullmatch(preflight_id)
+        or (expected_preflight_id is not None and preflight_id != expected_preflight_id)
+        or state.get("checked_at") != expected_checked_at
         or not isinstance(token, str)
         or not _TOKEN.fullmatch(token)
         or not isinstance(deployment_dir, str)
         or not _below_any(deployment_dir, context.profile.allowed_roots.deploy)
-    ):
-        raise BioPipeError(
-            ErrorCode.APPROVAL_ARTIFACT_MISMATCH,
-            "The private preflight capability does not match the approved evidence.",
-            remediation=["Run a fresh matching preflight and approve again."],
+        or (
+            isinstance(authorization, LocalGateEvidence)
+            and deployment_dir != expected_deployment_dir
         )
+        or (
+            isinstance(authorization, LocalGateEvidence)
+            and state.get("deployment_id") != expected_deployment_id
+        )
+    ):
+        raise _preflight_state_error()
     if resume_run_id is None and state.get("deployment_id") is not None:
         raise BioPipeError(ErrorCode.RESUME_INCOMPATIBLE, "Unexpected resume deployment state.")
     if resume_run_id is not None and not isinstance(state.get("deployment_id"), str):
@@ -721,6 +833,14 @@ def _run_state_error() -> BioPipeError:
     return BioPipeError(
         ErrorCode.RUN_STATUS_FAILED,
         "The local run record is missing or incompatible.",
+    )
+
+
+def _preflight_state_error() -> BioPipeError:
+    return BioPipeError(
+        ErrorCode.APPROVAL_ARTIFACT_MISMATCH,
+        "The private preflight capability does not match the approved evidence.",
+        remediation=["Run a fresh matching preflight and approve again."],
     )
 
 
@@ -1486,4 +1606,5 @@ __all__ = [
     "abandon_pending_run",
     "query_run_status",
     "submit_approved_run",
+    "validate_local_run_state",
 ]

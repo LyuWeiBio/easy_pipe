@@ -465,15 +465,18 @@ record_prepared() {
     printf '%s\n' "prepared" >"${private_directory}/prepared"
 }
 
-approval_denial() {
+approval_denial_attempt() {
+    local label=$1
     local denial_status
-    local denial_stdout="${private_directory}/approval-denial.stdout"
-    local denial_stderr="${private_directory}/approval-denial.json"
+    shift
+    local denial_stdout="${private_directory}/${label}.stdout"
+    local denial_stderr="${private_directory}/${label}.json"
     [[ ! -e "${denial_stdout}" && ! -L "${denial_stdout}" &&
         ! -e "${denial_stderr}" && ! -L "${denial_stderr}" ]] || return 70
     if biopipe run "${project_directory}" \
         --execution-profile "${profile_path}" \
         --actor "${actor}" \
+        "$@" \
         --json >"${denial_stdout}" 2>"${denial_stderr}"; then
         return 1
     else
@@ -490,6 +493,14 @@ payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if payload.get("error", {}).get("code") != "APPROVAL_REQUIRED":
     raise SystemExit(1)
 PY
+}
+
+approval_denial_preview() {
+    approval_denial_attempt approval-denial-preview --dry-run
+}
+
+approval_denial() {
+    approval_denial_attempt approval-denial
 }
 
 extract_run_id() {
@@ -722,10 +733,7 @@ run_phase 34 preflight \
 run_phase 35 audit-before-denial \
     cp -- "${project_directory}/audit/events.jsonl" \
     "${private_directory}/audit-before-denial.jsonl"
-run_phase 36 denial-preview \
-    biopipe run "${project_directory}" \
-    --execution-profile "${profile_path}" \
-    --actor "${actor}" --dry-run --json
+run_phase 36 denial-preview approval_denial_preview
 run_phase 37 approval-denial approval_denial
 run_phase 38 audit-after-denial \
     cp -- "${project_directory}/audit/events.jsonl" \

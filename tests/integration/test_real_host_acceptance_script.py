@@ -244,6 +244,9 @@ def test_mocked_prepare_and_execute_use_the_fixed_safe_chain(
     assert script_harness.multiqc_data.is_file()
     assert script_harness.multiqc_data.stat().st_size > 0
     assert not script_harness.multiqc_data.is_symlink()
+    assert (
+        script_harness.record / "private" / "approval-denial-preview.stdout"
+    ).read_bytes() == b""
     assert (script_harness.record / "private" / "approval-denial.stdout").read_bytes() == b""
 
     _assert_fixed_command_order(_read_json_lines(script_harness.command_log))
@@ -393,6 +396,28 @@ def _fake_biopipe_program() -> str:
         command = args[0]
         subcommand = args[1] if len(args) > 1 else ""
         if dry_run:
+            if (
+                command == "run"
+                and "--approve-real-data" not in args
+                and "--status" not in args
+                and "--abandon-pending" not in args
+            ):
+                print(
+                    json.dumps(
+                        {{
+                            "error": {{
+                                "code": "APPROVAL_REQUIRED",
+                                "context": {{}},
+                                "message": "blocked",
+                                "remediation": [],
+                                "severity": "blocking",
+                            }}
+                        }},
+                        separators=(",", ":"),
+                    ),
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
             emit({{"status": "preview"}})
             raise SystemExit(0)
 

@@ -39,6 +39,22 @@ _FIXED_FILES: Final[frozenset[str]] = frozenset(
         "software.lock.yaml",
     }
 )
+_REQUIRED_PRODUCTION_FILES: Final[frozenset[str]] = frozenset(
+    {
+        "LICENSE",
+        "main.nf",
+        "nextflow.config",
+        "pipeline.spec.yaml",
+        "execution.plan.yaml",
+        "software.lock.yaml",
+        "dataset.manifest.resolved.json",
+        "assets/samplesheet.csv",
+        "conf/base.config",
+        "conf/local.config",
+        "modules/fastqc/raw.nf",
+        "modules/multiqc/main.nf",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +155,54 @@ def build_deployment_bundle(
     return DeploymentBundle(files=files, bundle_hash=_bundle_hash(files))
 
 
+def hash_frozen_deployment_snapshot(project_directory: str | Path) -> str:
+    """Hash the validated production snapshot without compiling or packaging it.
+
+    Runtime audit records are excluded because deployment compilation deterministically
+    recreates only the first ``PIPELINE_GENERATED`` record.
+    """
+
+    project = Path(project_directory).expanduser().absolute()
+    try:
+        metadata: list[dict[str, str | int]] = []
+        total = 0
+        candidates = sorted(path for path in project.rglob("*") if path.is_file())
+        for candidate in candidates:
+            relative = candidate.relative_to(project).as_posix()
+            if not _is_production_file(relative):
+                continue
+            payload = _read_regular_file(candidate)
+            if relative == "audit/events.jsonl":
+                first_line_end = payload.find(b"\n")
+                if first_line_end <= 0:
+                    raise ValueError("generation audit record is incomplete")
+                payload = payload[: first_line_end + 1]
+            if len(payload) > _MAX_FILE_BYTES:
+                raise ValueError("deployment file exceeds its size limit")
+            total += len(payload)
+            metadata.append(
+                {
+                    "path": relative,
+                    "size": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                }
+            )
+        _validate_production_selection(
+            {str(item["path"]) for item in metadata},
+            file_count=len(metadata),
+            total_bytes=total,
+        )
+        return _metadata_hash(metadata)
+    except BioPipeError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise BioPipeError(
+            ErrorCode.DEPLOYMENT_FAILED,
+            "The frozen production snapshot could not be validated.",
+            remediation=["Regenerate, validate, test, and preflight the project before retrying."],
+        ) from exc
+
+
 def _read_production_files(root: Path) -> tuple[DeploymentFile, ...]:
     selected: list[DeploymentFile] = []
     total = 0
@@ -159,26 +223,25 @@ def _read_production_files(root: Path) -> tuple[DeploymentFile, ...]:
                 content=payload,
             )
         )
-    expected = {
-        "LICENSE",
-        "main.nf",
-        "nextflow.config",
-        "pipeline.spec.yaml",
-        "execution.plan.yaml",
-        "software.lock.yaml",
-        "dataset.manifest.resolved.json",
-        "assets/samplesheet.csv",
-        "conf/base.config",
-        "conf/local.config",
-        "modules/fastqc/raw.nf",
-        "modules/multiqc/main.nf",
-    }
     actual = {item.path for item in selected}
-    if not expected <= actual or len(selected) > _MAX_FILES or total > _MAX_BUNDLE_BYTES:
-        raise ValueError("deployment bundle is incomplete or exceeds its limits")
-    if any(_looks_like_raw_data(item.path) for item in selected):
-        raise ValueError("raw biological data is forbidden in deployment bundles")
+    _validate_production_selection(actual, file_count=len(selected), total_bytes=total)
     return tuple(selected)
+
+
+def _validate_production_selection(
+    paths: set[str],
+    *,
+    file_count: int,
+    total_bytes: int,
+) -> None:
+    if (
+        not paths >= _REQUIRED_PRODUCTION_FILES
+        or file_count > _MAX_FILES
+        or total_bytes > _MAX_BUNDLE_BYTES
+    ):
+        raise ValueError("deployment bundle is incomplete or exceeds its limits")
+    if any(_looks_like_raw_data(path) for path in paths):
+        raise ValueError("raw biological data is forbidden in deployment bundles")
 
 
 def _is_production_file(relative: str) -> bool:
@@ -232,9 +295,15 @@ def _read_regular_file(path: Path) -> bytes:
 
 
 def _bundle_hash(files: tuple[DeploymentFile, ...]) -> str:
-    metadata = [{"path": item.path, "sha256": item.sha256, "size": item.size} for item in files]
+    metadata: list[dict[str, str | int]] = [
+        {"path": item.path, "sha256": item.sha256, "size": item.size} for item in files
+    ]
+    return _metadata_hash(metadata)
+
+
+def _metadata_hash(metadata: list[dict[str, str | int]]) -> str:
     canonical = json.dumps(
-        metadata,
+        sorted(metadata, key=lambda item: str(item["path"])),
         allow_nan=False,
         ensure_ascii=True,
         separators=(",", ":"),
@@ -243,4 +312,9 @@ def _bundle_hash(files: tuple[DeploymentFile, ...]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-__all__ = ["DeploymentBundle", "DeploymentFile", "build_deployment_bundle"]
+__all__ = [
+    "DeploymentBundle",
+    "DeploymentFile",
+    "build_deployment_bundle",
+    "hash_frozen_deployment_snapshot",
+]

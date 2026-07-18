@@ -45,6 +45,24 @@ Dry-run may read and strictly validate existing local inputs. `validate` and
 checks; none invokes the external workflow/runtime or writes a report. A dry-run
 is not a preflight result or real-data approval.
 
+`run` submit and resume dry-runs additionally require an attributable actor and
+the explicit `--approve-real-data` mode flag, then revalidate the complete frozen
+generated project, execution profile, successful validation/test reports, and
+the bound fresh public preflight report. It deterministically hashes the frozen
+production snapshot without compiling or packaging a deployment, then binds the
+private preflight ID, timestamp, report, bundle hash, and deterministic
+deployment location. It validates the opaque capability token's local shape;
+only the real remote operation can verify that token's live acceptance. The
+local gate also rejects pending submissions, an unrecorded or non-terminal
+resume source, incompatible prior authorization inputs, and a preflight
+timestamp later than the hypothetical approval. Only after those checks pass
+does the envelope include `"local_gate_validation":"passed"`.
+This is a point-in-time local evidence result: it does not read the HMAC key,
+create an authorization, build a deployment, consume or write private state,
+contact SSH, or reserve a future submission. The real command repeats its full
+validation and may still fail. Status and pending-abandon dry-runs are operation
+previews and do not require a fresh submission preflight.
+
 ## Global help and versions
 
 Show the command tree or the short controller version:
@@ -420,8 +438,10 @@ biopipe preflight projects/run42/generated \
 
 ### `biopipe run`: submit
 
-Previewing submission reads no approval key, signs nothing, writes nothing, and
-contacts no SSH host:
+Previewing submission first validates the current local submission gate,
+including a read-only deterministic hash of the frozen production files. It
+reads no approval key, signs nothing, compiles or packages no deployment, writes
+nothing, and contacts no SSH host:
 
 ```bash
 biopipe run projects/run42/generated \
@@ -431,6 +451,21 @@ biopipe run projects/run42/generated \
   --dry-run \
   --json
 ```
+
+A successful preview preserves the common contract and adds:
+
+```json
+{
+  "local_gate_validation": "passed",
+  "side_effects_performed": false,
+  "status": "would_submit"
+}
+```
+
+`--approve-real-data` is required here to validate the requested submission
+mode, but a dry-run is never approval: it creates no authorization or signature
+and changes no state. Omitting the flag returns `APPROVAL_REQUIRED` before local
+evidence is read, just as omitting the actor does.
 
 After review, the real initial submission requires both attribution and the
 explicit approval flag:

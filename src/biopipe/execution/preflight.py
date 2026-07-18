@@ -149,7 +149,7 @@ def run_preflight(
     preflight_id = f"preflight-{uuid4().hex}"
     previous_state = None if resume_run_id is None else _resume_state(context, resume_run_id)
     deployment_dir = (
-        _deployment_directory(profile, context.spec, project_hash, preflight_id)
+        compute_deployment_directory(profile, context.spec, project_hash, preflight_id)
         if previous_state is None
         else str(previous_state["deployment_dir"])
     )
@@ -479,12 +479,14 @@ def _validate_profile(
             raise _profile_error("A planned writable path is outside its role allowlist.")
 
 
-def _deployment_directory(
+def compute_deployment_directory(
     profile: ExecutionProfile,
     spec: PipelineSpec,
     project_hash: str,
     preflight_id: str,
 ) -> str:
+    """Return the deterministic deployment directory bound by preflight."""
+
     leaf = f"{spec.project.name}-{project_hash[:12]}-{preflight_id.removeprefix('preflight-')[:12]}"
     return str(PurePosixPath(profile.allowed_roots.deploy[0]) / leaf)
 
@@ -626,4 +628,9 @@ def _preflight_protocol_error() -> BioPipeError:
     )
 
 
-__all__ = ["ExecutionContext", "load_execution_context", "run_preflight"]
+__all__ = [
+    "ExecutionContext",
+    "compute_deployment_directory",
+    "load_execution_context",
+    "run_preflight",
+]
