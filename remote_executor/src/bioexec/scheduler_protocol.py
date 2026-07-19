@@ -46,6 +46,11 @@ _RAW_STATE = re.compile(
     re.ASCII,
 )
 _REASON = re.compile(r"[A-Z][A-Z0-9_]{0,63}", re.ASCII)
+_TAGGED_IMAGE = re.compile(
+    r"[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+:"
+    r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}",
+    re.ASCII,
+)
 _OCI_DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 
 _ENVELOPE_FIELDS = frozenset({"protocol_version", "request_id", "operation", "payload"})
@@ -437,24 +442,33 @@ def _validate_preflight(payload: dict[str, Any]) -> None:
     )
     if project_hash != payload["project_hash"]:
         raise SchedulerProtocolError("artifact_hashes do not bind project_hash")
-    _identifier(payload["source_host"], "source_host")
-    _identifier(payload["execution_host"], "execution_host")
-    if payload["host_relation"] not in {"same", "shared"}:
+    source_host = _identifier(payload["source_host"], "source_host")
+    execution_host = _identifier(payload["execution_host"], "execution_host")
+    relation = payload["host_relation"]
+    if relation not in {"same", "shared"}:
         raise SchedulerProtocolError("host_relation must be same or shared")
-    _path_array(payload["source_paths"], "source_paths")
-    _path_array(payload["execution_paths"], "execution_paths")
+    if (relation == "same") != (source_host == execution_host):
+        raise SchedulerProtocolError("host_relation conflicts with the exact host identities")
+    source_paths = _path_array(payload["source_paths"], "source_paths")
+    execution_paths = _path_array(payload["execution_paths"], "execution_paths")
     mappings = _array(payload["path_mapping"], "path_mapping", maximum=128)
-    seen_mappings: set[tuple[str, str]] = set()
+    validated_mappings: list[tuple[PurePosixPath, PurePosixPath]] = []
+    source_prefixes: set[str] = set()
     for index, item in enumerate(mappings):
         mapping = _object(item, f"path_mapping[{index}]")
         _exact_fields(mapping, _MAPPING_FIELDS, f"path_mapping[{index}]")
-        pair = (
-            _absolute_path(mapping["source_prefix"], "source_prefix"),
-            _absolute_path(mapping["execution_prefix"], "execution_prefix"),
-        )
-        if pair in seen_mappings:
-            raise SchedulerProtocolError("path_mapping must not contain duplicates")
-        seen_mappings.add(pair)
+        source_prefix = _absolute_path(mapping["source_prefix"], "source_prefix")
+        execution_prefix = _absolute_path(mapping["execution_prefix"], "execution_prefix")
+        if source_prefix in source_prefixes:
+            raise SchedulerProtocolError("path_mapping source_prefix values must be unique")
+        source_prefixes.add(source_prefix)
+        validated_mappings.append((PurePosixPath(source_prefix), PurePosixPath(execution_prefix)))
+    _validate_execution_mapping(
+        relation,
+        source_paths,
+        execution_paths,
+        tuple(validated_mappings),
+    )
     for field in ("deploy_dir", "work_dir", "output_dir", "cache_dir"):
         _absolute_path(payload[field], field)
     if payload["container_engine"] != "apptainer":
@@ -468,7 +482,7 @@ def _validate_preflight(payload: dict[str, Any]) -> None:
         if name in names:
             raise SchedulerProtocolError("containers must have unique names")
         names.add(name)
-        _text(container["image"], "container image", maximum=512)
+        _tagged_image(container["image"], "container image")
         digest = container["digest"]
         if (
             not isinstance(digest, str)
@@ -476,7 +490,8 @@ def _validate_preflight(payload: dict[str, Any]) -> None:
             or digest == f"sha256:{'0' * 64}"
         ):
             raise SchedulerProtocolError("container digest must be sha256-bound")
-        _absolute_path(container["local_path"], "container local_path")
+        local_path = _absolute_path(container["local_path"], "container local_path")
+        _sif_path(local_path)
         _digest(container["file_sha256"], "container file_sha256")
     minimum_free = payload["minimum_free_bytes"]
     if type(minimum_free) is not int or not 1 <= minimum_free <= 1024**5:
@@ -486,6 +501,68 @@ def _validate_preflight(payload: dict[str, Any]) -> None:
     resume = payload["resume_run_id"]
     if resume is not None:
         _identifier(resume, "resume_run_id")
+
+
+def _validate_execution_mapping(
+    relation: str,
+    source_paths: tuple[str, ...],
+    execution_paths: tuple[str, ...],
+    mappings: tuple[tuple[PurePosixPath, PurePosixPath], ...],
+) -> None:
+    if len(source_paths) != len(execution_paths):
+        raise SchedulerProtocolError("source_paths and execution_paths must have equal length")
+    if relation == "same" and not mappings:
+        if source_paths != execution_paths:
+            raise SchedulerProtocolError(
+                "same-host paths must match exactly when path_mapping is empty"
+            )
+        return
+    if not mappings:
+        raise SchedulerProtocolError("shared hosts require a complete path_mapping")
+    mapped = tuple(_map_execution_path(path, mappings) for path in source_paths)
+    if mapped != execution_paths:
+        raise SchedulerProtocolError(
+            "path_mapping must map source_paths to execution_paths in exact order"
+        )
+
+
+def _map_execution_path(
+    value: str,
+    mappings: tuple[tuple[PurePosixPath, PurePosixPath], ...],
+) -> str:
+    source = PurePosixPath(value)
+    candidates: list[tuple[int, str]] = []
+    for source_prefix, execution_prefix in mappings:
+        try:
+            relative = source.relative_to(source_prefix)
+        except ValueError:
+            continue
+        candidates.append((len(source_prefix.parts), str(execution_prefix / relative)))
+    if not candidates:
+        raise SchedulerProtocolError("path_mapping does not cover every source path")
+    longest = max(length for length, _target in candidates)
+    targets = {target for length, target in candidates if length == longest}
+    if len(targets) != 1:
+        raise SchedulerProtocolError("path_mapping has an ambiguous longest-prefix match")
+    return targets.pop()
+
+
+def _tagged_image(value: Any, label: str) -> str:
+    image = _text(value, label, maximum=512)
+    if (
+        not _TAGGED_IMAGE.fullmatch(image)
+        or image.rsplit(":", maxsplit=1)[-1].casefold() == "latest"
+    ):
+        raise SchedulerProtocolError(
+            f"{label} must be one explicitly tagged safe OCI registry reference"
+        )
+    return image
+
+
+def _sif_path(local_path: str) -> None:
+    path = PurePosixPath(local_path)
+    if not path.name.endswith(".sif") or path.name == ".sif":
+        raise SchedulerProtocolError("container local_path must identify one .sif file")
 
 
 def _validate_deploy(payload: dict[str, Any]) -> None:
@@ -624,10 +701,15 @@ def _digest(value: Any, label: str) -> str:
 
 
 def _text(value: Any, label: str, *, maximum: int = _MAX_TEXT_BYTES) -> str:
+    if not isinstance(value, str):
+        raise SchedulerProtocolError(f"{label} must be bounded safe text")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise SchedulerProtocolError(f"{label} must be bounded safe text") from exc
     if (
-        not isinstance(value, str)
-        or not value
-        or len(value.encode("utf-8")) > maximum
+        not value
+        or len(encoded) > maximum
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         raise SchedulerProtocolError(f"{label} must be bounded safe text")

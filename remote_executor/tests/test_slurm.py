@@ -15,6 +15,8 @@ import pytest
 from bioexec.errors import AgentFailure, ReturnCode
 from bioexec.protocol import parse_request
 from bioexec.slurm import (
+    SlurmContractError,
+    SlurmHeldJob,
     SlurmJobRef,
     SlurmMappedState,
     SlurmObservation,
@@ -23,13 +25,16 @@ from bioexec.slurm import (
     build_sacct_argv,
     build_sbatch_argv,
     build_scheduler_environment,
+    build_scontrol_release_argv,
     build_squeue_argv,
     build_squeue_discovery_argv,
+    build_squeue_hold_argv,
     canonical_scheduler_policy_bytes,
     map_slurm_observation,
     parse_sacct_output,
     parse_sbatch_parsable_output,
     parse_squeue_discovery_output,
+    parse_squeue_hold_output,
     parse_squeue_output,
     reconcile_slurm_observations,
     scheduler_policy_hash,
@@ -81,6 +86,20 @@ def _job(
     )
 
 
+def _held(
+    job_id: str = "12345",
+    submission_marker: str = _MARKER,
+    submitted_at: str | None = _SUBMITTED_AT,
+    state: str = "PENDING",
+    reason: str = "JobHeldUser",
+) -> SlurmHeldJob:
+    return SlurmHeldJob(
+        job=_job(job_id, submission_marker, submitted_at),
+        state=state,
+        reason=reason,
+    )
+
+
 def _mapped(observation: SlurmObservation) -> SlurmMappedState:
     result = map_slurm_observation(observation)
     assert isinstance(result, SlurmMappedState)
@@ -112,6 +131,17 @@ def _sacct_row(
     submission_marker: str = _MARKER,
 ) -> bytes:
     return f"{job_id}|{submitted_at}|{submission_marker}|{state}|{exit_code}\n".encode()
+
+
+def _squeue_hold_row(
+    state: str = "PENDING",
+    reason: str = "JobHeldUser",
+    *,
+    job_id: str = "12345",
+    submitted_at: str = _SUBMITTED_AT,
+    submission_marker: str = _MARKER,
+) -> bytes:
+    return f"{job_id}|{submitted_at}|{submission_marker}|{state}|{reason}\n".encode()
 
 
 def test_scheduler_policy_is_strict_bounded_and_deterministic() -> None:
@@ -310,6 +340,21 @@ def test_fixed_scheduler_argv_have_no_generic_command_surface() -> None:
         "--format=JobIDRaw,Submit,JobName%64,State%64,ExitCode",
     )
 
+    hold_query = build_squeue_hold_argv("/opt/slurm/bin/squeue", job)
+    assert hold_query == (
+        "/opt/slurm/bin/squeue",
+        "--local",
+        "--noheader",
+        "--jobs=12345",
+        "--states=PENDING",
+        "--format=%i|%V|%j|%T|%r",
+    )
+
+    held = parse_squeue_hold_output(_squeue_hold_row(), job)
+    assert held is not None
+    release = build_scontrol_release_argv("/opt/slurm/bin/scontrol", held)
+    assert release == ("/opt/slurm/bin/scontrol", "release", "12345")
+
     discovery = build_squeue_discovery_argv("/opt/slurm/bin/squeue", _MARKER)
     assert discovery == (
         "/opt/slurm/bin/squeue",
@@ -320,7 +365,7 @@ def test_fixed_scheduler_argv_have_no_generic_command_surface() -> None:
         "--format=%i|%V|%j|%T",
     )
 
-    flattened = "\n".join((*sbatch, *squeue, *sacct, *discovery))
+    flattened = "\n".join((*sbatch, *squeue, *sacct, *hold_query, *release, *discovery))
     assert "--wrap" not in flattened
     assert "scancel" not in flattened
     assert "bash" not in flattened
@@ -336,10 +381,16 @@ def test_fixed_scheduler_argv_have_no_generic_command_surface() -> None:
         ("sbatch", "/opt/slurm/unsafe:bin/sbatch"),
         ("squeue", "squeue"),
         ("squeue", "/opt/slurm/bin/not-squeue"),
+        ("hold", "squeue"),
+        ("hold", "/opt/slurm/bin/not-squeue"),
+        ("hold", "/opt/slurm/unsafe:bin/squeue"),
         ("discovery", "squeue"),
         ("discovery", "/opt/slurm/bin/not-squeue"),
         ("sacct", "sacct"),
         ("sacct", "/opt/slurm/bin/not-sacct"),
+        ("release", "scontrol"),
+        ("release", "/opt/slurm/bin/not-scontrol"),
+        ("release", "/opt/slurm/unsafe:bin/scontrol"),
     ],
 )
 def test_argv_builders_require_one_reviewed_absolute_binary(builder: str, binary: str) -> None:
@@ -348,10 +399,84 @@ def test_argv_builders_require_one_reviewed_absolute_binary(builder: str, binary
             build_sbatch_argv(binary, _submit_spec())
         elif builder == "squeue":
             build_squeue_argv(binary, _job())
+        elif builder == "hold":
+            build_squeue_hold_argv(binary, _job())
         elif builder == "discovery":
             build_squeue_discovery_argv(binary, _MARKER)
+        elif builder == "release":
+            build_scontrol_release_argv(binary, _held())
         else:
             build_sacct_argv(binary, _job())
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    [
+        "",
+        "0",
+        "00",
+        "01",
+        "-1",
+        "+1",
+        "12345_7",
+        "12345.batch",
+        "12345+1",
+        "12345,54321",
+        "12345 --flags=evil",
+        "4294967296",
+    ],
+)
+def test_scontrol_release_rejects_noncanonical_or_composite_job_ids(job_id: str) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        build_scontrol_release_argv("/opt/slurm/bin/scontrol", _held(job_id=job_id))
+
+
+def test_scontrol_release_has_no_flags_or_generic_command_surface() -> None:
+    held = _held(submitted_at=_SUBMITTED_AT)
+
+    assert build_scontrol_release_argv("/opt/slurm/bin/scontrol", held) == (
+        "/opt/slurm/bin/scontrol",
+        "release",
+        "12345",
+    )
+    with pytest.raises(TypeError):
+        build_scontrol_release_argv(  # type: ignore[call-arg]
+            "/opt/slurm/bin/scontrol",
+            held,
+            "--all",
+        )
+    with pytest.raises((TypeError, ValueError)):
+        build_scontrol_release_argv(
+            "/opt/slurm/bin/scontrol",
+            "12345",  # type: ignore[arg-type]
+        )
+
+
+def test_scontrol_release_rejects_job_without_scheduler_submit_time_binding() -> None:
+    provisional = _job(submitted_at=None)
+
+    with pytest.raises(SlurmContractError, match="bind the scheduler submit time"):
+        SlurmHeldJob(job=provisional, state="PENDING", reason="JobHeldUser")
+    with pytest.raises(SlurmContractError, match="validated user-held job evidence"):
+        build_scontrol_release_argv(  # type: ignore[arg-type]
+            "/opt/slurm/bin/scontrol",
+            provisional,
+        )
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        ("RUNNING", "JobHeldUser"),
+        ("PENDING", "JobHeldAdmin"),
+        ("PENDING", "Dependency"),
+        ("PENDING", "None"),
+        ("PENDING", "JobHeldUser+"),
+    ],
+)
+def test_held_job_type_requires_exact_pending_user_hold(state: str, reason: str) -> None:
+    with pytest.raises(SlurmContractError):
+        _held(state=state, reason=reason)
 
 
 @pytest.mark.parametrize(
@@ -533,6 +658,62 @@ def test_squeue_parser_rejects_identity_mismatch_truncation_and_ambiguity(
 ) -> None:
     with pytest.raises((TypeError, ValueError)):
         parse_squeue_output(output, _job())
+
+
+def test_squeue_hold_parser_proves_one_exact_user_held_job() -> None:
+    provisional = _job(submitted_at=None)
+
+    assert parse_squeue_hold_output(_squeue_hold_row(), provisional) == _held()
+
+
+def test_squeue_hold_parser_empty_window_does_not_prove_a_hold() -> None:
+    assert parse_squeue_hold_output(b"", _job()) is None
+
+
+def test_squeue_hold_parser_accepts_scheduler_field_padding() -> None:
+    row = (
+        b"12345|" + _SUBMITTED_AT.encode() + b"|" + _MARKER.encode() + b"| PENDING | JobHeldUser \n"
+    )
+
+    assert parse_squeue_hold_output(row, _job()) == _held()
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        _squeue_hold_row(job_id="54321"),
+        _squeue_hold_row(job_id="12345.batch"),
+        _squeue_hold_row(job_id="12345_7"),
+        _squeue_hold_row(job_id="12345+1"),
+        _squeue_hold_row(submission_marker=_OTHER_MARKER),
+        _squeue_hold_row(submitted_at="2026-07-19T12:34:57"),
+        _squeue_hold_row(submitted_at="Unknown"),
+        _squeue_hold_row(state="RUNNING"),
+        _squeue_hold_row(state="CONFIGURING"),
+        _squeue_hold_row(reason="JobHeldAdmin"),
+        _squeue_hold_row(reason="Dependency"),
+        _squeue_hold_row(reason="None"),
+        _squeue_hold_row(reason="JobHeldUser+"),
+        _squeue_hold_row(reason="jobhelduser"),
+        _squeue_hold_row().rstrip(b"\n") + b"|extra\n",
+        _squeue_hold_row() + _squeue_hold_row(job_id="54321"),
+        _squeue_hold_row().replace(b"JobHeldUser", b"JobHeldUser\x00"),
+        b"\xff\n",
+    ],
+)
+def test_squeue_hold_parser_rejects_mismatch_non_user_hold_and_ambiguity(
+    output: bytes,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        parse_squeue_hold_output(output, _job())
+
+
+def test_squeue_hold_parser_rejects_unvalidated_expected_job() -> None:
+    with pytest.raises(SlurmContractError, match="validated SlurmJobRef"):
+        parse_squeue_hold_output(  # type: ignore[arg-type]
+            _squeue_hold_row(),
+            "12345",
+        )
 
 
 def test_sacct_parser_accepts_only_one_allocation_row() -> None:
@@ -1024,6 +1205,7 @@ def test_contract_api_is_pure_and_never_invokes_host_or_network_operations(
     policy = _policy()
     spec = _submit_spec(policy=policy)
     job = _job()
+    held = _held()
 
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("the dormant Slurm contract performed an external operation")
@@ -1042,10 +1224,13 @@ def test_contract_api_is_pure_and_never_invokes_host_or_network_operations(
         lambda: build_sbatch_argv("/opt/slurm/bin/sbatch", spec),
         lambda: build_squeue_argv("/opt/slurm/bin/squeue", job),
         lambda: build_sacct_argv("/opt/slurm/bin/sacct", job),
+        lambda: build_squeue_hold_argv("/opt/slurm/bin/squeue", job),
+        lambda: build_scontrol_release_argv("/opt/slurm/bin/scontrol", held),
         lambda: build_squeue_discovery_argv("/opt/slurm/bin/squeue", _MARKER),
         lambda: build_scheduler_environment("/srv/biopipe/private-state/slurm-home"),
         lambda: parse_sbatch_parsable_output(b"12345\n", _MARKER),
         lambda: parse_squeue_output(_squeue_row("RUNNING"), job),
+        lambda: parse_squeue_hold_output(_squeue_hold_row(), job),
         lambda: parse_sacct_output(_sacct_row("COMPLETED"), job),
         lambda: parse_squeue_discovery_output(_squeue_row("PENDING"), _MARKER),
     )
