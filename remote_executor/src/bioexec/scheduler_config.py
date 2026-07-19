@@ -478,10 +478,14 @@ def _approval_key(value: Any) -> bytes:
 
 
 def _absolute_path(value: Any, field: str) -> str:
+    try:
+        encoded = value.encode("utf-8") if isinstance(value, str) else b""
+    except UnicodeEncodeError as exc:
+        raise SchedulerConfigError(f"{field} must be one bounded canonical absolute path") from exc
     if (
         not isinstance(value, str)
         or not value
-        or len(value.encode("utf-8")) > _MAX_PATH_BYTES
+        or len(encoded) > _MAX_PATH_BYTES
         or value.startswith("//")
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):

@@ -218,6 +218,7 @@ remote account access to data.
 - [M7 Slurm launch contract](docs/adr/0002-m7-slurm-launch-contract.md)
 - [M7 versioned scheduler contracts](docs/adr/0003-m7-versioned-scheduler-contracts.md)
 - [M7 compute-node preflight contract](docs/adr/0004-m7-compute-preflight-contract.md)
+- [M7 trusted scheduler config loader](docs/adr/0005-m7-trusted-scheduler-config-loader.md)
 
 ## Development checks
 
