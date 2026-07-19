@@ -12,6 +12,7 @@ import pytest
 import biopipe.release_evidence.pilot as pilot
 from biopipe.execution import CoreArtifactHashes, compute_project_hash
 from biopipe.release_evidence.models import EvidenceVerification
+from biopipe.release_evidence.pilot_record import build_unexecuted_pilot_record
 from biopipe.version import (
     CLI_CONTRACT_VERSION,
     COMPILER_VERSION,
@@ -116,52 +117,16 @@ def _unexecuted_case(case_id: str, scenario: str) -> dict[str, object]:
 
 
 def incomplete_record() -> dict[str, Any]:
-    cases = [
-        _unexecuted_case(f"case-{index:03d}", scenario)
-        for index, scenario in enumerate(pilot._REQUIRED_CASE_SCENARIOS, start=1)
-    ]
-    return {
-        "format_version": "1.0",
-        "collection_policy_version": "1.0",
-        "pilot_id": "pilot-20260719-001",
-        "environment_id": "env-001",
-        "recorded_at": RECORDED_AT,
-        "data_boundary": "non_sensitive_only",
-        "expected_evidence": {
-            "release_id": RELEASE_ID,
-            "source_git_commit": COMMIT,
-            "candidate_manifest_sha256": CANDIDATE_MANIFEST,
-            "release_acceptance_manifest_sha256": ACCEPTANCE_MANIFEST,
-            "real_host_manifest_sha256": REAL_HOST_MANIFEST,
-        },
-        "entry_gate": {"status": "not_recorded", "restricted_record_sha256": None},
-        "cases": cases,
-        "drills": [],
-        "owner_assignments": [
-            {"role": role, "status": "pending", "restricted_record_sha256": None}
-            for role in pilot._OWNER_ROLES
-        ],
-        "capacity_retention": {
-            "deploy_usage_bucket": "not_observed",
-            "work_usage_bucket": "not_observed",
-            "output_usage_bucket": "not_observed",
-            "cache_usage_bucket": "not_observed",
-            "capacity_decision": "pending",
-            "retention_decision": "pending",
-            "restricted_record_sha256": None,
-        },
-        "backup_restore": {"status": "not_run", "restricted_record_sha256": None},
-        "operator_documentation": {
-            "result": "not_observed",
-            "restricted_record_sha256": None,
-        },
-        "friction_review_status": "not_recorded",
-        "friction": [],
-        "corrective_actions": [],
-        "control_deviation": {"status": "none", "restricted_record_sha256": None},
-        "controls_relaxed": False,
-        "next_recommendation": "remain_blocked",
-    }
+    return build_unexecuted_pilot_record(
+        pilot_id="pilot-20260719-001",
+        environment_id="env-001",
+        recorded_at=RECORDED_AT,
+        release_id=RELEASE_ID,
+        source_git_commit=COMMIT,
+        candidate_manifest_sha256=CANDIDATE_MANIFEST,
+        release_acceptance_manifest_sha256=ACCEPTANCE_MANIFEST,
+        real_host_manifest_sha256=REAL_HOST_MANIFEST,
+    ).model_dump(mode="json")
 
 
 def _success_hashes(seed: int) -> dict[str, str]:
@@ -414,6 +379,7 @@ def create_arguments(root: Path, record: dict[str, Any]) -> dict[str, Path | str
     real_host.mkdir(mode=0o700)
     record_path = root / f"sanitized-record-{PRIVATE_SENTINEL}.json"
     record_path.write_bytes(json_bytes(record))
+    record_path.chmod(0o600)
     output_parent = root / "published"
     output_parent.mkdir(mode=0o700)
     return {
