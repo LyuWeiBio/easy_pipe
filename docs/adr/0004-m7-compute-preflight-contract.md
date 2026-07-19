@@ -209,7 +209,10 @@ handling.
 
 ## Next step
 
-The next connection slice must implement the trusted version-2 loader,
+The next connection work must implement the trusted version-2 loader,
 stdin-capable scheduler runner, scheduler-preflight state namespace, and fixed
-compute worker. It must remain unable to start a workflow until the deployment
-and every runtime artifact are revalidated from the allocated compute node.
+compute worker. These prerequisites may land as separate dormant, reviewable
+sub-slices, but no version-2 operation may be activated until all are present.
+M7.0d-a implements only the trusted loader described by ADR 0005. The completed
+connection must remain unable to start a workflow until the deployment and
+every runtime artifact are revalidated from the allocated compute node.

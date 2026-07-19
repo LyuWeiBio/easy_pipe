@@ -38,8 +38,10 @@ capability.
   and runner do not import or activate them, and synthetic tests are not cluster
   acceptance evidence.
 - The M7 compute-node preflight template and evidence state machine are also
-  dormant contracts. There is no active version-2 config loader, scheduler
-  state namespace, stdin runner, compute worker, or scheduler capability yet.
+  dormant contracts. A separate version-2 loader can now bind and recheck
+  trusted startup filesystem identities, but the current service does not
+  import it. There is still no scheduler state namespace, stdin runner, compute
+  worker, scheduler capability, or active version-2 dispatch path.
 
 ## Hosts and filesystems
 

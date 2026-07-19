@@ -23,6 +23,12 @@ transition rules are likewise dormant. They do not submit a job or mint an
 execution capability. See
 [ADR 0004](../docs/adr/0004-m7-compute-preflight-contract.md).
 
+M7.0d-a adds an explicit trusted-filesystem loader for the dormant version-2
+configuration. It records startup identities and can recheck them before a
+future scheduler mutation, but the version-1 service still does not import it
+and it cannot execute Slurm. See
+[ADR 0005](../docs/adr/0005-m7-trusted-scheduler-config-loader.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
@@ -170,5 +176,6 @@ confinement, symlinks, mapping and host checks, Docker/Apptainer evidence,
 production allowlisting, create-only deployment, tamper detection, approval,
 one-use tokens, input replacement, output collision, asynchronous status and
 job-lifetime leases, signed abandonment races, compatible resume, executable,
-JAR, config and ancestor trust, isolated client environments, and reproducible
+JAR, config and ancestor trust, dormant scheduler-config startup identities and
+mutation-boundary rechecks, isolated client environments, and reproducible
 zipapp execution.
