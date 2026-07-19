@@ -215,6 +215,7 @@ remote account access to data.
 - [Platform locks and supply-chain inventories](environments/locks/README.md)
 - [Probe protocol](docs/probe-protocol.md)
 - [Architecture decision record](docs/adr/0001-architecture.md)
+- [M7 Slurm launch contract](docs/adr/0002-m7-slurm-launch-contract.md)
 
 ## Development checks
 
