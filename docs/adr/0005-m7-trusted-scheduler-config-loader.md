@@ -95,8 +95,6 @@ are not cluster acceptance evidence.
 
 ## Next step
 
-M7.0d-b must add a separate raw-bytes, bounded, stdin-capable scheduler runner.
-It must accept only fixed Slurm operations and exact generated template bytes,
-and it must use the trusted executable rechecks defined here. Durable
-scheduler-preflight state and the fixed compute worker remain later M7.0d
-sub-slices before any version-2 activation.
+M7.0d-b adds the separate raw-bytes, bounded, stdin-capable scheduler transport
+described by ADR 0006. Durable scheduler-preflight state and the fixed compute
+worker remain later M7.0d sub-slices before any version-2 activation.
