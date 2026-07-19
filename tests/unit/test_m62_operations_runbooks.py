@@ -52,6 +52,29 @@ def test_readme_and_operations_guide_link_every_runbook() -> None:
         assert f"({name})" in operations
 
 
+def test_pilot_evidence_compiler_is_linked_and_cannot_overclaim() -> None:
+    evidence = _read(DOCS_ROOT / "internal-pilot-evidence.md")
+    readme = _read(REPOSITORY_ROOT / "README.md")
+    operations = _read(DOCS_ROOT / "operations.md")
+    pilot = _read(DOCS_ROOT / "internal-pilot-runbook.md")
+    capacity = _read(DOCS_ROOT / "capacity-and-quota-runbook.md")
+    assert "(docs/internal-pilot-evidence.md)" in readme
+    for content in (operations, pilot, capacity):
+        assert "(internal-pilot-evidence.md)" in content
+    for marker in (
+        "OPERATOR_RECORDED_UNREVIEWED",
+        "PENDING_INDEPENDENT_REVIEW",
+        "milestone_decision: BLOCKED",
+        "production_authorization: false",
+        "does not execute",
+        "does not verify",
+        "Never commit an executed bundle",
+    ):
+        assert marker.casefold() in evidence.casefold()
+    assert "internal-pilot-review-draft.md" in evidence
+    assert "collect_internal_pilot_evidence.py verify" in evidence
+
+
 def test_internal_pilot_covers_required_cases_and_failure_drills() -> None:
     pilot = _read(DOCS_ROOT / "internal-pilot-runbook.md")
     required_labels = (

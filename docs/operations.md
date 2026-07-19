@@ -249,6 +249,7 @@ do not prove M6.1 sign-off, a real-host acceptance, an internal pilot, a drill,
 or an organizational policy decision:
 
 - [Non-sensitive internal pilot](internal-pilot-runbook.md)
+- [Privacy-safe internal pilot evidence compiler](internal-pilot-evidence.md)
 - [Key rotation](key-rotation-runbook.md)
 - [Backup, retention, restore, and disposal](backup-retention-runbook.md)
 - [Incident response](incident-response-runbook.md)

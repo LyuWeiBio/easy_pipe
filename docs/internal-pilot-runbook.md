@@ -337,6 +337,13 @@ SHA-256 values. Full manifests, paths, sample names, QC reports, raw logs,
 private state, keys, tokens, and signatures stay inside their original access
 boundary.
 
+After the controlled record is complete, create a distinct strict sanitized
+projection and use the [internal pilot evidence compiler](internal-pilot-evidence.md)
+to produce a create-only review draft outside this worktree. The compiler uses
+hashed run identities rather than raw run IDs and cannot execute or validate
+the pilot source records. Its fixed `BLOCKED`/unreviewed output does not check
+any box below.
+
 - [ ] Three independent approved non-sensitive runs reached terminal success.
 - [ ] At least three failure/recovery drills produced the expected blocking
       evidence without relaxed controls.
