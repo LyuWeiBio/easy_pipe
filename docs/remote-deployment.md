@@ -193,13 +193,23 @@ not use a URL or a floating image tag in the executor configuration.
 ## Create the controller approval key and profile
 
 The SSH key and approval key are different controls. Create one random 32-byte
-HMAC key on the controller without printing it to the terminal:
+HMAC key on the controller without printing it to the terminal. Use a
+site-approved absolute location outside every Git worktree, and fail if the
+destination already exists:
 
 ```bash
-install -d -m 0700 secrets execution-profiles
-(umask 077; python -c 'import secrets; print(secrets.token_hex(32))' \
-  > secrets/controller-2026-01.hex)
-chmod 0600 secrets/controller-2026-01.hex
+install -d -m 0700 /secure/biopipe/controller-keys
+python - <<'PY'
+import os
+import secrets
+
+path = "/secure/biopipe/controller-keys/controller-2026-01.hex"
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+    stream.write(secrets.token_hex(32) + "\n")
+    stream.flush()
+    os.fsync(stream.fileno())
+PY
 ```
 
 The file must contain exactly 64 lowercase hexadecimal characters with an
@@ -209,7 +219,9 @@ the key bytes never enter the generated project, report, audit log, or response.
 
 Create an Apptainer profile from the exact generated software lock. The
 component names are the lock keys `fastqc`, `fastp`, and `multiqc` when trimming
-is enabled; omit the `fastp` assignments when it is absent from the lock:
+is enabled; omit the `fastp` assignments when it is absent from the lock. First
+preview the exact command by adding `--dry-run`; after review, execute the
+command shown below:
 
 ```bash
 biopipe execution-profile create hpc01-local \
@@ -230,7 +242,7 @@ biopipe execution-profile create hpc01-local \
   --sif multiqc=/srv/biopipe/container-cache/multiqc-1.35.sif \
   --sif-sha256 multiqc=MULTIQC_SIF_SHA256 \
   --approval-key-id controller-2026-01 \
-  --approval-key-file "$PWD/secrets/controller-2026-01.hex" \
+  --approval-key-file /secure/biopipe/controller-keys/controller-2026-01.hex \
   --json
 ```
 
@@ -252,12 +264,14 @@ biopipe execution-profile show hpc01-local \
 shasum -a 256 execution-profiles/hpc01-local.json
 ```
 
-Changing the profile requires a new profile identifier or a separately reviewed
-replacement; never edit a registered profile in place.
+Changing the profile requires a new profile identifier and new create-only
+profile file; never edit or replace a registered profile in place.
 
 ## Configure and constrain the Remote Executor
 
-Start from `remote_executor/examples/config.json`. Replace every placeholder.
+Start from `remote_executor/examples/config.json`. Build the real configuration
+only inside an owner-only staging directory outside every Git worktree, and
+replace every placeholder.
 The `profile_hash` is the exact SHA-256 recorded above. `approval_hmac_key` is
 the same secret value stored in the controller key file, provisioned through an
 approved secret channel and never placed in shell history, source control, a
@@ -294,8 +308,12 @@ unused runtime set to `null`. Install the final file with mode `0600`, owned by
 root or the agent account, under a trusted parent chain:
 
 ```bash
-install -m 0600 config.json "$HOME/.config/bioexec/config.json"
+install -m 0600 /secure/bioexec-staging/config.json \
+  "$HOME/.config/bioexec/config.json"
 ```
+
+Securely dispose of the plaintext staging copy under site policy after the
+installed configuration and required secret backup have been verified.
 
 The default discovery locations are `$XDG_CONFIG_HOME/bioexec/config.json`,
 `~/.config/bioexec/config.json`, and `/etc/bioexec/config.json`. An absolute
@@ -379,10 +397,11 @@ biopipe run projects/run42/generated \
   --json
 ```
 
-If a submit response is lost, status/retry recovery is preferred. Only a
-locally recorded unresolved pending run can be reconciled with
-`--abandon-pending`, and only after the fixed safety delay. This creates a
-signed remote tombstone; it does not terminate a running process:
+If a submit response is lost, repeat exact status queries for the recorded run
+ID; never resubmit as a retry. Only a locally recorded unresolved pending run
+that exact status confirms absent can be reconciled with `--abandon-pending`,
+and only after the fixed five-minute safety delay. This creates a signed remote
+tombstone; it does not terminate a running process:
 
 ```bash
 biopipe run projects/run42/generated \

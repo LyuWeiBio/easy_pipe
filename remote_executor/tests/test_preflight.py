@@ -67,6 +67,26 @@ def test_preflight_ordinary_failure_returns_report_without_token(
     assert checks["rawdata_readable"]["status"] == "failed"
 
 
+def test_preflight_reports_insufficient_disk_space_with_stable_check_code(
+    agent_config: AgentConfig,
+    make_preflight_payload: Any,
+) -> None:
+    result, record = run_preflight(
+        make_preflight_payload(minimum_free_bytes=2**63 - 1),
+        agent_config,
+        state=StateStore(agent_config.state_root),
+    )
+
+    assert result["status"] == "failed"
+    assert result["preflight_token"] is None
+    assert record is None
+    checks = {check["name"]: check for check in result["checks"]}
+    assert checks["disk_space"]["name"] == "disk_space"
+    assert checks["disk_space"]["status"] == "failed"
+    assert checks["disk_space"]["code"] == "INSUFFICIENT_SPACE"
+    assert [name for name, check in checks.items() if check["status"] == "failed"] == ["disk_space"]
+
+
 def test_preflight_rejects_unknown_fields_and_project_hash_mismatch(
     agent_config: AgentConfig,
     make_preflight_payload: Any,
@@ -181,7 +201,76 @@ def test_apptainer_requires_and_hashes_local_image(
         state=StateStore(agent_config.state_root),
     )
     assert failed_record is None
-    assert {item["name"]: item for item in failed["checks"]}["container"]["status"] == "failed"
+    assert {item["name"]: item for item in failed["checks"]}["container"]["code"] == (
+        "IMAGE_DIGEST_MISMATCH"
+    )
+
+    containers[0]["file_sha256"] = hashlib.sha256(image.read_bytes()).hexdigest()
+    image.unlink()
+    missing, missing_record = run_preflight(
+        make_preflight_payload(
+            preflight_id="preflight-3",
+            deploy_dir=str(agent_config.deploy_roots[0].path / "deployment-3"),
+            work_dir=str(agent_config.work_roots[0].path / "work-3"),
+            output_dir=str(agent_config.output_roots[0].path / "results-3"),
+            container_engine="apptainer",
+            containers=containers,
+        ),
+        agent_config,
+        state=StateStore(agent_config.state_root),
+    )
+    assert missing["status"] == "failed"
+    assert missing["preflight_token"] is None
+    assert missing_record is None
+    assert {item["name"]: item for item in missing["checks"]}["container"]["code"] == (
+        "PATH_UNAVAILABLE"
+    )
+
+
+def test_docker_missing_locked_image_reports_stable_container_code(
+    agent_config: AgentConfig,
+    make_preflight_payload: Any,
+) -> None:
+    class MissingImageRunner:
+        def run(
+            self,
+            argv: Any,
+            *,
+            cwd: Path,
+            env: Any,
+            timeout_seconds: float,
+            output_limit_bytes: int,
+        ) -> CommandResult:
+            del cwd, env, timeout_seconds, output_limit_bytes
+            arguments = tuple(argv)
+            if (
+                arguments[0] == str(agent_config.executables.docker)
+                and "image" in arguments[1:]
+                and "inspect" in arguments[1:]
+            ):
+                return CommandResult(arguments, 1, "", "")
+            stdout = (
+                f"nextflow {agent_config.nextflow_version}"
+                if arguments[0] == str(agent_config.executables.nextflow)
+                else "runtime available"
+            )
+            return CommandResult(arguments, 0, stdout, "")
+
+    result, record = run_preflight(
+        make_preflight_payload(),
+        agent_config,
+        command_runner=MissingImageRunner(),
+        state=StateStore(agent_config.state_root),
+    )
+
+    assert result["status"] == "failed"
+    assert result["preflight_token"] is None
+    assert record is None
+    checks = {item["name"]: item for item in result["checks"]}
+    assert checks["runtime"]["status"] == "passed"
+    assert checks["container"]["name"] == "container"
+    assert checks["container"]["status"] == "failed"
+    assert checks["container"]["code"] == "IMAGE_UNAVAILABLE"
 
 
 def test_raw_input_group_writable_file_or_parent_fails_closed(
@@ -189,16 +278,23 @@ def test_raw_input_group_writable_file_or_parent_fails_closed(
     make_preflight_payload: Any,
 ) -> None:
     raw = agent_config.read_roots[0].path / "sample_R1.fastq.gz"
-    raw.chmod(0o664)
-    failed_file, record = run_preflight(
-        make_preflight_payload(),
-        agent_config,
-        state=StateStore(agent_config.state_root),
-    )
-    assert record is None
-    assert {item["name"]: item for item in failed_file["checks"]}["rawdata_readable"][
-        "status"
-    ] == "failed"
+    for index, mode in enumerate((0o664, 0o646), start=1):
+        raw.chmod(mode)
+        failed_file, record = run_preflight(
+            make_preflight_payload(
+                preflight_id=f"preflight-{index}",
+                deploy_dir=str(agent_config.deploy_roots[0].path / f"deployment-{index}"),
+                work_dir=str(agent_config.work_roots[0].path / f"work-{index}"),
+                output_dir=str(agent_config.output_roots[0].path / f"results-{index}"),
+            ),
+            agent_config,
+            state=StateStore(agent_config.state_root),
+        )
+        assert failed_file["status"] == "failed"
+        assert record is None
+        file_check = {item["name"]: item for item in failed_file["checks"]}["rawdata_readable"]
+        assert file_check["status"] == "failed"
+        assert file_check["code"] == "UNTRUSTED_PATH_PERMISSIONS"
 
     raw.chmod(0o644)
     parent = agent_config.read_roots[0].path / "incoming"
@@ -208,10 +304,10 @@ def test_raw_input_group_writable_file_or_parent_fails_closed(
     parent.chmod(0o770)
     failed_parent, parent_record = run_preflight(
         make_preflight_payload(
-            preflight_id="preflight-2",
-            deploy_dir=str(agent_config.deploy_roots[0].path / "deployment-2"),
-            work_dir=str(agent_config.work_roots[0].path / "work-2"),
-            output_dir=str(agent_config.output_roots[0].path / "results-2"),
+            preflight_id="preflight-3",
+            deploy_dir=str(agent_config.deploy_roots[0].path / "deployment-3"),
+            work_dir=str(agent_config.work_roots[0].path / "work-3"),
+            output_dir=str(agent_config.output_roots[0].path / "results-3"),
             source_paths=[str(nested)],
             execution_paths=[str(nested)],
         ),
@@ -219,9 +315,9 @@ def test_raw_input_group_writable_file_or_parent_fails_closed(
         state=StateStore(agent_config.state_root),
     )
     assert parent_record is None
-    assert {item["name"]: item for item in failed_parent["checks"]}["rawdata_readable"][
-        "status"
-    ] == "failed"
+    parent_check = {item["name"]: item for item in failed_parent["checks"]}["rawdata_readable"]
+    assert parent_check["status"] == "failed"
+    assert parent_check["code"] == "UNTRUSTED_PATH_PERMISSIONS"
 
 
 def test_apptainer_group_writable_cache_chain_fails_closed(

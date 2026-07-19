@@ -85,8 +85,8 @@
     },
     {
       "archive_name": "bioexec.pyz",
-      "archive_sha256": "3553a7dd1dcf42ac8f9cbefd01a4c7bff3ad61f49afdc478ba0b3a8c1cd170e1",
-      "archive_size": 186141,
+      "archive_sha256": "c7271b0eccb290a87e3e4253539022925b9169c70e1c1850ee610f4312f3982e",
+      "archive_size": 186301,
       "build_count": 2,
       "bytes_equal": true,
       "members": [
@@ -147,8 +147,8 @@
         {
           "mode": "0644",
           "name": "bioexec/paths.py",
-          "sha256": "20bcf7bea02bfab8e5eaf67ceb99029b0294d944261b6085b146fcf8cf39134b",
-          "size": 18443
+          "sha256": "712e91a2ac1b28533093c9da7179844e92cef384596627709cdc22a9943c1400",
+          "size": 18603
         },
         {
           "mode": "0644",
