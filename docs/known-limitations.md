@@ -37,6 +37,9 @@ capability.
   validators only. The current CLI, config loader, protocol dispatcher, preflight,
   and runner do not import or activate them, and synthetic tests are not cluster
   acceptance evidence.
+- The M7 compute-node preflight template and evidence state machine are also
+  dormant contracts. There is no active version-2 config loader, scheduler
+  state namespace, stdin runner, compute worker, or scheduler capability yet.
 
 ## Hosts and filesystems
 

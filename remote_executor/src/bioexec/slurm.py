@@ -222,6 +222,25 @@ class SlurmJobRef:
 
 
 @dataclass(frozen=True)
+class SlurmHeldJob:
+    """Exact ``squeue`` evidence that one bound job has a user hold."""
+
+    job: SlurmJobRef
+    state: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.job, SlurmJobRef):
+            raise SlurmContractError("held job must contain a validated SlurmJobRef")
+        if self.job.submitted_at is None:
+            raise SlurmContractError("held job must bind the scheduler submit time")
+        if self.state != "PENDING":
+            raise SlurmContractError("held job state must be exactly PENDING")
+        if self.reason != "JobHeldUser":
+            raise SlurmContractError("held job reason must be exactly JobHeldUser")
+
+
+@dataclass(frozen=True)
 class SlurmObservation:
     """One bounded scheduler row for the exact submitted allocation."""
 
@@ -340,6 +359,36 @@ def build_sacct_argv(binary: str, job: SlurmJobRef) -> tuple[str, ...]:
     )
 
 
+def build_squeue_hold_argv(binary: str, job: SlurmJobRef) -> tuple[str, ...]:
+    """Construct the only query admitted to prove an exact user-held job."""
+
+    executable = _scheduler_binary(binary, "squeue")
+    if not isinstance(job, SlurmJobRef):
+        raise SlurmContractError("job must be a validated SlurmJobRef")
+    return (
+        executable,
+        "--local",
+        "--noheader",
+        f"--jobs={_job_id(job.job_id)}",
+        "--states=PENDING",
+        "--format=%i|%V|%j|%T|%r",
+    )
+
+
+def build_scontrol_release_argv(binary: str, held_job: SlurmHeldJob) -> tuple[str, ...]:
+    """Construct the only admitted held-job release argument vector."""
+
+    executable = _scheduler_binary(binary, "scontrol")
+    if not isinstance(held_job, SlurmHeldJob):
+        raise SlurmContractError("release requires validated user-held job evidence")
+    evidence = SlurmHeldJob(
+        job=held_job.job,
+        state=held_job.state,
+        reason=held_job.reason,
+    )
+    return (executable, "release", _job_id(evidence.job.job_id))
+
+
 def build_squeue_discovery_argv(binary: str, submission_marker: str) -> tuple[str, ...]:
     """Construct a positive-only lookup for a held job after response loss."""
 
@@ -400,6 +449,33 @@ def parse_squeue_output(data: bytes, expected_job: SlurmJobRef) -> SlurmObservat
     if cancelled_by_uid is not None:
         raise SlurmContractError("squeue must not report an accounting cancellation suffix")
     return SlurmObservation(source="squeue", job=job, state=state)
+
+
+def parse_squeue_hold_output(data: bytes, expected_job: SlurmJobRef) -> SlurmHeldJob | None:
+    """Parse zero or one exact user-hold row for the expected job.
+
+    ``None`` means only that this query did not prove a held job.  Any returned
+    value binds the exact job ID, marker, scheduler submit time, pending state,
+    and the user-hold reason required before release.
+    """
+
+    if not isinstance(expected_job, SlurmJobRef):
+        raise SlurmContractError("expected_job must be a validated SlurmJobRef")
+    rows = _decode_rows(data, _MAX_STATUS_OUTPUT_BYTES, allow_empty=True)
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise SlurmContractError("squeue hold output is ambiguous")
+    fields = _status_fields(rows[0], expected=5)
+    job_id = _padded_field(fields[0], "squeue hold job ID")
+    submitted_at = _padded_field(fields[1], "squeue hold submit time")
+    marker = _padded_field(fields[2], "squeue hold job name")
+    state = _padded_field(fields[3], "squeue hold state")
+    reason = _padded_field(fields[4], "squeue hold reason")
+    if job_id != expected_job.job_id:
+        raise SlurmContractError("squeue hold returned a different or composite job ID")
+    job = _observed_job(expected_job, job_id, marker, submitted_at, source="squeue hold")
+    return SlurmHeldJob(job=job, state=state, reason=reason)
 
 
 def parse_sacct_output(data: bytes, expected_job: SlurmJobRef) -> SlurmObservation | None:
@@ -711,6 +787,7 @@ def _validate_exit_code(value: Any) -> tuple[int, int]:
 
 __all__ = [
     "SlurmContractError",
+    "SlurmHeldJob",
     "SlurmJobRef",
     "SlurmMappedState",
     "SlurmObservation",
@@ -719,13 +796,16 @@ __all__ = [
     "build_sacct_argv",
     "build_sbatch_argv",
     "build_scheduler_environment",
+    "build_scontrol_release_argv",
     "build_squeue_argv",
     "build_squeue_discovery_argv",
+    "build_squeue_hold_argv",
     "canonical_scheduler_policy_bytes",
     "map_slurm_observation",
     "parse_sacct_output",
     "parse_sbatch_parsable_output",
     "parse_squeue_discovery_output",
+    "parse_squeue_hold_output",
     "parse_squeue_output",
     "reconcile_slurm_observations",
     "scheduler_policy_hash",

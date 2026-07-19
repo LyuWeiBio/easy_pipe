@@ -18,6 +18,11 @@ and protocol version-2 validators. The current service does not import them:
 and no scheduler process can be launched through this agent yet. See
 [ADR 0003](../docs/adr/0003-m7-versioned-scheduler-contracts.md).
 
+The follow-up compute-node preflight manifest, fixed-template, evidence, and
+transition rules are likewise dormant. They do not submit a job or mint an
+execution capability. See
+[ADR 0004](../docs/adr/0004-m7-compute-preflight-contract.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,

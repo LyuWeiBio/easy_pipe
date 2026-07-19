@@ -144,6 +144,36 @@ def _preflight_payload() -> dict[str, object]:
     }
 
 
+def _shared_preflight_payload() -> dict[str, object]:
+    payload = _preflight_payload()
+    payload.update(
+        {
+            "source_host": "source-host",
+            "execution_host": "compute-host",
+            "host_relation": "shared",
+            "source_paths": [
+                "/source/project/sample-a.fastq.gz",
+                "/source/other/sample-b.fastq.gz",
+            ],
+            "execution_paths": [
+                "/cluster/project/sample-a.fastq.gz",
+                "/cluster/other/sample-b.fastq.gz",
+            ],
+            "path_mapping": [
+                {
+                    "source_prefix": "/source",
+                    "execution_prefix": "/cluster",
+                },
+                {
+                    "source_prefix": "/source/project",
+                    "execution_prefix": "/cluster/project",
+                },
+            ],
+        }
+    )
+    return payload
+
+
 def _deploy_payload() -> dict[str, object]:
     return {
         **_bindings(),
@@ -417,6 +447,164 @@ def test_preflight_nested_contract_is_strict(path: tuple[object, ...], invalid: 
     target[path[-1]] = invalid
 
     with pytest.raises(SchedulerProtocolError):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+@pytest.mark.parametrize(
+    ("source_host", "execution_host", "relation"),
+    [
+        ("host-1", "host-1", "shared"),
+        ("host-1", "host-2", "same"),
+    ],
+)
+def test_preflight_host_relation_must_exactly_match_host_identity(
+    source_host: str,
+    execution_host: str,
+    relation: str,
+) -> None:
+    payload = _preflight_payload()
+    payload.update(
+        {
+            "source_host": source_host,
+            "execution_host": execution_host,
+            "host_relation": relation,
+        }
+    )
+
+    with pytest.raises(SchedulerProtocolError, match="host_relation conflicts"):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+def test_same_host_without_mapping_requires_identical_ordered_paths() -> None:
+    payload = _preflight_payload()
+    payload["execution_paths"] = ["/srv/raw/different.fastq.gz"]
+
+    with pytest.raises(SchedulerProtocolError, match="same-host paths must match"):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+def test_shared_mapping_is_complete_ordered_and_uses_longest_prefix() -> None:
+    request = parse_request(_envelope("preflight", payload=_shared_preflight_payload()))
+
+    assert request.operation == "preflight"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_mapping",
+        "uncovered_source",
+        "different_lengths",
+        "wrong_target",
+        "wrong_order",
+        "duplicate_source_prefix",
+    ],
+)
+def test_shared_mapping_rejects_incomplete_ambiguous_or_misaligned_paths(
+    mutation: str,
+) -> None:
+    payload = _shared_preflight_payload()
+    mappings = payload["path_mapping"]
+    assert isinstance(mappings, list)
+    execution_paths = payload["execution_paths"]
+    assert isinstance(execution_paths, list)
+    if mutation == "missing_mapping":
+        payload["path_mapping"] = []
+    elif mutation == "uncovered_source":
+        payload["path_mapping"] = [mappings[1]]
+    elif mutation == "different_lengths":
+        payload["execution_paths"] = execution_paths[:1]
+    elif mutation == "wrong_target":
+        execution_paths[0] = "/cluster/wrong/sample-a.fastq.gz"
+    elif mutation == "wrong_order":
+        payload["execution_paths"] = list(reversed(execution_paths))
+    else:
+        payload["path_mapping"] = [
+            *mappings,
+            {
+                "source_prefix": "/source/project",
+                "execution_prefix": "/cluster/ambiguous",
+            },
+        ]
+
+    with pytest.raises(SchedulerProtocolError):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "registry.example.org/team/tool:1.2.3",
+        "registry.example.org:5000/team/sub_repo/tool:Tag_1-2",
+        "quay.io/biocontainers/fastqc:0.12.1--0",
+    ],
+)
+def test_preflight_accepts_explicit_safe_oci_tags(image: str) -> None:
+    payload = _preflight_payload()
+    containers = payload["containers"]
+    assert isinstance(containers, list) and isinstance(containers[0], dict)
+    containers[0]["image"] = image
+
+    assert parse_request(_envelope("preflight", payload=payload)).operation == "preflight"
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "ubuntu:22.04",
+        "https://registry.example.org/team/tool:1.0",
+        f"registry.example.org/team/tool@sha256:{'8' * 64}",
+        "registry.example.org/team/tool:latest",
+        "registry.example.org/team/tool:bad tag",
+        "registry.example.org/team/tool:tag;id",
+        "registry.example.org/team/tool:$(id)",
+        "registry.example.org/team/tool:`id`",
+        "registry.example.org/team/tool:tag\nnext",
+    ],
+)
+def test_preflight_rejects_unsafe_or_unpinned_oci_image_tokens(image: str) -> None:
+    payload = _preflight_payload()
+    containers = payload["containers"]
+    assert isinstance(containers, list) and isinstance(containers[0], dict)
+    containers[0]["image"] = image
+
+    with pytest.raises(SchedulerProtocolError):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+@pytest.mark.parametrize(
+    "local_path",
+    [
+        "/srv/biopipe/cache/run-1/fastqc.img",
+        "/srv/biopipe/cache/run-1/fastqc.SIF",
+        "/srv/biopipe/cache/run-1/.sif",
+        "/srv/biopipe/cache/run-1/fastqc.sif/child",
+    ],
+)
+def test_preflight_requires_exact_lowercase_sif_leaf(local_path: str) -> None:
+    payload = _preflight_payload()
+    containers = payload["containers"]
+    assert isinstance(containers, list) and isinstance(containers[0], dict)
+    containers[0]["local_path"] = local_path
+
+    with pytest.raises(SchedulerProtocolError, match=r"one \.sif file"):
+        parse_request(_envelope("preflight", payload=payload))
+
+
+def test_preflight_accepts_canonical_absolute_sif_outside_per_run_cache_dir() -> None:
+    payload = _preflight_payload()
+    containers = payload["containers"]
+    assert isinstance(containers, list) and isinstance(containers[0], dict)
+    containers[0]["local_path"] = "/srv/biopipe/shared-sif/fastqc.sif"
+
+    assert parse_request(_envelope("preflight", payload=payload)).operation == "preflight"
+
+
+def test_preflight_rejects_unpaired_unicode_surrogate_as_protocol_error() -> None:
+    payload = _preflight_payload()
+    payload["deploy_dir"] = "/srv/biopipe/\ud800"
+
+    with pytest.raises(SchedulerProtocolError, match="bounded safe text"):
         parse_request(_envelope("preflight", payload=payload))
 
 

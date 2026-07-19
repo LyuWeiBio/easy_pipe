@@ -209,7 +209,8 @@ be published before any production entry point accepts v2 documents.
 
 ## Next step
 
-The next reviewable slice is the fixed compute-node preflight contract and
-template. It must remain unable to mint a capability until a real scheduler job
+The next reviewable slice is the dormant fixed compute-node preflight contract
+and template described by [ADR 0004](0004-m7-compute-preflight-contract.md). It
+must remain unable to mint a usable capability until a real scheduler job
 returns complete, hash-bound evidence for paths, storage, Nextflow, Apptainer,
 SIF files, resource policy, and network isolation.

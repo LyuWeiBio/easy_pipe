@@ -85,8 +85,8 @@
     },
     {
       "archive_name": "bioexec.pyz",
-      "archive_sha256": "06d006e32b1a837ba01f026f427cfc5ca236d80922eafcd2f6887dfbe2edba91",
-      "archive_size": 265566,
+      "archive_sha256": "08ced7daee861f5379b41ef20592bce04b983b5c7e12233da791ca7fb9ccb46f",
+      "archive_size": 338532,
       "build_count": 2,
       "bytes_equal": true,
       "members": [
@@ -176,15 +176,21 @@
         },
         {
           "mode": "0644",
+          "name": "bioexec/scheduler_preflight.py",
+          "sha256": "49c3d9e3ea9a7f5ee7d9e09f8e6322090040302711eeef91ff78b2f15b59ae2f",
+          "size": 66241
+        },
+        {
+          "mode": "0644",
           "name": "bioexec/scheduler_protocol.py",
-          "sha256": "c566d1304a4ba0064ef103e554b2aa111363a253c2e270dd39ecf2c057c7305a",
-          "size": 29528
+          "sha256": "77c28245bf22d1eb4319b4e74e3bde9815c9521b293f006057d450642140fcd6",
+          "size": 32883
         },
         {
           "mode": "0644",
           "name": "bioexec/slurm.py",
-          "sha256": "57ccca25ac10a139167681c8f841e50c0a58afbe621ba0324202ef77cad6ea9f",
-          "size": 27863
+          "sha256": "2aa1a4c3d90b76bd9deaafa3fdfa77e1e28eabb311965b6e5bba0b4fb2924e94",
+          "size": 31097
         },
         {
           "mode": "0644",

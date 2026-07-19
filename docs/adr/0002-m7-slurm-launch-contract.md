@@ -193,17 +193,20 @@ The scheduler path will be connected through separate reviewable changes:
    reconciliation-rule primitives with offline tests;
 2. **M7.0b versioned contracts:** scheduler-aware execution profile, Remote
    Executor configuration, and remote protocol without changing frozen v1;
-3. **compute-node preflight:** fixed preflight job, polling, evidence binding,
-   timeout handling, and one-use capability issuance;
-4. **submission and status:** fixed batch script and `sbatch`, exact job-ID
+3. **M7.0c compute-node preflight contract:** dormant manifest, fixed template,
+   polling transitions, evidence binding, timeout, and capability-gate rules;
+4. **compute-node preflight activation:** trusted config loading, bounded stdin
+   submission, durable scheduler-preflight state, a reviewed compute worker,
+   and one-use capability issuance;
+5. **submission and status:** fixed batch script and `sbatch`, exact job-ID
    persistence, held positive-only lost-response discovery, marker-and-submit
    binding, `squeue`/`sacct` reconciliation, terminal audit, and compatible
    resume;
-5. **failure recovery:** lost-response, duplicate-submit, accounting-delay,
+6. **failure recovery:** lost-response, duplicate-submit, accounting-delay,
    executor-restart, and state-conflict tests;
-6. **real-cluster acceptance:** operator-run synthetic evidence on the
+7. **real-cluster acceptance:** operator-run synthetic evidence on the
    supported Apptainer/shared-filesystem topology; and
-7. **M7.1:** separately designed, authenticated exact-job cancellation, if it
+8. **M7.1:** separately designed, authenticated exact-job cancellation, if it
    is approved at all.
 
 Each connection step must retain the existing local-executor regression suite
