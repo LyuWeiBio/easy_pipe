@@ -270,12 +270,16 @@ preflight. `IMAGE_UNAVAILABLE`, `IMAGE_DIGEST_MISMATCH`, or
 `IMAGE_LOCAL_ARTIFACT_REQUIRED` requires preloading the locked Docker identity
 or the hash-matched SIF; the agent will not pull it.
 
-### `OUTPUT_ALREADY_EXISTS`
+### `PATH_OUTPUT_CONFLICT` or remote `TARGET_ALREADY_EXISTS`
 
-Initial work and result targets are create-only. Select a new run target through
-a newly reviewed plan/profile; do not point a new submission at old results.
-Resume uses the exact previously recorded private directories and is a separate
-mode.
+An existing planned work/result target normally fails locally as
+`DEPLOYMENT_FAILED` with `context.finding_codes=["PATH_OUTPUT_CONFLICT"]`. A
+create-only race discovered by the executor reports remote
+`TARGET_ALREADY_EXISTS`, mapped by deployment/submission to its operation-level
+error such as `RUN_SUBMISSION_FAILED`. Select a new target through a newly
+reviewed plan/project; do not overwrite or delete old results to make a new
+submission pass. Resume uses the exact previously recorded private directories
+and is a separate mode.
 
 ## Approval, submission, status, and resume
 
@@ -291,17 +295,21 @@ One or more core/report/profile/bundle hashes changed, or the preflight exceeded
 its freshness window. Re-run validation/test if their inputs changed, then run
 a fresh preflight and perform a new review/approval. Never alter a report hash.
 
-### `RUN_SUBMISSION_FAILED` with an uncertain outcome
+### `SSH_TIMEOUT` or `RUN_SUBMISSION_FAILED` with an uncertain outcome
 
-Keep the returned recoverable run ID and local private state. Query the exact ID
-first; a response may have been lost after remote acceptance. Retrying status or
-the recovery path is idempotent for the same bindings. Do not create another
-submission merely because the first SSH response was lost.
+The first response-loss error commonly remains `SSH_TIMEOUT` and adds
+`run_id`, `recovery_action=query_status`, and `status_query_required=true` to
+its context. Keep that recoverable run ID and local private state. Query the
+exact ID first; a response may have been lost after remote acceptance. A new
+submit while the local record is pending is blocked as
+`RUN_SUBMISSION_FAILED`. Do not create another submission merely because the
+first SSH response was lost.
 
-If the run remains locally `pending` and the agent confirms it absent, wait the
-documented grace interval before explicit signed `--abandon-pending`. This
-creates a tombstone that prevents a late same-ID submission. It does not kill a
-running job.
+If exact status confirms the pending run absent, wait through the fixed
+five-minute reconciliation grace before explicit signed `--abandon-pending`.
+An attempt made too early returns `abandon_available_at`; wait until that time
+and repeat the same explicit abandonment. This creates a tombstone that
+prevents a late same-ID submission. It does not kill a running job.
 
 ### `RUN_STATUS_FAILED`
 

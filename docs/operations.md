@@ -1,7 +1,9 @@
 # Operations guide
 
-This is the day-to-day runbook for the completed MVP. Installation, remote
-account hardening, and initial key/config provisioning are covered by the
+This guide describes the implemented MVP commands. It is not production or
+pilot authorization: the M6.1 real-host/reviewer gate and site owners, policy,
+capacity, retention, and drills remain required. Installation, remote account
+hardening, and initial key/config provisioning are covered by the
 [remote deployment guide](remote-deployment.md).
 
 ## Before each project
@@ -19,6 +21,7 @@ operation. `execution-profile show` is local and does not contact the executor:
 
 ```bash
 biopipe source show hpc01 --json
+biopipe source verify hpc01 --dry-run --json
 biopipe source verify hpc01 --json
 biopipe execution-profile show hpc01-local \
   --profile-dir execution-profiles \
@@ -178,9 +181,10 @@ biopipe run projects/run42/generated \
 ```
 
 Do not assume an SSH error means a submission did not start. The controller
-persists recoverable pending state before the request. Query/retry the exact run
-ID and follow the returned remediation. `--abandon-pending` is only a delayed,
-signed response-loss reconciliation and is never a cancel command.
+persists recoverable pending state before the request. Repeat exact `--status`
+queries for the recorded run ID and follow the returned remediation; never
+resubmit as a retry. `--abandon-pending` is only a delayed, signed response-loss
+reconciliation and is never a cancel command.
 
 ## Resume
 
@@ -211,9 +215,9 @@ instead of weakening that check.
 |---|---|---|
 | Controller SourceProfile directory | SSH aliases and probe limits | No SSH credentials; remove only local registration |
 | Project planning/generated directories | Full manifest, samplesheet, spec, lock, source | Treat as potentially sensitive and immutable |
-| `PROJECT/reports/` | Validation, test, preflight, run/status evidence and owner-only recovery state | Preserve with the project; do not edit hidden state |
-| `PROJECT/audit/events.jsonl` | Append-only lifecycle events | Restrict access; export/anchor under local policy |
-| Remote deployment root | Bounded production snapshot | Never overwritten automatically |
+| `PROJECT/reports/` | Latest validation, test, preflight, run/status views and owner-only current recovery state; most files are atomically replaced | Preserve with the project; do not treat as complete history or edit hidden state |
+| `PROJECT/audit/events.jsonl` | Append-only lifecycle events; not a cryptographic chain/WORM store | Restrict access; export/anchor under local policy |
+| Remote deployment root | Bounded immutable run snapshot | Never overwritten automatically |
 | Remote work/output roots | Nextflow state and results | Never deleted automatically; site retention applies |
 | Remote private state | Tokens, reservations, leases, bindings | Mode 0700; executor account only |
 
@@ -227,11 +231,25 @@ than editing state.
 - Monitor executor account processes, container daemon/cgroups, and host egress.
 - Back up project/audit evidence according to data classification and retention
   requirements.
-- Rotate constrained SSH and approval keys through a new reviewed profile and
-  executor config; old preflights/approvals must not survive rotation.
+- Rotate constrained SSH client keys, approval HMAC keys, and host keys as three
+  separate controls. HMAC rotation requires a new immutable profile and
+  matching executor config; follow the dedicated runbook and do not migrate old
+  preflights/approvals.
 - Re-run source verify after probe changes and preflight after any runtime,
   profile, path, image, JAR, or generated-artifact change.
 - Never manually “fix” finalized artifact hashes or state files.
 
 For failures, use the [troubleshooting guide](troubleshooting.md). For security
 events, stop new approvals and follow [SECURITY.md](../SECURITY.md).
+
+## M6.2 operating runbooks
+
+The following repository copies are procedure-only, unexecuted templates. They
+do not prove M6.1 sign-off, a real-host acceptance, an internal pilot, a drill,
+or an organizational policy decision:
+
+- [Non-sensitive internal pilot](internal-pilot-runbook.md)
+- [Key rotation](key-rotation-runbook.md)
+- [Backup, retention, restore, and disposal](backup-retention-runbook.md)
+- [Incident response](incident-response-runbook.md)
+- [Capacity, quota, and local observability](capacity-and-quota-runbook.md)

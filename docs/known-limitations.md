@@ -106,8 +106,9 @@ capability.
   a privileged filesystem administrator.
 - Audit events cover generation and the safety-critical execution lifecycle.
   Earlier source/inspection/override/planning and M4 validation/test/preflight
-  evidence is preserved in create-only artifacts and machine-readable reports,
-  not duplicated as one audit event per CLI command.
+  evidence is preserved in immutable planning/generated artifacts and the
+  latest machine-readable reports, not duplicated as one audit event per CLI
+  command. Most reports are atomically replaced and are not a complete history.
 - The tool does not contact an external documentation/model service, and it has
   no web UI or server API. Local filesystem access controls are the controller's
   user boundary.

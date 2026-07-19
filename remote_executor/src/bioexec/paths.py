@@ -86,8 +86,10 @@ class PathGuard:
             require_private=require_private,
         )
         try:
+            walking_descriptor = descriptor
+            descriptor = -1
             descriptor = self._walk_directories(
-                descriptor,
+                walking_descriptor,
                 authorized.relative_parts,
                 require_trusted_owner=require_trusted_owner,
                 require_no_group_world_write=require_no_group_world_write,
@@ -118,8 +120,10 @@ class PathGuard:
             require_private=require_private,
         )
         try:
+            walking_descriptor = descriptor
+            descriptor = -1
             descriptor = self._walk_directories(
-                descriptor,
+                walking_descriptor,
                 parent_parts,
                 require_trusted_owner=require_trusted_owner,
                 require_no_group_world_write=require_no_group_world_write,
