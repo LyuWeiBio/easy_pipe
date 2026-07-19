@@ -85,8 +85,8 @@
     },
     {
       "archive_name": "bioexec.pyz",
-      "archive_sha256": "c9db17ecc3df8c749ac519966659856839d13e8818fa609de021c02f44356da4",
-      "archive_size": 373381,
+      "archive_sha256": "08e922dc5a42933e92c874b728ace425f00ca4bda965864c867b81eda19667dd",
+      "archive_size": 416510,
       "build_count": 2,
       "bytes_equal": true,
       "members": [
@@ -191,6 +191,12 @@
           "name": "bioexec/scheduler_protocol.py",
           "sha256": "77c28245bf22d1eb4319b4e74e3bde9815c9521b293f006057d450642140fcd6",
           "size": 32883
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_runner.py",
+          "sha256": "175e8ec5a5b6dfaf2ed956141697ede5b978b35023ef484afa09a6dfb52dca99",
+          "size": 42999
         },
         {
           "mode": "0644",

@@ -29,6 +29,13 @@ future scheduler mutation, but the version-1 service still does not import it
 and it cannot execute Slurm. See
 [ADR 0005](../docs/adr/0005-m7-trusted-scheduler-config-loader.md).
 
+M7.0d-b adds a separate raw-byte, stdin-capable process transport behind six
+fixed Slurm operations. It preserves timeout and lost-response ambiguity and
+cannot accept caller-provided argv, environment, flags, or script bytes. The
+transport is testable when imported directly, but no installed entry point or
+version-1 operation imports it, so scheduler mutation remains inactive. See
+[ADR 0006](../docs/adr/0006-m7-bounded-scheduler-transport.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
