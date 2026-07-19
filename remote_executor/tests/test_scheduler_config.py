@@ -23,7 +23,6 @@ from bioexec.scheduler_config import (
     parse_scheduler_config,
 )
 from bioexec.slurm import SlurmSchedulerPolicy
-from biopipe.execution.scheduler_models import SlurmRuntimeV2
 
 
 def _valid_config() -> dict[str, Any]:
@@ -87,13 +86,6 @@ def test_exact_v2_config_parses_without_accessing_declared_paths() -> None:
     assert config.approval_hmac_key == bytes.fromhex("c" * 64)
     assert "cccccccc" not in repr(config)
     assert config.limits == SchedulerLimits()
-
-
-def test_controller_and_executor_use_the_same_unambiguous_runtime_mapping() -> None:
-    controller = SlurmRuntimeV2()
-    remote = SchedulerRuntime.from_mapping(controller.model_dump(mode="json"))
-
-    assert remote.as_mapping() == controller.model_dump(mode="json")
 
 
 @pytest.mark.parametrize("field", sorted(_valid_config()))

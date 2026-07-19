@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from bioexec.scheduler_config import SchedulerRuntime
 from bioexec.slurm import (
     SlurmContractError,
     SlurmSchedulerPolicy,
@@ -24,6 +25,7 @@ from bioexec.slurm import (
 from biopipe.execution.models import ExecutionProfile
 from biopipe.execution.scheduler_models import (
     SlurmExecutionProfileV2,
+    SlurmRuntimeV2,
     SlurmSchedulerPolicyV2,
     canonical_scheduler_policy_bytes,
     scheduler_policy_hash,
@@ -91,6 +93,13 @@ def test_profile_v2_names_the_outer_and_inner_executors_unambiguously() -> None:
     assert profile.scheduler.cpus_per_task == 8
     assert profile.scheduler.memory_mib == 16_384
     assert len(profile.profile_hash()) == 64
+
+
+def test_controller_and_executor_use_the_same_unambiguous_runtime_mapping() -> None:
+    controller = SlurmRuntimeV2()
+    remote = SchedulerRuntime.from_mapping(controller.model_dump(mode="json"))
+
+    assert remote.as_mapping() == controller.model_dump(mode="json")
 
 
 def test_controller_and_remote_scheduler_policy_have_identical_bytes_and_hash() -> None:
