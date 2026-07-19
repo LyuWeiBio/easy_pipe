@@ -37,7 +37,81 @@ Do not rename the site-controlled record to make it look sanitized. Construct
 a new minimal projection and review that projection for disclosure before
 using this tool.
 
-## What creation verifies
+## Initialize an honest blocked record
+
+The private helper can create a deterministic authoring record with all six
+case slots and all ten drill slots present but explicitly `unexecuted`. Every
+owner and capacity/retention decision is pending, the M6.1 entry gate and
+friction review are not recorded, backup restore is not run, documentation
+operation is not observed, and the next recommendation is `remain_blocked`.
+
+Initialization accepts only anonymous IDs, canonical UTC, the release ID,
+source commit, and three expected manifest SHA-256 values. It does not inspect
+Git or any M6.1 bundle and does not authenticate those pointers. The
+`--repository` argument is used only to reject an input/output location inside
+the selected worktree, including filesystem aliases.
+
+Use an existing operator-controlled directory outside the repository. Its
+destination parent must not be group- or world-writable and must not carry an
+extended ACL. The command is create-only and writes a single-link file with
+mode `0600` and no extended ACL; it never replaces an earlier record:
+
+```bash
+umask 077
+
+python scripts/collect_internal_pilot_evidence.py init-record \
+  --repository . \
+  --output /restricted/pilot/pilot-20260719-001.sanitized.json \
+  --pilot-id pilot-20260719-001 \
+  --environment-id env-001 \
+  --recorded-at 2026-07-19T08:00:00Z \
+  --release-id 0.1.0-rc1 \
+  --source-git-commit 0000000000000000000000000000000000000000 \
+  --candidate-manifest-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --release-acceptance-manifest-sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --real-host-manifest-sha256 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+```
+
+The values above are format examples, not release evidence. Replace them only
+with exact pointers copied through the site's controlled process. Update the
+record only inside that restricted authoring system; do not commit it. Preserve
+an earlier snapshot by using a new file rather than asking the helper to
+overwrite it.
+
+Validate the edited strict record offline before compiling a review draft:
+
+```bash
+python scripts/collect_internal_pilot_evidence.py validate-record \
+  --repository . \
+  --sanitized-record /restricted/pilot/pilot-20260719-001.sanitized.json
+```
+
+Validation is read-only and accepts semantically valid non-canonical JSON
+without rewriting it. It reports both the exact-file and normalized SHA-256
+and whether the bytes were already canonical. Those hashes identify content;
+they are not signatures or evidence authenticity. Every result remains fixed
+to:
+
+```text
+record_state: STRICT_FORMAT_VALIDATED_ONLY
+source_evidence_authentication_status: NOT_PERFORMED
+independent_review_status: NOT_PERFORMED
+milestone_decision: BLOCKED
+production_authorization: false
+```
+
+Keep an edited or externally prepared sanitized-record leaf at mode `0600`,
+with exactly one hard link and no extended ACL. Both `validate-record` and
+review-draft `create` reject a symlink, any group/other permission bit, multiple
+hard links, or an extended ACL. Re-establish these properties after a
+site-controlled editor, copy tool, or evidence system exports the file.
+
+Neither authoring command reads a generated project, report, audit history,
+private state, host identity, or environment credential.
+Neither invokes a network client or initiates a socket connection; transport
+below an operator-supplied mounted filesystem is outside the helper's view.
+
+## What review-draft creation verifies
 
 Creation verifies:
 

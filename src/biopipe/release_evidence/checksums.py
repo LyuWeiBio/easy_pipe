@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Final
 
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.release_evidence.filesystem import (
+    FileIdentity,
+    require_directory_outside_identities,
+    require_no_extended_acl,
+)
 
 _CHUNK_BYTES: Final[int] = 1024 * 1024
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024
@@ -32,8 +37,9 @@ def hash_release_artifact(path: str | Path, role: str) -> str:
     if role not in ARTIFACT_LOGICAL_NAMES:
         raise ValueError("unknown release artifact role")
     descriptor: int | None = None
+    parent_descriptor: int | None = None
     try:
-        descriptor = _open_file_no_symlink(path)
+        descriptor, parent_descriptor = _open_file_no_symlink(path)
         before = os.fstat(descriptor)
         if (
             not stat.S_ISREG(before.st_mode)
@@ -59,17 +65,20 @@ def hash_release_artifact(path: str | Path, role: str) -> str:
             raise OSError("release artifact changed while hashing")
         _validate_artifact_magic(role, bytes(prefix))
         return digest.hexdigest()
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError):
         raise BioPipeError(
             ErrorCode.ARTIFACT_READ_FAILED,
             "A required release artifact is missing, unsafe, or unstable.",
             context={"artifact_role": role},
             remediation=["Provide a bounded regular artifact through a non-symlink path."],
-        ) from exc
+        ) from None
     finally:
         if descriptor is not None:
             with suppress(OSError):
                 os.close(descriptor)
+        if parent_descriptor is not None:
+            with suppress(OSError):
+                os.close(parent_descriptor)
 
 
 def render_checksum_manifest(entries: Mapping[str, str]) -> bytes:
@@ -123,40 +132,80 @@ def checksum_payloads(payloads: Mapping[str, bytes]) -> bytes:
     )
 
 
-def read_bounded_regular(path: str | Path, *, role: str, limit_bytes: int) -> bytes:
+def read_bounded_regular(
+    path: str | Path,
+    *,
+    role: str,
+    limit_bytes: int,
+    require_private_file: bool = False,
+    forbidden_directory_identities: frozenset[FileIdentity] = frozenset(),
+) -> bytes:
     """Read one small trusted-role input through the same no-symlink traversal."""
 
-    if not role or not 0 < limit_bytes <= 16 * 1024 * 1024:
+    if (
+        not role
+        or not 0 < limit_bytes <= 16 * 1024 * 1024
+        or not isinstance(require_private_file, bool)
+        or not isinstance(forbidden_directory_identities, frozenset)
+    ):
         raise ValueError("bounded resource parameters are invalid")
     descriptor: int | None = None
+    parent_descriptor: int | None = None
     try:
-        descriptor = _open_file_no_symlink(path)
+        descriptor, parent_descriptor = _open_file_no_symlink(
+            path,
+            forbidden_directory_identities=forbidden_directory_identities,
+        )
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit_bytes:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or not 0 < before.st_size <= limit_bytes
+            or (require_private_file and (before.st_mode & 0o077 or before.st_nlink != 1))
+        ):
             raise OSError("unsafe bounded resource")
+        if require_private_file:
+            require_no_extended_acl(descriptor)
         payload = bytearray()
         while chunk := os.read(descriptor, min(_CHUNK_BYTES, limit_bytes + 1 - len(payload))):
             payload.extend(chunk)
             if len(payload) > limit_bytes:
                 raise OSError("bounded resource exceeds limit")
         after = os.fstat(descriptor)
-        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
         if len(payload) != before.st_size or any(
             getattr(before, field) != getattr(after, field) for field in stable_fields
         ):
             raise OSError("bounded resource changed while reading")
+        if require_private_file:
+            require_no_extended_acl(descriptor)
+        if parent_descriptor is not None:
+            require_directory_outside_identities(
+                parent_descriptor,
+                forbidden_directory_identities,
+            )
         return bytes(payload)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError):
         raise BioPipeError(
             ErrorCode.ARTIFACT_READ_FAILED,
             "A required release-evidence resource is missing, unsafe, or unstable.",
             context={"resource_role": role},
             remediation=["Restore the reviewed regular resource and retry."],
-        ) from exc
+        ) from None
     finally:
         if descriptor is not None:
             with suppress(OSError):
                 os.close(descriptor)
+        if parent_descriptor is not None:
+            with suppress(OSError):
+                os.close(parent_descriptor)
 
 
 def _validate_artifact_magic(role: str, prefix: bytes) -> None:
@@ -170,7 +219,11 @@ def _validate_artifact_magic(role: str, prefix: bytes) -> None:
         raise ValueError("release artifact does not match its fixed role")
 
 
-def _open_file_no_symlink(path: str | Path) -> int:
+def _open_file_no_symlink(
+    path: str | Path,
+    *,
+    forbidden_directory_identities: frozenset[FileIdentity] = frozenset(),
+) -> tuple[int, int]:
     raw = os.fspath(path)
     if not raw or "\x00" in raw:
         raise ValueError("invalid artifact path")
@@ -189,6 +242,7 @@ def _open_file_no_symlink(path: str | Path) -> int:
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0),
     )
+    file_descriptor: int | None = None
     try:
         for component in parts[1:-1]:
             next_descriptor = os.open(
@@ -201,7 +255,11 @@ def _open_file_no_symlink(path: str | Path) -> int:
             )
             os.close(directory_descriptor)
             directory_descriptor = next_descriptor
-        return os.open(
+        require_directory_outside_identities(
+            directory_descriptor,
+            forbidden_directory_identities,
+        )
+        file_descriptor = os.open(
             parts[-1],
             os.O_RDONLY
             | getattr(os, "O_CLOEXEC", 0)
@@ -209,8 +267,19 @@ def _open_file_no_symlink(path: str | Path) -> int:
             | getattr(os, "O_NONBLOCK", 0),
             dir_fd=directory_descriptor,
         )
+        require_directory_outside_identities(
+            directory_descriptor,
+            forbidden_directory_identities,
+        )
+        result = file_descriptor, directory_descriptor
+        file_descriptor = None
+        directory_descriptor = -1
+        return result
     finally:
-        os.close(directory_descriptor)
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
 
 
 __all__ = [

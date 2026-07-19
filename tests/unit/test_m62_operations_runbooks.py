@@ -73,6 +73,10 @@ def test_pilot_evidence_compiler_is_linked_and_cannot_overclaim() -> None:
         assert marker.casefold() in evidence.casefold()
     assert "internal-pilot-review-draft.md" in evidence
     assert "collect_internal_pilot_evidence.py verify" in evidence
+    assert "collect_internal_pilot_evidence.py init-record" in evidence
+    assert "collect_internal_pilot_evidence.py validate-record" in evidence
+    assert "STRICT_FORMAT_VALIDATED_ONLY" in evidence
+    assert "source_evidence_authentication_status: NOT_PERFORMED" in evidence
 
 
 def test_internal_pilot_covers_required_cases_and_failure_drills() -> None:

@@ -131,6 +131,18 @@ _DRILL_CODES: Final[dict[str, frozenset[str]]] = {
     ),
     "low_disk_space": frozenset({"INSUFFICIENT_SPACE", "PREFLIGHT_FAILED"}),
 }
+_UNEXECUTED_DRILL_TEMPLATES: Final[tuple[tuple[str, str], ...]] = (
+    ("host_key_mismatch", "SSH_HOST_KEY_MISMATCH"),
+    ("source_unreachable", "SSH_CONNECTION_FAILED"),
+    ("path_outside_allowlist", "PATH_OUTSIDE_ALLOWLIST"),
+    ("unsafe_writable_input", "UNTRUSTED_PATH_PERMISSIONS"),
+    ("container_unavailable", "IMAGE_UNAVAILABLE"),
+    ("existing_output", "PATH_OUTPUT_CONFLICT"),
+    ("stale_preflight", "PREFLIGHT_STALE"),
+    ("approval_omitted", "APPROVAL_REQUIRED"),
+    ("lost_submit_response", "SSH_TIMEOUT"),
+    ("low_disk_space", "INSUFFICIENT_SPACE"),
+)
 _LIMITATIONS: Final[tuple[str, ...]] = (
     "operator_recorded_observations_not_source_evidence_verification",
     "independent_runs_not_verified_by_collector",
@@ -1016,7 +1028,7 @@ def _require_private_paths_outside_repository(
     real_host_evidence: Path,
     sanitized_record: Path,
     output_directory: Path,
-) -> None:
+) -> tuple[int, int]:
     private_paths = (
         candidate_evidence,
         release_acceptance_evidence,
@@ -1024,10 +1036,15 @@ def _require_private_paths_outside_repository(
         sanitized_record,
         output_directory,
     )
-    if any(_path_is_within(path, repository) for path in private_paths):
-        raise _validation_error("private_path_inside_repository")
     repository_identity = _required_directory_identity(repository)
-    if any(repository_identity in _existing_directory_identities(path) for path in private_paths):
+    if any(
+        _path_is_inside_protected_root(
+            path,
+            repository,
+            root_identity=repository_identity,
+        )
+        for path in private_paths
+    ):
         raise _validation_error("private_path_inside_repository")
     evidence_roots = (candidate_evidence, release_acceptance_evidence, real_host_evidence)
     if any(
@@ -1044,6 +1061,7 @@ def _require_private_paths_outside_repository(
             output_identity is not None and output_identity in root_identities
         ):
             raise _validation_error("private_path_role_overlap")
+    return repository_identity
 
 
 def _path_is_within(candidate: Path, root: Path) -> bool:
@@ -1056,6 +1074,18 @@ def _path_is_within(candidate: Path, root: Path) -> bool:
     return (
         len(candidate_parts) >= len(root_parts) and candidate_parts[: len(root_parts)] == root_parts
     )
+
+
+def _path_is_inside_protected_root(
+    candidate: Path,
+    root: Path,
+    *,
+    root_identity: tuple[int, int] | None = None,
+) -> bool:
+    """Detect lexical and filesystem aliases below one required directory root."""
+
+    identity = root_identity if root_identity is not None else _required_directory_identity(root)
+    return _path_is_within(candidate, root) or identity in _existing_directory_identities(candidate)
 
 
 def _existing_directory_identity_chain(
@@ -1139,6 +1169,35 @@ def create_pilot_evidence(
     output_directory: str | Path,
     created_at: str,
 ) -> PilotEvidenceVerification:
+    """Create one blocked bundle while suppressing private input exception chains."""
+
+    try:
+        return _create_pilot_evidence(
+            repository=repository,
+            candidate_evidence=candidate_evidence,
+            release_acceptance_evidence=release_acceptance_evidence,
+            real_host_evidence=real_host_evidence,
+            sanitized_record=sanitized_record,
+            output_directory=output_directory,
+            created_at=created_at,
+        )
+    except BioPipeError as exc:
+        exc.__cause__ = None
+        exc.__context__ = None
+        exc.__suppress_context__ = True
+        raise
+
+
+def _create_pilot_evidence(
+    *,
+    repository: str | Path,
+    candidate_evidence: str | Path,
+    release_acceptance_evidence: str | Path,
+    real_host_evidence: str | Path,
+    sanitized_record: str | Path,
+    output_directory: str | Path,
+    created_at: str,
+) -> PilotEvidenceVerification:
     """Create one blocked, unreviewed, privacy-safe internal-pilot bundle."""
 
     try:
@@ -1153,7 +1212,7 @@ def create_pilot_evidence(
     real_host_root = _lexical_absolute(real_host_evidence, role="real_host_evidence_path")
     record_path = _lexical_absolute(sanitized_record, role="sanitized_record_path")
     output_path = _lexical_absolute(output_directory, role="output_directory_path")
-    _require_private_paths_outside_repository(
+    repository_identity = _require_private_paths_outside_repository(
         repository=repository_path,
         candidate_evidence=candidate_root,
         release_acceptance_evidence=acceptance_root,
@@ -1165,6 +1224,8 @@ def create_pilot_evidence(
         record_path,
         role="sanitized_pilot_record",
         limit_bytes=_MAX_INPUT_BYTES,
+        require_private_file=True,
+        forbidden_directory_identities=frozenset({repository_identity}),
     )
     record = _load_model(record_payload, SanitizedPilotRecord, role="sanitized_pilot_record")
     if created < _parse_canonical_utc(record.recorded_at, role="pilot record time"):
@@ -1262,7 +1323,10 @@ def create_pilot_evidence(
         != commit
     ):
         raise _validation_error("repository_changed")
-    EvidenceBundleStore(output_path).create(payloads)
+    EvidenceBundleStore(
+        output_path,
+        forbidden_directory_identities=frozenset({repository_identity}),
+    ).create(payloads)
     return verify_pilot_evidence(output_path)
 
 
@@ -1559,10 +1623,12 @@ def _render_review_draft(summary: PilotSummary) -> bytes:
 
 def _load_model(payload: bytes, model: type[BaseModel], *, role: str) -> Any:
     value = _decode_json(payload, role=role)
-    try:
-        return model.model_validate(value)
-    except (ValidationError, ValueError) as exc:
-        raise _validation_error(role) from exc
+    validated: Any = None
+    with suppress(ValidationError, ValueError):
+        validated = model.model_validate(value)
+    if validated is None:
+        raise _validation_error(role)
+    return validated
 
 
 def _decode_json(payload: bytes, *, role: str) -> dict[str, Any]:
@@ -1577,14 +1643,13 @@ def _decode_json(payload: bytes, *, role: str) -> dict[str, Any]:
     def reject_constant(_value: str) -> None:
         raise ValueError("non-finite JSON number")
 
-    try:
+    value: Any = None
+    with suppress(UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
         value = json.loads(
             payload.decode("utf-8"),
             object_pairs_hook=reject_duplicates,
             parse_constant=reject_constant,
         )
-    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
-        raise _validation_error(role) from exc
     if not isinstance(value, dict):
         raise _validation_error(role)
     return cast(dict[str, Any], value)

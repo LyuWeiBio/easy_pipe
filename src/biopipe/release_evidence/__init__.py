@@ -19,6 +19,11 @@ from biopipe.release_evidence.pilot import (
     create_pilot_evidence,
     verify_pilot_evidence,
 )
+from biopipe.release_evidence.pilot_record import (
+    PilotRecordValidation,
+    create_unexecuted_pilot_record,
+    validate_sanitized_pilot_record,
+)
 from biopipe.release_evidence.real_host import (
     REAL_HOST_EVIDENCE_NAMES,
     RealHostEvidenceInputs,
@@ -33,6 +38,7 @@ __all__ = [
     "REAL_HOST_EVIDENCE_NAMES",
     "EvidenceVerification",
     "PilotEvidenceVerification",
+    "PilotRecordValidation",
     "RealHostEvidenceInputs",
     "ReleaseArtifactPaths",
     "ReleaseCandidate",
@@ -40,10 +46,12 @@ __all__ = [
     "create_pilot_evidence",
     "create_real_host_acceptance_evidence",
     "create_release_evidence",
+    "create_unexecuted_pilot_record",
     "instantiate_release_checklist",
     "instantiate_release_checklist_file",
     "resolve_clean_repository_commit",
     "seal_release_evidence",
+    "validate_sanitized_pilot_record",
     "verify_pilot_evidence",
     "verify_real_host_acceptance_evidence",
     "verify_release_evidence",
