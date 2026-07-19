@@ -85,8 +85,8 @@
     },
     {
       "archive_name": "bioexec.pyz",
-      "archive_sha256": "c7271b0eccb290a87e3e4253539022925b9169c70e1c1850ee610f4312f3982e",
-      "archive_size": 186301,
+      "archive_sha256": "df28878f856fa81924d51fcb007b49c5b12d82bc4e586db140286198496a1eae",
+      "archive_size": 212822,
       "build_count": 2,
       "bytes_equal": true,
       "members": [
@@ -167,6 +167,12 @@
           "name": "bioexec/runner.py",
           "sha256": "24b3ba807318d3381068f8260136569408eeb0b320f7a9135f3addd9fff839e2",
           "size": 44651
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/slurm.py",
+          "sha256": "b9a4484d4135c05bf45c9220366758270e0b153625d416fe51ff1573b43996ca",
+          "size": 26413
         },
         {
           "mode": "0644",
