@@ -197,6 +197,7 @@ remote account access to data.
 - [Operator-only real-host release acceptance](docs/real-host-acceptance.md)
 - [Operations guide](docs/operations.md)
 - [Non-sensitive internal pilot runbook](docs/internal-pilot-runbook.md)
+- [Privacy-safe internal pilot evidence compiler](docs/internal-pilot-evidence.md)
 - [Key-rotation runbook](docs/key-rotation-runbook.md)
 - [Backup and retention runbook](docs/backup-retention-runbook.md)
 - [Incident-response runbook](docs/incident-response-runbook.md)

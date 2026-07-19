@@ -130,6 +130,12 @@ monitoring outside the controller protocol, with an explicit allowlist and
 redaction review. Do not add a generic remote command or environment interface
 to collect metrics.
 
+The repository-local [internal pilot evidence compiler](internal-pilot-evidence.md)
+is not a metrics exporter. It accepts only an operator-prepared strict
+sanitized snapshot and packages coarse buckets, bounded counts, fixed states,
+and SHA-256 pointers into an unreviewed `BLOCKED` draft. It never crawls the
+project, runtime, reports, audit log, filesystem, or remote host.
+
 ## Alert and response matrix
 
 | Condition | Required action | Forbidden shortcut |
