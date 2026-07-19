@@ -191,8 +191,8 @@ The scheduler path will be connected through separate reviewable changes:
 
 1. **M7.0a:** unreachable pure Slurm policy, argument, identifier, output, and
    reconciliation-rule primitives with offline tests;
-2. **versioned contracts:** scheduler-aware execution profile, Remote Executor
-   configuration, and remote protocol without changing frozen v1;
+2. **M7.0b versioned contracts:** scheduler-aware execution profile, Remote
+   Executor configuration, and remote protocol without changing frozen v1;
 3. **compute-node preflight:** fixed preflight job, polling, evidence binding,
    timeout handling, and one-use capability issuance;
 4. **submission and status:** fixed batch script and `sbatch`, exact job-ID

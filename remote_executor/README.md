@@ -12,6 +12,12 @@ plugin, download, delete, or arbitrary file-upload API. Every subprocess uses
 create-only production Nextflow bundle; raw FASTQ/BAM/CRAM and test/report
 trees are rejected.
 
+The source tree also contains dormant M7 Slurm primitives plus strict config
+and protocol version-2 validators. The current service does not import them:
+`load_config`, request parsing, health, and dispatch remain exactly version 1,
+and no scheduler process can be launched through this agent yet. See
+[ADR 0003](../docs/adr/0003-m7-versioned-scheduler-contracts.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,

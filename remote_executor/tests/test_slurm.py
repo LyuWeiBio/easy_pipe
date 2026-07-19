@@ -25,12 +25,14 @@ from bioexec.slurm import (
     build_scheduler_environment,
     build_squeue_argv,
     build_squeue_discovery_argv,
+    canonical_scheduler_policy_bytes,
     map_slurm_observation,
     parse_sacct_output,
     parse_sbatch_parsable_output,
     parse_squeue_discovery_output,
     parse_squeue_output,
     reconcile_slurm_observations,
+    scheduler_policy_hash,
 )
 
 _MARKER = "a" * 64
@@ -44,6 +46,8 @@ def _policy_mapping() -> dict[str, object]:
         "account": "bioinfo",
         "qos": "normal",
         "time_limit": "08:00:00",
+        "cpus_per_task": 8,
+        "memory_mib": 16_384,
         "submit_timeout_seconds": 60,
         "status_poll_seconds": 30,
         "max_pending_seconds": 3600,
@@ -119,9 +123,22 @@ def test_scheduler_policy_is_strict_bounded_and_deterministic() -> None:
     assert first.account == "bioinfo"
     assert first.qos == "normal"
     assert first.time_limit == "08:00:00"
+    assert first.cpus_per_task == 8
+    assert first.memory_mib == 16_384
     assert first.submit_timeout_seconds == 60
     assert first.status_poll_seconds == 30
     assert first.max_pending_seconds == 3600
+
+
+def test_scheduler_policy_identity_is_canonical_and_resource_bound() -> None:
+    first = _policy()
+    reordered = SlurmSchedulerPolicy.from_mapping(dict(reversed(_policy_mapping().items())))
+    changed = SlurmSchedulerPolicy.from_mapping({**_policy_mapping(), "memory_mib": 16_385})
+
+    assert canonical_scheduler_policy_bytes(first) == canonical_scheduler_policy_bytes(reordered)
+    assert scheduler_policy_hash(first) == scheduler_policy_hash(reordered)
+    assert len(scheduler_policy_hash(first)) == 64
+    assert scheduler_policy_hash(changed) != scheduler_policy_hash(first)
 
 
 @pytest.mark.parametrize("field", sorted(_policy_mapping()))
@@ -186,6 +203,12 @@ def test_scheduler_identifiers_reject_flag_and_script_injection(
         ("time_limit", "08:00:60"),
         ("time_limit", "08:00:00\n#SBATCH --wrap=id"),
         ("time_limit", 80000),
+        ("cpus_per_task", True),
+        ("cpus_per_task", 0),
+        ("cpus_per_task", 1_025),
+        ("memory_mib", False),
+        ("memory_mib", 1_023),
+        ("memory_mib", 16 * 1024 * 1024 + 1),
         ("submit_timeout_seconds", True),
         ("submit_timeout_seconds", 0),
         ("submit_timeout_seconds", 2**63),
@@ -252,6 +275,8 @@ def test_fixed_scheduler_argv_have_no_generic_command_surface() -> None:
         "--no-requeue",
         "--nodes=1",
         "--ntasks=1",
+        "--cpus-per-task=8",
+        "--mem=16384M",
         "--partition=compute",
         "--account=bioinfo",
         "--qos=normal",

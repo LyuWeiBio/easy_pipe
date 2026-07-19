@@ -216,6 +216,7 @@ remote account access to data.
 - [Probe protocol](docs/probe-protocol.md)
 - [Architecture decision record](docs/adr/0001-architecture.md)
 - [M7 Slurm launch contract](docs/adr/0002-m7-slurm-launch-contract.md)
+- [M7 versioned scheduler contracts](docs/adr/0003-m7-versioned-scheduler-contracts.md)
 
 ## Development checks
 

@@ -33,6 +33,10 @@ capability.
 - `plan --executor slurm` can render the reviewed site placeholder, but M5
   preflight and real-data execution support only the Nextflow `local` executor.
   There is no Slurm/PBS/SGE/Kubernetes/cloud submission implementation.
+- M7 currently contains dormant Slurm policy and version-2 profile/config/protocol
+  validators only. The current CLI, config loader, protocol dispatcher, preflight,
+  and runner do not import or activate them, and synthetic tests are not cluster
+  acceptance evidence.
 
 ## Hosts and filesystems
 

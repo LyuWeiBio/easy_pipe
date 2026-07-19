@@ -8,6 +8,8 @@ argument vectors, and parse bounded command output.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -44,6 +46,8 @@ _POLICY_FIELDS = frozenset(
         "account",
         "qos",
         "time_limit",
+        "cpus_per_task",
+        "memory_mib",
         "submit_timeout_seconds",
         "status_poll_seconds",
         "max_pending_seconds",
@@ -51,6 +55,8 @@ _POLICY_FIELDS = frozenset(
 )
 _MAX_JOB_ID = 4_294_967_295
 _MAX_TIME_LIMIT_SECONDS = 30 * 24 * 60 * 60
+_MAX_CPUS_PER_TASK = 1_024
+_MAX_MEMORY_MIB = 16 * 1024 * 1024
 _MAX_SUBMIT_OUTPUT_BYTES = 256
 _MAX_STATUS_OUTPUT_BYTES = 16 * 1024
 
@@ -108,6 +114,8 @@ class SlurmSchedulerPolicy:
     account: str | None
     qos: str | None
     time_limit: str
+    cpus_per_task: int
+    memory_mib: int
     submit_timeout_seconds: int
     status_poll_seconds: int
     max_pending_seconds: int
@@ -117,6 +125,8 @@ class SlurmSchedulerPolicy:
         _optional_scheduler_name(self.account, "account")
         _optional_scheduler_name(self.qos, "qos")
         _canonical_time_limit(self.time_limit)
+        _bounded_int(self.cpus_per_task, "cpus_per_task", 1, _MAX_CPUS_PER_TASK)
+        _bounded_int(self.memory_mib, "memory_mib", 1_024, _MAX_MEMORY_MIB)
         _bounded_int(self.submit_timeout_seconds, "submit_timeout_seconds", 1, 300)
         _bounded_int(self.status_poll_seconds, "status_poll_seconds", 5, 3_600)
         _bounded_int(self.max_pending_seconds, "max_pending_seconds", 60, 2_592_000)
@@ -134,6 +144,8 @@ class SlurmSchedulerPolicy:
             account=_require_optional_string(value["account"], "account"),
             qos=_require_optional_string(value["qos"], "qos"),
             time_limit=_require_string(value["time_limit"], "time_limit"),
+            cpus_per_task=_require_int(value["cpus_per_task"], "cpus_per_task"),
+            memory_mib=_require_int(value["memory_mib"], "memory_mib"),
             submit_timeout_seconds=_require_int(
                 value["submit_timeout_seconds"], "submit_timeout_seconds"
             ),
@@ -149,10 +161,32 @@ class SlurmSchedulerPolicy:
             "account": self.account,
             "qos": self.qos,
             "time_limit": self.time_limit,
+            "cpus_per_task": self.cpus_per_task,
+            "memory_mib": self.memory_mib,
             "submit_timeout_seconds": self.submit_timeout_seconds,
             "status_poll_seconds": self.status_poll_seconds,
             "max_pending_seconds": self.max_pending_seconds,
         }
+
+
+def canonical_scheduler_policy_bytes(policy: SlurmSchedulerPolicy) -> bytes:
+    """Serialize one validated scheduler policy for cross-contract hashing."""
+
+    if not isinstance(policy, SlurmSchedulerPolicy):
+        raise SlurmContractError("policy must be a validated SlurmSchedulerPolicy")
+    return json.dumps(
+        policy.as_mapping(),
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+
+def scheduler_policy_hash(policy: SlurmSchedulerPolicy) -> str:
+    """Return the lowercase SHA-256 identity shared by profile/config/protocol v2."""
+
+    return hashlib.sha256(canonical_scheduler_policy_bytes(policy)).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -252,6 +286,8 @@ def build_sbatch_argv(binary: str, spec: SlurmSubmitSpec) -> tuple[str, ...]:
         "--no-requeue",
         "--nodes=1",
         "--ntasks=1",
+        f"--cpus-per-task={policy.cpus_per_task}",
+        f"--mem={policy.memory_mib}M",
         f"--partition={policy.partition}",
     ]
     if policy.account is not None:
@@ -685,10 +721,12 @@ __all__ = [
     "build_scheduler_environment",
     "build_squeue_argv",
     "build_squeue_discovery_argv",
+    "canonical_scheduler_policy_bytes",
     "map_slurm_observation",
     "parse_sacct_output",
     "parse_sbatch_parsable_output",
     "parse_squeue_discovery_output",
     "parse_squeue_output",
     "reconcile_slurm_observations",
+    "scheduler_policy_hash",
 ]
