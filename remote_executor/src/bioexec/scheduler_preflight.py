@@ -1179,6 +1179,92 @@ def record_release_unknown(state: SchedulerPreflightState) -> SchedulerPreflight
     )
 
 
+def record_clock_discontinuity(state: SchedulerPreflightState) -> SchedulerPreflightState:
+    """Fail closed when durable elapsed time cannot cross a boot boundary safely."""
+
+    _require_phase(
+        state,
+        {
+            "submit_unknown",
+            "held",
+            "release_unknown",
+            "polling",
+            "awaiting_evidence",
+            "candidate",
+        },
+    )
+    return _replace_state(
+        state,
+        phase="indeterminate",
+        reason_code="SCHEDULER_CLOCK_DISCONTINUITY",
+    )
+
+
+def record_revision_budget_exhausted(
+    state: SchedulerPreflightState,
+) -> SchedulerPreflightState:
+    """Fail closed while one final journal slot is still available."""
+
+    _require_phase(state, {"release_unknown", "polling"})
+    return _replace_state(
+        state,
+        phase="indeterminate",
+        reason_code="SCHEDULER_REVISION_BUDGET_EXHAUSTED",
+    )
+
+
+def record_driver_timeout(
+    state: SchedulerPreflightState,
+    *,
+    elapsed_seconds: int,
+) -> SchedulerPreflightState:
+    """Apply irreversible driver deadlines without inventing scheduler evidence."""
+
+    _require_phase(
+        state,
+        {
+            "submit_unknown",
+            "held",
+            "release_unknown",
+            "polling",
+            "awaiting_evidence",
+            "candidate",
+        },
+    )
+    elapsed = _fresh_elapsed(state, elapsed_seconds, "driver timeout")
+    if elapsed >= _overall_timeout_seconds(state.manifest.scheduler_policy):
+        return _replace_state(
+            state,
+            phase="timed_out",
+            elapsed_seconds=elapsed,
+            reason_code="SLURM_PREFLIGHT_OVERALL_TIMEOUT",
+        )
+    if state.phase in {"release_unknown", "polling"} and not state.started:
+        if state.pending_since_seconds is None:
+            raise SchedulerPreflightError(
+                "driver pending timeout requires the durable release-intent time"
+            )
+        if (
+            elapsed - state.pending_since_seconds
+            >= state.manifest.scheduler_policy.max_pending_seconds
+        ):
+            return _replace_state(
+                state,
+                phase="timed_out",
+                elapsed_seconds=elapsed,
+                reason_code="SLURM_PREFLIGHT_TIMEOUT",
+            )
+    return state
+
+
+def preflight_overall_timeout_seconds(state: SchedulerPreflightState) -> int:
+    """Return the fixed overall bound for one validated preflight state."""
+
+    if not isinstance(state, SchedulerPreflightState):
+        raise SchedulerPreflightError("state must be a SchedulerPreflightState")
+    return _overall_timeout_seconds(state.manifest.scheduler_policy)
+
+
 def record_scheduler_poll(
     state: SchedulerPreflightState,
     *,
@@ -2008,7 +2094,9 @@ __all__ = [
     "parse_compute_manifest",
     "preflight_result",
     "prepare_preflight",
+    "record_clock_discontinuity",
     "record_compute_evidence",
+    "record_driver_timeout",
     "record_held_release",
     "record_held_submission",
     "record_release_intent",

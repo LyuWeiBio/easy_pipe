@@ -228,6 +228,19 @@ create-only, no-follow, bounded, canonical, and file/directory-fsynced. The
 selected shared filesystem still needs real-cluster validation for these
 semantics before scheduler activation.
 
+The dormant M7.0d-e driver is a source-level review surface, not an installed
+ForceCommand. Its state schema 1.1 records a double-checked OS boot epoch and
+boot-relative monotonic start in the create-only submit intent. Each call may
+perform only the fixed action for the current phase and append at most one
+journal revision. Exact worker evidence is copied as a bounded parsed object
+into that private hash chain, so later handoff-file changes cannot alter the
+recorded result. The driver stops at `candidate`, always returns a null
+preflight token, and must not be wired into protocol version 2 until durable
+capability semantics and the remaining activation blockers are reviewed. In
+particular, activation must add a sleep-inclusive deadline recheck adjacent to
+scheduler process creation; the current permit guard can precede filesystem
+validation, and a host suspend in that interval cannot undo a later release.
+
 ## Create the controller approval key and profile
 
 The SSH key and approval key are different controls. Create one random 32-byte

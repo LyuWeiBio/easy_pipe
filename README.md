@@ -117,7 +117,10 @@ Follow the [installation guide](docs/installation.md) and the
 [remote deployment guide](docs/remote-deployment.md) before using real data.
 The M7 source also builds a third, separately installed
 `bioexec-compute-preflight` artifact, but it remains dormant and is not part of
-the version-1 production path.
+the version-1 production path. A dormant trusted-clock driver can now advance
+one durable Slurm compute-preflight step at a time only as far as the
+non-authorizing `candidate` state; it is not connected to protocol version 2
+and cannot mint an execution token.
 
 The normal artifact flow is:
 
@@ -225,6 +228,7 @@ remote account access to data.
 - [M7 bounded scheduler transport](docs/adr/0006-m7-bounded-scheduler-transport.md)
 - [M7 durable scheduler-preflight state](docs/adr/0007-m7-durable-scheduler-preflight-state.md)
 - [M7 fixed compute-preflight worker](docs/adr/0008-m7-fixed-compute-preflight-worker.md)
+- [M7 durable preflight driver](docs/adr/0009-m7-durable-preflight-driver.md)
 
 ## Development checks
 

@@ -106,6 +106,11 @@ contain scheduler raw stdout or stderr, the submit template duplicated in an
 error, argv, environment, approval keys, HMAC keys, or a raw capability token.
 Capability issuance and consumption remain outside this slice.
 
+M7.0d-e evolves this private schema to 1.1. The submit intent additionally
+binds the trusted boot-clock anchor, while clock discontinuity, reached driver
+deadlines, and complete parsed compute evidence become hash-chained revisions
+as specified by ADR 0009. No capability token or token hash is added.
+
 ### 5. Keep the implementation dormant
 
 The installed version-1 protocol, dispatcher, service entry point, preflight,
@@ -134,15 +139,16 @@ combined by future reviewed version-2 orchestration.
   `fsync` semantics.
 - A hostile same-identity process can still race path-based scheduler
   execution as described by ADR 0006.
-- Boot/monotonic-clock continuity, administrator-owned runtime installation,
-  capability lost-response semantics, durable version-2 orchestration, and
-  real Slurm acceptance remain activation blockers.
+- Administrator-owned runtime installation, capability lost-response
+  semantics, active version-2 dispatch, and real Slurm acceptance remain
+  activation blockers.
 
 ## Next step
 
 M7.0d-d adds the separately installed, hash-bound fixed compute-preflight
 worker and its descriptor-safe manifest/evidence files as described by ADR
-0008. The next slice must connect them through a durable version-2 driver and
-capability lifecycle without permitting mutation replay. No protocol-version-2
-activation is allowed until the driver, deployment rechecks, immutable runtime
-installation, and real-cluster acceptance are complete.
+0008. M7.0d-e adds the trusted-clock, durable driver-to-candidate connection in
+ADR 0009 without permitting mutation replay. M7.0d-f must add the separate
+capability lifecycle. No protocol-version-2 activation is allowed until that
+lifecycle, deployment rechecks, immutable runtime installation, and
+real-cluster acceptance are complete.
