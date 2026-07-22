@@ -611,7 +611,11 @@ class PreflightCapability:
                 raise SchedulerPreflightError(
                     "consumed capability requires actor, binding, and time"
                 )
-            _identifier(self.consumed_by, "capability.consumed_by")
+            _bounded_text(
+                self.consumed_by,
+                "capability.consumed_by",
+                maximum=256,
+            )
             _digest(self.consumer_binding_hash, "capability.consumer_binding_hash")
             _strict_int(
                 self.consumed_at,
@@ -1622,7 +1626,7 @@ def record_capability_consumed(
         or _digest(capability_binding_hash, "capability_binding_hash") != capability.binding_hash
     ):
         raise SchedulerPreflightError("capability consumption does not bind the current grant")
-    actor = _identifier(consumed_by, "consumed_by")
+    actor = _bounded_text(consumed_by, "consumed_by", maximum=256)
     consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
     at = _fresh_elapsed(state, elapsed_seconds, "capability consumption")
     if at >= capability.expires_at:
@@ -1901,7 +1905,7 @@ def _capability_grant_hash(
             raise SchedulerPreflightError(
                 "consumed grant binding requires actor, binding, and time"
             )
-        actor = _identifier(consumed_by, "consumed_by")
+        actor = _bounded_text(consumed_by, "consumed_by", maximum=256)
         consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
         at: int | None = _strict_int(consumed_at, "consumed_at", issued, expires - 1)
     else:

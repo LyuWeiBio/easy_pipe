@@ -69,6 +69,7 @@ def scheduler_config_fixture(tmp_path: Path) -> SchedulerConfigFixture:
         "nextflow",
         "apptainer",
         "compute_worker",
+        "compute_bootstrap",
         "sbatch",
         "squeue",
         "sacct",
@@ -80,6 +81,8 @@ def scheduler_config_fixture(tmp_path: Path) -> SchedulerConfigFixture:
             if role == "python"
             else "bioexec-compute-preflight"
             if role == "compute_worker"
+            else "bioexec-compute-bootstrap"
+            if role == "compute_bootstrap"
             else role
         )
         for role in executable_roles
@@ -172,6 +175,7 @@ def test_trusted_loader_binds_exact_config_roots_executables_and_jar(
         "nextflow",
         "apptainer",
         "compute_worker",
+        "compute_bootstrap",
         "sbatch",
         "squeue",
         "sacct",

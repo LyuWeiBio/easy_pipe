@@ -58,7 +58,7 @@ offline checksum verification proves byte integrity, not release sign-off.
       `pending` native-runtime status has not been presented as native evidence,
       and any redistributed installed environment was separately exported and
       compared with the matching inventory.
-- [ ] `remote-zipapps.json` matches two byte-identical builds, and every
+- [ ] `remote-zipapps.json` matches four byte-identical builds, and every
       shipped/mirrored container digest appears in `containers.json`; exact
       image verification, notices, and source obligations were independently
       reviewed before any `pending` or `blocked` status was cleared.
@@ -112,14 +112,30 @@ SOURCE_DATE_EPOCH=315532800 \
   python remote_executor/build_zipapp.py --output "$release_tmp/bioexec-a.pyz"
 SOURCE_DATE_EPOCH=315532800 \
   python remote_executor/build_zipapp.py --output "$release_tmp/bioexec-b.pyz"
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-preflight \
+  --output "$release_tmp/compute-preflight-a"
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-preflight \
+  --output "$release_tmp/compute-preflight-b"
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-bootstrap \
+  --output "$release_tmp/compute-bootstrap-a"
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-bootstrap \
+  --output "$release_tmp/compute-bootstrap-b"
 cmp "$release_tmp/bioprobe-a.pyz" "$release_tmp/bioprobe-b.pyz"
 cmp "$release_tmp/bioexec-a.pyz" "$release_tmp/bioexec-b.pyz"
-shasum -a 256 "$release_tmp"/*.pyz
+cmp "$release_tmp/compute-preflight-a" "$release_tmp/compute-preflight-b"
+cmp "$release_tmp/compute-bootstrap-a" "$release_tmp/compute-bootstrap-b"
+shasum -a 256 "$release_tmp"/*
 ```
 
 - [ ] Probe builds are byte-identical and the release SHA-256 is recorded.
-- [ ] Executor builds are byte-identical and the release SHA-256 is recorded.
-- [ ] Both zipapps contain a root `LICENSE` whose bytes match the repository.
+- [ ] Executor, compute-preflight, and compute-bootstrap builds are independently
+      byte-identical; the release executor SHA-256 and both dormant evidence
+      SHA-256 values are recorded.
+- [ ] All four zipapps contain a root `LICENSE` whose bytes match the repository.
 - [ ] Zipapp health/protocol smoke tests pass from the built artifacts.
 - [ ] Executor build and tests pass under Python 3.9, not only controller Python.
 - [ ] The artifacts contain no controller configuration, home path, HMAC/SSH

@@ -51,16 +51,20 @@ SOURCE_DATE_EPOCH=315532800 \
 SOURCE_DATE_EPOCH=315532800 \
   python remote_executor/build_zipapp.py --artifact compute-preflight \
   --output remote_executor/dist/bioexec-compute-preflight
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-bootstrap \
+  --output remote_executor/dist/bioexec-compute-bootstrap
 shasum -a 256 remote_probe/dist/bioprobe.pyz
 shasum -a 256 remote_executor/dist/bioexec.pyz
 shasum -a 256 remote_executor/dist/bioexec-compute-preflight
+shasum -a 256 remote_executor/dist/bioexec-compute-bootstrap
 ```
 
 Record the hashes in the deployment ticket or equivalent audit system. Verify
 the transferred files against those values on each remote host. Each zipapp
 must contain a root `LICENSE` entry matching the reviewed checkout. The third
-artifact is dormant M7 material: building or transferring it does not activate
-the version-2 scheduler path.
+and fourth artifacts are dormant M7 material: building or transferring them
+does not activate the version-2 scheduler path.
 
 ## Deploy the read-only Remote Probe
 
@@ -196,30 +200,39 @@ the service account, and record its hash. Provision SIFs below the cache root
 and record each complete file hash. The exact commands are site-specific; do
 not use a URL or a floating image tag in the executor configuration.
 
-### Stage the dormant M7 compute worker
+### Stage the dormant M7 compute artifacts
 
-This step prepares only the separately reviewed M7 artifact. The current
+This step prepares only the separately reviewed M7 artifacts. The current
 version-1 ForceCommand, protocol, preflight, and execution lifecycle do not
-invoke it. Scheduler config-v2 additionally fixes absolute paths with exact
+invoke them. Scheduler config-v2 additionally fixes absolute paths with exact
 leaves `python3`, `java`, `nextflow`, `apptainer`, and
-`bioexec-compute-preflight`, plus the Nextflow JAR path and every full SHA-256.
-Install the worker at one root-managed path visible with identical bytes on the
-login and compute nodes:
+`bioexec-compute-preflight`, and `bioexec-compute-bootstrap`, plus the Nextflow
+JAR path and every full SHA-256. Install both artifacts at root-managed paths
+visible with identical bytes on the login and compute nodes:
 
 ```bash
 sudo install -o root -g root -m 0755 \
   bioexec-compute-preflight \
   /srv/biopipe/runtime/bioexec-compute-preflight
+sudo install -o root -g root -m 0755 \
+  bioexec-compute-bootstrap \
+  /srv/biopipe/runtime/bioexec-compute-bootstrap
 ```
 
-The fixed batch template invokes the reviewed absolute Python path as
+The fixed preflight batch template invokes the reviewed absolute Python path as
 `<absolute-python3> -I -S /srv/biopipe/runtime/bioexec-compute-preflight`; it
-never uses the archive shebang or `PATH`. Do not install either path as a symlink. The
-service identity must not be able to replace the interpreter, worker, Java,
-Nextflow launcher/JAR, Apptainer, SIFs, or their complete parent chains. The
-path-based recheck and later process start are not one atomic operation, so
-this administrator-owned deployment boundary remains mandatory before
-activation.
+never uses the archive shebang or `PATH`. Do not install any configured
+executable path as a symlink. The service identity must not be able to replace
+the interpreter, either compute artifact, Java, Nextflow launcher/JAR,
+Apptainer, SIFs, or their complete parent chains. The path-based recheck and
+later process start are not one atomic operation, so this administrator-owned
+deployment boundary remains mandatory before activation.
+
+The separate bootstrap accepts only the exact config path, run ID, run-identity
+hash, and its own configured hash. From the allocated node it reloads the
+consumed capability binding and fully rehashes Python, Java, Nextflow,
+Apptainer, itself, the Nextflow JAR, the sealed deployment, and every SIF before
+burning one start intent. It does not invoke Nextflow or submit a workload.
 
 Each future scheduler attempt uses the shared private layout
 `private-state/scheduler-preflights-v1/<preflight_id>/{manifest,evidence}.json`.
@@ -228,9 +241,16 @@ create-only, no-follow, bounded, canonical, and file/directory-fsynced. The
 selected shared filesystem still needs real-cluster validation for these
 semantics before scheduler activation.
 
-The dormant M7.0d-e driver and M7.0d-f capability lifecycle are source-level
-review surfaces, not an installed ForceCommand. State schema 1.2 records a
-double-checked OS boot epoch and
+Each future scheduler run separately uses
+`private-state/scheduler-runs-v1/<run_id>/identity.json` and a create-only
+`start.intent.json`. The exact reservation may be replayed before the start
+intent, but an existing, partial, or uncertain start intent never yields a new
+permit after restart. These owner-only shared-filesystem semantics also require
+real-cluster validation.
+
+The dormant M7.0d-e driver, M7.0d-f capability lifecycle, and M7.0d-g run
+bootstrap are source-level review surfaces, not an installed ForceCommand.
+Scheduler-preflight state schema 1.3 records a double-checked OS boot epoch and
 boot-relative monotonic start in the create-only submit intent. Each call may
 perform only the fixed action for the current phase and append at most one
 journal revision. Exact worker evidence is copied as a bounded parsed object
@@ -239,9 +259,12 @@ recorded result. The driver stops at `candidate` and always returns a null
 preflight token. The separate lifecycle can generate one raw token only after a
 hash-only issuance revision is fsynced and replayed; a lost response cannot be
 reissued, and lock/CAS consumption records trusted time, actor, and consumer
-binding before success. It still does not start a workflow and must not be wired
-into protocol version 2 until a create-only run permit and the remaining
-activation blockers are reviewed. In particular, activation must add a
+binding before success. The separate run reservation binds that exact actor and
+consumer to the authenticated approval and deployment; the compute bootstrap
+can then consume one non-reconstructible live start permit after allocated-node
+artifact rechecks. It still does not start a workflow and must not be wired into
+protocol version 2 until the remaining activation blockers are reviewed. In
+particular, activation must add a
 sleep-inclusive deadline recheck adjacent to scheduler process creation; the
 current permit guard can precede filesystem validation, and a host suspend in
 that interval cannot undo a later release. Raw capability responses must also

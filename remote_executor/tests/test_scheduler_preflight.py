@@ -806,17 +806,18 @@ def test_happy_transcript_mints_and_consumes_one_bound_capability() -> None:
     consumed = consume_capability(
         state,
         token=_TOKEN,
-        consumed_by="run-1",
+        consumed_by="operator-一",
         consumer_binding_hash=_CONSUMER_BINDING_HASH,
         elapsed_seconds=18,
     )
     assert consumed.capability is not None and consumed.capability.consumed is True
+    assert consumed.capability.consumed_by == "operator-一"
     assert preflight_result(consumed)["preflight_token"] is None
     with pytest.raises(SchedulerPreflightError, match="already consumed"):
         consume_capability(
             consumed,
             token=_TOKEN,
-            consumed_by="run-2",
+            consumed_by="operator-二",
             consumer_binding_hash="f" * 64,
             elapsed_seconds=19,
         )

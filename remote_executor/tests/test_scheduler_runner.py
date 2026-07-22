@@ -179,6 +179,7 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
         "nextflow",
         "apptainer",
         "compute_worker",
+        "compute_bootstrap",
         "sbatch",
         "squeue",
         "sacct",
@@ -192,6 +193,8 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
             if role == "python"
             else "bioexec-compute-preflight"
             if role == "compute_worker"
+            else "bioexec-compute-bootstrap"
+            if role == "compute_bootstrap"
             else role
         )
         for role in executable_roles

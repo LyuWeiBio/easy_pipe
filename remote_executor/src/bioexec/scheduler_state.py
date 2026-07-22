@@ -72,7 +72,7 @@ from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservati
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
-SCHEDULER_STATE_SCHEMA_VERSION = "1.2"
+SCHEDULER_STATE_SCHEMA_VERSION = "1.3"
 _NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
@@ -633,7 +633,7 @@ class SchedulerPreflightStore:
         """Atomically consume one live grant using trusted elapsed time and CAS."""
 
         supplied = _raw_capability_token(token)
-        actor = _identifier(consumed_by)
+        actor = _actor(consumed_by)
         consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
         selected = self._bound_snapshot(snapshot)
         with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
@@ -2128,7 +2128,7 @@ def _replay(
                         event["grant_binding_hash"],
                         "grant_binding_hash",
                     ),
-                    consumed_by=_identifier(event["consumed_by"]),
+                    consumed_by=_actor(event["consumed_by"]),
                     consumer_binding_hash=_digest(
                         event["consumer_binding_hash"],
                         "consumer_binding_hash",
@@ -2883,6 +2883,24 @@ def _require_live_deadline(deadline: float) -> None:
 def _identifier(value: Any) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
         raise SchedulerStateContractError("scheduler preflight identifier is invalid")
+    return value
+
+
+def _actor(value: Any) -> str:
+    if not isinstance(value, str):
+        raise SchedulerStateContractError("scheduler approval actor must be bounded safe text")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise SchedulerStateContractError(
+            "scheduler approval actor must be bounded safe text"
+        ) from exc
+    if (
+        not value
+        or len(encoded) > 256
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise SchedulerStateContractError("scheduler approval actor must be bounded safe text")
     return value
 
 

@@ -119,9 +119,9 @@ import remains a testing and review surface, not an activated service path.
   do not consume append-only revisions.
 - Darwin and Linux boot-clock behavior, shared-filesystem locks, exclusive
   create, and directory `fsync` still require real deployment validation.
-- Durable capability issuance/consumption, deployment-to-compute bundle and
-  runtime rechecks, active version-2 dispatch, and real Slurm acceptance remain
-  unimplemented.
+- ADRs 0010 and 0011 add dormant capability issuance/consumption plus
+  deployment-to-compute bundle and runtime rechecks. Active version-2 dispatch,
+  fixed workload execution, and real Slurm acceptance remain unimplemented.
 - The same-identity path hash/process-start race and detached-descendant limits
   described by ADRs 0006 and 0008 remain activation blockers.
 - A host suspend after the mutation permit's continuous-clock guard but before
@@ -135,6 +135,8 @@ import remains a testing and review surface, not an activated service path.
 M7.0d-f implements the separately reviewed durable capability lifecycle in
 ADR 0010. Disk stores only the exact token hash and evidence binding, a lost
 issuance response burns the grant without reissuance, and consumption is an
-atomic actor/time/consumer-bound one-use transition. Protocol version 2 remains
-inactive until deployment bootstrap, a create-only run permit, compute-node
-rechecks, and real-cluster acceptance are complete.
+atomic actor/time/consumer-bound one-use transition. M7.0d-g adds the dormant
+deployment bootstrap and create-only run permit in
+[ADR 0011](0011-m7-durable-run-bootstrap.md). Protocol version 2 remains
+inactive until fixed workload execution and real-cluster acceptance are
+complete.

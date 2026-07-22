@@ -115,12 +115,15 @@ Operators first install and constrain the two remote zipapps. `biopipe` does not
 install them, create accounts, change `authorized_keys`, or copy raw reads.
 Follow the [installation guide](docs/installation.md) and the
 [remote deployment guide](docs/remote-deployment.md) before using real data.
-The M7 source also builds a third, separately installed
-`bioexec-compute-preflight` artifact, but it remains dormant and is not part of
-the version-1 production path. A dormant trusted-clock driver can now advance
-one durable Slurm compute-preflight step at a time only as far as the
-non-authorizing `candidate` state; it is not connected to protocol version 2
-and cannot mint an execution token.
+The M7 source also builds two separately installed compute artifacts:
+`bioexec-compute-preflight` and the fourth remote zipapp,
+`bioexec-compute-bootstrap`. Both remain dormant and outside the version-1
+production path. The trusted-clock driver advances durable Slurm preflight only
+to the non-authorizing `candidate` state. A separate private-schema-1.3
+lifecycle can bind a consumed capability to a create-only run reservation,
+rehash deployment and runtime artifacts from a compute node, and burn one start
+intent, but it is not connected to protocol version 2 and does not submit or
+start a workflow.
 
 The normal artifact flow is:
 
@@ -229,6 +232,8 @@ remote account access to data.
 - [M7 durable scheduler-preflight state](docs/adr/0007-m7-durable-scheduler-preflight-state.md)
 - [M7 fixed compute-preflight worker](docs/adr/0008-m7-fixed-compute-preflight-worker.md)
 - [M7 durable preflight driver](docs/adr/0009-m7-durable-preflight-driver.md)
+- [M7 durable capability lifecycle](docs/adr/0010-m7-durable-capability-lifecycle.md)
+- [M7 durable run bootstrap](docs/adr/0011-m7-durable-run-bootstrap.md)
 
 ## Development checks
 

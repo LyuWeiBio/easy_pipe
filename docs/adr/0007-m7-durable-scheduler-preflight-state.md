@@ -140,9 +140,9 @@ combined by future reviewed version-2 orchestration.
   `fsync` semantics.
 - A hostile same-identity process can still race path-based scheduler
   execution as described by ADR 0006.
-- Administrator-owned runtime installation, capability-to-run intent,
-  active version-2 dispatch, and real Slurm acceptance remain activation
-  blockers.
+- ADR 0011 adds a dormant capability-to-run intent, but administrator-owned
+  runtime installation, active version-2 dispatch, fixed workload execution,
+  and real Slurm acceptance remain activation blockers.
 
 ## Follow-up
 
@@ -151,6 +151,9 @@ worker and its descriptor-safe manifest/evidence files as described by ADR
 0008. M7.0d-e adds the trusted-clock, durable driver-to-candidate connection in
 ADR 0009 without permitting mutation replay. M7.0d-f then adds the separate
 capability lifecycle in ADR 0010 and evolves the private schema to
-1.2. No protocol-version-2 activation is allowed until a create-only run permit,
-deployment rechecks, immutable runtime installation, and real-cluster
-acceptance are complete.
+1.2. M7.0d-g adds the create-only run permit and deployment rechecks in
+[ADR 0011](0011-m7-durable-run-bootstrap.md), and evolves the private
+scheduler-preflight schema to 1.3 so the exact authenticated actor text is
+replayed without reinterpretation. Protocol version 2 remains inactive pending
+fixed workload execution, immutable runtime installation, and real-cluster
+acceptance.

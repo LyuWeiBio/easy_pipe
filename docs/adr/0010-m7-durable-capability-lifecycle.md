@@ -133,12 +133,12 @@ or workflow start in this slice.
 
 - Losing the sole successful issuance response intentionally strands that
   preflight; an operator must create a new preflight identity.
-- A future authenticated version-2 request must derive the actor and consumer
-  binding from verified approval rather than accepting arbitrary client text.
-- Consumption is not workflow authorization. Activation requires a separate
-  create-only run intent/permit so a lost consume response cannot start twice.
-- Deployment bootstrap must re-open and hash the bundle, runtime, JAR, and SIFs
-  from the allocated compute node before Nextflow starts.
+- Consumption by itself is not workflow authorization. ADR 0011 adds a dormant
+  authenticated consumer derivation and separate create-only run intent/permit,
+  but no installed workflow-start path.
+- The ADR 0011 bootstrap re-opens and hashes the bundle, runtime, JAR, itself,
+  and every SIF from the allocated compute node; its permit is deliberately
+  unusable after response loss or restart.
 - Durable poll rate limiting, a sleep-inclusive pre-spawn mutation recheck,
   administrator-owned immutable runtime paths, and real-cluster `flock`,
   exclusive-create, directory-`fsync`, suspend, and Slurm acceptance remain
@@ -149,8 +149,8 @@ or workflow start in this slice.
 
 ## Next step
 
-M7.0d-g should define the deployment-to-compute bootstrap and create-only run
-intent/permit without activating protocol version 2. It must consume the exact
-actor and consumer binding recorded here, revalidate all execution artifacts on
-the allocated node, and preserve at-most-once workflow startup across response
-loss and restart.
+M7.0d-g defines the dormant deployment-to-compute bootstrap and create-only run
+intent/permit in [ADR 0011](0011-m7-durable-run-bootstrap.md). It consumes the
+exact actor and consumer binding recorded here, revalidates execution artifacts
+on the allocated node, and burns the at-most-once start decision without
+activating protocol version 2 or starting a workflow.

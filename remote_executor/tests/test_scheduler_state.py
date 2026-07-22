@@ -36,6 +36,7 @@ from bioexec.scheduler_preflight import (
     prepare_preflight,
 )
 from bioexec.scheduler_state import (
+    SCHEDULER_STATE_SCHEMA_VERSION,
     SchedulerCapabilityExpiredError,
     SchedulerCapabilityUnavailableError,
     SchedulerClockDiscontinuityError,
@@ -148,6 +149,7 @@ def state_fixture(tmp_path: Path) -> StateFixture:
         "nextflow",
         "apptainer",
         "compute_worker",
+        "compute_bootstrap",
         "sbatch",
         "squeue",
         "sacct",
@@ -161,6 +163,8 @@ def state_fixture(tmp_path: Path) -> StateFixture:
             if role == "python"
             else "bioexec-compute-preflight"
             if role == "compute_worker"
+            else "bioexec-compute-bootstrap"
+            if role == "compute_bootstrap"
             else role
         )
         for role in executable_roles
@@ -548,7 +552,7 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert metadata.st_nlink == 1
 
     submit_intent = json.loads(files[-1].read_text(encoding="ascii"))
-    assert submit_intent["schema_version"] == "1.2"
+    assert submit_intent["schema_version"] == SCHEDULER_STATE_SCHEMA_VERSION == "1.3"
     assert isinstance(submit_intent["clock_epoch_id"], str)
     assert type(submit_intent["clock_started_boottime_ns"]) is int
 
@@ -1685,7 +1689,7 @@ def test_capability_consumption_is_atomic_bound_and_replayable(
             consumed = stores[index].consume_capability(
                 snapshots[index],
                 token=_RAW_CAPABILITY,
-                consumed_by="run-1",
+                consumed_by="operator-一",
                 consumer_binding_hash=_CONSUMER_BINDING_HASH,
             )
         except (SchedulerStateBusyError, SchedulerStateConflictError) as exc:
@@ -1704,14 +1708,14 @@ def test_capability_consumption_is_atomic_bound_and_replayable(
     )
     capability = restarted.state.capability
     assert capability is not None and capability.consumed
-    assert capability.consumed_by == "run-1"
+    assert capability.consumed_by == "operator-一"
     assert capability.consumer_binding_hash == _CONSUMER_BINDING_HASH
     assert restarted.revision == issued.snapshot.revision + 1
     with pytest.raises(SchedulerStateConflictError) as captured:
         restarted_store.consume_capability(
             restarted,
             token=_RAW_CAPABILITY,
-            consumed_by="run-2",
+            consumed_by="operator-二",
             consumer_binding_hash="f" * 64,
         )
     assert captured.value.reason_code == "SCHEDULER_CAPABILITY_ALREADY_CONSUMED"

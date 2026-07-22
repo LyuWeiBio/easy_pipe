@@ -347,11 +347,13 @@ def test_offline_zipapp_inventory_deeply_validates_members() -> None:
         "bioprobe",
         "bioexec",
         "bioexec_compute_preflight",
+        "bioexec_compute_bootstrap",
     ]
     assert [artifact["archive_name"] for artifact in value["artifacts"]] == [
         "bioprobe.pyz",
         "bioexec.pyz",
         "bioexec-compute-preflight",
+        "bioexec-compute-bootstrap",
     ]
     worker = value["artifacts"][2]
     main = next(member for member in worker["members"] if member["name"] == "__main__.py")
@@ -359,6 +361,16 @@ def test_offline_zipapp_inventory_deeply_validates_members() -> None:
         main["sha256"]
         == hashlib.sha256(
             b"from bioexec.compute_worker import main\nraise SystemExit(main())\n"
+        ).hexdigest()
+    )
+    bootstrap = value["artifacts"][3]
+    bootstrap_main = next(
+        member for member in bootstrap["members"] if member["name"] == "__main__.py"
+    )
+    assert (
+        bootstrap_main["sha256"]
+        == hashlib.sha256(
+            b"from bioexec.compute_bootstrap import main\nraise SystemExit(main())\n"
         ).hexdigest()
     )
 

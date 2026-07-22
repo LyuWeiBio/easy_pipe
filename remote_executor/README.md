@@ -73,6 +73,18 @@ durable. The generic result and driver still always return
 `preflight_token: null`, and no workflow is started. See
 [ADR 0010](../docs/adr/0010-m7-durable-capability-lifecycle.md).
 
+M7.0d-g evolves the private scheduler-preflight schema to 1.3 and adds a
+separate owner-only run-reservation namespace. An authenticated protocol-v2
+request derives the exact actor/consumer binding before capability consumption.
+The fourth reproducible artifact, `bioexec-compute-bootstrap`, can then reload
+that consumed binding from a compute node, fully rehash the sealed deployment,
+Python, Java, Nextflow launcher/JAR, Apptainer, itself, and every SIF, and burn
+one create-only start intent. Its live process/thread/lease-bound permit cannot
+be reconstructed after loss or restart. The artifact consumes only that
+internal permit and exits; it does not submit a workload or invoke Nextflow,
+and no installed protocol path calls it. See
+[ADR 0011](../docs/adr/0011-m7-durable-run-bootstrap.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
@@ -83,8 +95,11 @@ identical bytes:
 SOURCE_DATE_EPOCH=315532800 python remote_executor/build_zipapp.py
 SOURCE_DATE_EPOCH=315532800 python remote_executor/build_zipapp.py \
   --artifact compute-preflight
+SOURCE_DATE_EPOCH=315532800 python remote_executor/build_zipapp.py \
+  --artifact compute-bootstrap
 sha256sum remote_executor/dist/bioexec.pyz
 sha256sum remote_executor/dist/bioexec-compute-preflight
+sha256sum remote_executor/dist/bioexec-compute-bootstrap
 ```
 
 Installation is intentionally manual and should use a dedicated remote
@@ -103,16 +118,19 @@ install -m 0600 remote_executor/examples/config.json \
   "$HOME/.config/bioexec/config.json"
 ```
 
-The dormant M7 worker must instead be installed by an administrator at the
-exact absolute path recorded in scheduler config-v2. The reviewed Python
-interpreter and worker path chains must be immutable to the service identity;
-do not use a symlink or rely on `PATH`. Installing this file does not activate
-Slurm:
+The dormant M7 compute artifacts must instead be installed by an administrator
+at the exact absolute paths recorded in scheduler config-v2. The reviewed
+Python interpreter and both artifact path chains must be immutable to the
+service identity; do not use a symlink or rely on `PATH`. Installing these
+files does not activate Slurm:
 
 ```bash
 sudo install -o root -g root -m 0755 \
   remote_executor/dist/bioexec-compute-preflight \
   /srv/biopipe/runtime/bioexec-compute-preflight
+sudo install -o root -g root -m 0755 \
+  remote_executor/dist/bioexec-compute-bootstrap \
+  /srv/biopipe/runtime/bioexec-compute-bootstrap
 ```
 
 Without an override, the agent selects the first existing config from
@@ -237,5 +255,7 @@ one-use tokens, input replacement, output collision, asynchronous status and
 job-lifetime leases, signed abandonment races, compatible resume, executable,
 JAR, config and ancestor trust, dormant scheduler-config startup identities and
 mutation-boundary rechecks, append-only scheduler state, one-shot mutation
-permits, restart and corruption recovery, isolated client environments, and
-reproducible zipapp execution.
+permits, exact scheduler-run reservations, consumer-bound capability recovery,
+compute-node bootstrap rehashing, at-most-once start permits, restart and
+corruption recovery, isolated client environments, and reproducible zipapp
+execution.
