@@ -96,5 +96,6 @@ are not cluster acceptance evidence.
 ## Next step
 
 M7.0d-b adds the separate raw-bytes, bounded, stdin-capable scheduler transport
-described by ADR 0006. Durable scheduler-preflight state and the fixed compute
-worker remain later M7.0d sub-slices before any version-2 activation.
+described by ADR 0006. M7.0d-c adds the durable scheduler-preflight state and
+one-shot mutation permits described by ADR 0007. The fixed compute worker
+remains a later M7.0d sub-slice before any version-2 activation.

@@ -120,7 +120,8 @@ the current path recheck eliminates a same-identity replacement race.
 
 ## Next step
 
-M7.0d-c must add owner-only, create-only durable scheduler-preflight state and
-exclusive submit/release intent. It must recover ambiguous mutations through
-the fixed discovery and query operations without issuing an unsafe duplicate.
-The compute worker and any protocol-version-2 activation remain later slices.
+M7.0d-c adds the owner-only, append-only scheduler-preflight state and
+exclusive submit/release intents described by ADR 0007. The transport now
+requires a live one-shot permit backed by a durable intent before either
+mutation, while recovery remains read-only and non-resubmitting. The compute
+worker and any protocol-version-2 activation remain later slices.

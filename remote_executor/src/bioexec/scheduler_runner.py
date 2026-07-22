@@ -49,6 +49,11 @@ from .scheduler_preflight import (
     prepare_preflight,
     render_compute_template,
 )
+from .scheduler_state import (
+    SchedulerMutationPermit,
+    SchedulerMutationPermitError,
+    _consume_mutation_permit,
+)
 from .slurm import (
     SlurmContractError,
     SlurmHeldJob,
@@ -307,7 +312,7 @@ _Parsed = TypeVar("_Parsed")
 
 @dataclass(frozen=True)
 class SchedulerRunnerAdapter:
-    """The only public M7.0d-b adapter; no generic command surface is exposed."""
+    """The only public dormant M7 adapter; no generic command surface is exposed."""
 
     config: TrustedSchedulerConfig
 
@@ -315,10 +320,15 @@ class SchedulerRunnerAdapter:
         if not isinstance(self.config, TrustedSchedulerConfig):
             raise SchedulerRunnerContractError("a trusted scheduler configuration is required")
 
-    def submit_held(self, state: SchedulerPreflightState) -> SlurmJobRef:
+    def submit_held(
+        self,
+        state: SchedulerPreflightState,
+        *,
+        permit: SchedulerMutationPermit,
+    ) -> SlurmJobRef:
         """Submit the exact generated compute template once as a held job."""
 
-        deadline = _operation_deadline(float(self.config.contract.scheduler.submit_timeout_seconds))
+        deadline = _permit_deadline(self.config, permit, "submit_held", state)
         _validate_state(self.config, state, {"prepared"})
         worker = state.manifest.worker
         spec = SlurmSubmitSpec(
@@ -413,10 +423,15 @@ class SchedulerRunnerAdapter:
             lambda data: parse_squeue_discovery_output(data, state.submission_marker),
         )
 
-    def release_held(self, state: SchedulerPreflightState) -> SchedulerMutationReceipt:
+    def release_held(
+        self,
+        state: SchedulerPreflightState,
+        *,
+        permit: SchedulerMutationPermit,
+    ) -> SchedulerMutationReceipt:
         """Release only the exact held job from validated release-ready state."""
 
-        deadline = _operation_deadline(self.config.contract.limits.command_timeout_seconds)
+        deadline = _permit_deadline(self.config, permit, "release_held", state)
         _validate_state(self.config, state, {"release_ready"})
         if state.held_job is None:
             raise SchedulerRunnerContractError("release requires exact user-hold evidence")
@@ -609,6 +624,20 @@ def _validate_state(
             "scheduler preflight manifest or template identity changed"
         )
     _related_root_checks(config, state)
+
+
+def _permit_deadline(
+    config: TrustedSchedulerConfig,
+    permit: SchedulerMutationPermit,
+    operation: Literal["submit_held", "release_held"],
+    state: SchedulerPreflightState,
+) -> float:
+    try:
+        return _consume_mutation_permit(permit, operation, state, config)
+    except SchedulerMutationPermitError as exc:
+        raise SchedulerRunnerContractError(
+            "a current unconsumed durable scheduler mutation permit is required"
+        ) from exc
 
 
 def _operation_deadline(timeout_seconds: float) -> float:
@@ -962,6 +991,10 @@ def _communicate_bounded(
             if io_state.overflow or io_state.io_failed:
                 terminated = True
                 break
+            if now >= deadline:
+                timed_out = True
+                terminated = True
+                break
             return_code = process.poll()
             if return_code is not None:
                 if process_exited_at is None:
@@ -972,10 +1005,6 @@ def _communicate_bounded(
                     io_state.io_failed = True
                     terminated = True
                     break
-            if now >= deadline:
-                timed_out = True
-                terminated = True
-                break
             wait_for = min(_POLL_SECONDS, max(0.0, deadline - now))
             if process_exited_at is not None:
                 wait_for = min(

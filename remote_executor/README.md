@@ -36,6 +36,13 @@ transport is testable when imported directly, but no installed entry point or
 version-1 operation imports it, so scheduler mutation remains inactive. See
 [ADR 0006](../docs/adr/0006-m7-bounded-scheduler-transport.md).
 
+M7.0d-c adds a separate owner-only, append-only scheduler-preflight state
+namespace. Submit and release intents are create-only and must yield a live,
+lease-bound one-shot permit before the fixed transport admits either mutation;
+restart recovery never replays them. This layer is also absent from every
+installed version-1 path and does not activate Slurm. See
+[ADR 0007](../docs/adr/0007-m7-durable-scheduler-preflight-state.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
@@ -184,5 +191,6 @@ production allowlisting, create-only deployment, tamper detection, approval,
 one-use tokens, input replacement, output collision, asynchronous status and
 job-lifetime leases, signed abandonment races, compatible resume, executable,
 JAR, config and ancestor trust, dormant scheduler-config startup identities and
-mutation-boundary rechecks, isolated client environments, and reproducible
-zipapp execution.
+mutation-boundary rechecks, append-only scheduler state, one-shot mutation
+permits, restart and corruption recovery, isolated client environments, and
+reproducible zipapp execution.

@@ -1,4 +1,4 @@
-"""Adversarial transport tests for the dormant M7.0d-b scheduler adapter."""
+"""Adversarial transport and durable-permit tests for the dormant M7 adapter."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import os
 import signal
 import subprocess
 import sys
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,6 @@ from bioexec.scheduler_preflight import (
     record_held_submission,
     record_release_intent,
     record_scheduler_poll,
-    record_submit_unknown,
 )
 from bioexec.scheduler_runner import (
     SchedulerCommandStartError,
@@ -42,11 +43,17 @@ from bioexec.scheduler_runner import (
     SchedulerRunnerContractError,
     SchedulerRunnerPreconditionError,
 )
+from bioexec.scheduler_state import (
+    SchedulerMutationPermit,
+    SchedulerPreflightStore,
+    SchedulerStateSnapshot,
+)
 from bioexec.slurm import SlurmHeldJob, SlurmJobRef
 
 _SUBMITTED_AT = "2026-07-19T12:34:56"
 _JOB_ID = "12345"
 _PROFILE_HASH = "a" * 64
+_ATTEMPT_SEQUENCE = count(1)
 
 
 @dataclass(frozen=True)
@@ -193,7 +200,7 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
         "time_limit": "00:15:00",
         "cpus_per_task": 8,
         "memory_mib": 16_384,
-        "submit_timeout_seconds": 1,
+        "submit_timeout_seconds": 2,
         "status_poll_seconds": 5,
         "max_pending_seconds": 60,
     }
@@ -224,7 +231,7 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
         "approval_hmac_key": "c" * 64,
         "limits": {
             "max_command_output_bytes": 1024,
-            "command_timeout_seconds": 1.0,
+            "command_timeout_seconds": 2.0,
         },
     }
     config_path = tmp_path / "scheduler-config.json"
@@ -329,6 +336,50 @@ def _polling(state: SchedulerPreflightState) -> SchedulerPreflightState:
     return record_held_release(_release_ready(state))
 
 
+def _fresh_prepared(
+    fixture: RunnerFixture,
+    state: SchedulerPreflightState | None = None,
+) -> SchedulerPreflightState:
+    basis = fixture.prepared if state is None else state
+    manifest = replace(
+        basis.manifest,
+        preflight_id=f"runner-{next(_ATTEMPT_SEQUENCE)}",
+    )
+    return prepare_preflight(manifest)
+
+
+def _request_sha256(state: SchedulerPreflightState) -> str:
+    return hashlib.sha256(f"runner-test:{state.manifest_sha256}".encode("ascii")).hexdigest()
+
+
+@contextmanager
+def _submit_claim(
+    fixture: RunnerFixture,
+    state: SchedulerPreflightState | None = None,
+) -> Iterator[tuple[SchedulerPreflightStore, SchedulerStateSnapshot, SchedulerMutationPermit]]:
+    prepared = _fresh_prepared(fixture, state)
+    store = SchedulerPreflightStore(fixture.config)
+    snapshot = store.create_or_load(prepared, request_sha256=_request_sha256(prepared))
+    with store.claim_submit(snapshot) as permit:
+        yield store, snapshot, permit
+
+
+@contextmanager
+def _release_claim(
+    fixture: RunnerFixture,
+) -> Iterator[tuple[SchedulerPreflightStore, SchedulerStateSnapshot, SchedulerMutationPermit]]:
+    prepared = _fresh_prepared(fixture)
+    store = SchedulerPreflightStore(fixture.config)
+    request_sha256 = _request_sha256(prepared)
+    snapshot = store.create_or_load(prepared, request_sha256=request_sha256)
+    with store.claim_submit(snapshot):
+        pass
+    unknown = store.load(prepared.manifest.preflight_id, request_sha256=request_sha256)
+    held = store.record_recovered_held(unknown, _held_job(unknown.state))
+    with store.claim_release(held, elapsed_seconds=1) as permit:
+        yield store, held, permit
+
+
 def test_only_six_fixed_public_adapter_methods_exist() -> None:
     methods = {
         name
@@ -391,7 +442,9 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
     monkeypatch.setattr(runner_module.subprocess, "Popen", checked_popen)
     monkeypatch.setattr(runner_module, "_execute_invocation", capture_result)
 
-    job = fixture.adapter.submit_held(fixture.prepared)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):
+        state = permit.state
+        job = fixture.adapter.submit_held(state, permit=permit)
 
     assert job.job_id == _JOB_ID
     assert events[0] == "config"
@@ -408,16 +461,16 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
     }
     assert "PATH" not in popen_kwargs["env"]
     record = fixture.record()
-    assert record["stdin_size"] == len(fixture.prepared.template_bytes)
-    assert record["stdin_sha256"] == fixture.prepared.template_sha256
+    assert record["stdin_size"] == len(state.template_bytes)
+    assert record["stdin_sha256"] == state.template_sha256
     assert "--hold" in record["argv"]
     assert "--parsable" in record["argv"]
     assert not any("--wrap" in value or "scancel" in value for value in record["argv"])
     result = captured_results[0]
     assert result.stdout == f"{_JOB_ID}\n".encode("ascii")
     assert result.stderr == b""
-    assert result.stdin_sha256 == fixture.prepared.template_sha256
-    assert result.stdin_size == len(fixture.prepared.template_bytes)
+    assert result.stdin_sha256 == state.template_sha256
+    assert result.stdin_size == len(state.template_bytes)
     assert result.stdin_bytes_written == result.stdin_size
     assert result.transport_complete is True
 
@@ -426,29 +479,34 @@ def test_all_six_operations_parse_only_strict_successful_transport(
     runner_fixture: RunnerFixture,
 ) -> None:
     fixture = runner_fixture
-    state = fixture.prepared
-    marker = state.submission_marker
+    with _submit_claim(fixture) as (store, _snapshot, submit_permit):
+        state = submit_permit.state
+        marker = state.submission_marker
+        fixture.scenario(stdout_hex=_hex(f"{_JOB_ID}\n".encode("ascii")))
+        provisional = fixture.adapter.submit_held(state, permit=submit_permit)
 
-    fixture.scenario(stdout_hex=_hex(f"{_JOB_ID}\n".encode("ascii")))
-    provisional = fixture.adapter.submit_held(state)
+        hold_row = f"{_JOB_ID}|{_SUBMITTED_AT}|{marker}|PENDING|JobHeldUser\n"
+        fixture.scenario(stdout_hex=_hex(hold_row.encode("ascii")))
+        held = fixture.adapter.query_held(state, provisional)
+        assert held == _held_job(state)
+        held_snapshot = store.record_held(submit_permit, held)
 
-    hold_row = f"{_JOB_ID}|{_SUBMITTED_AT}|{marker}|PENDING|JobHeldUser\n"
-    fixture.scenario(stdout_hex=_hex(hold_row.encode("ascii")))
-    held = fixture.adapter.query_held(state, provisional)
-    assert held == _held_job(state)
-
-    unknown = record_submit_unknown(state)
+    unknown = submit_permit.recovery_state
     discovery_row = f"{_JOB_ID}|{_SUBMITTED_AT}|{marker}|PENDING\n"
     fixture.scenario(stdout_hex=_hex(discovery_row.encode("ascii")))
     discovered = fixture.adapter.discover_submit(unknown)
     assert discovered is not None and discovered.job == _held_job(state).job
 
-    release_ready = _release_ready(state)
-    fixture.scenario()
-    receipt = fixture.adapter.release_held(release_ready)
-    assert receipt.operation == "release_held"
+    with store.claim_release(held_snapshot, elapsed_seconds=1) as release_permit:
+        fixture.scenario()
+        receipt = fixture.adapter.release_held(release_permit.state, permit=release_permit)
+        assert receipt.operation == "release_held"
+        polling_snapshot = store.record_release_success(
+            release_permit,
+            invocation_sha256=receipt.invocation_sha256,
+        )
 
-    polling = record_held_release(release_ready)
+    polling = polling_snapshot.state
     queue_row = f"{_JOB_ID}|{_SUBMITTED_AT}|{marker}|RUNNING\n"
     fixture.scenario(stdout_hex=_hex(queue_row.encode("ascii")))
     queue = fixture.adapter.query_queue(polling)
@@ -467,7 +525,7 @@ def test_all_six_operations_parse_only_strict_successful_transport(
         ({"exit_code": 9}, "SCHEDULER_MUTATION_EXIT_NONZERO"),
         ({"stderr_hex": _hex(b"warning\n")}, "SCHEDULER_MUTATION_STDERR_NONEMPTY"),
         ({"stdout_hex": _hex(b"not-a-job-id\n")}, "SCHEDULER_SUBMIT_OUTPUT_INVALID"),
-        ({"sleep_seconds": 2}, "SCHEDULER_MUTATION_TRANSPORT_INCOMPLETE"),
+        ({"sleep_seconds": 3}, "SCHEDULER_MUTATION_TRANSPORT_INCOMPLETE"),
         (
             {"stdout_hex": _hex(b"a" * 600), "stderr_hex": _hex(b"b" * 600)},
             "SCHEDULER_MUTATION_TRANSPORT_INCOMPLETE",
@@ -482,13 +540,14 @@ def test_submit_post_start_failures_are_sanitized_mutation_unknown(
     fixture = runner_fixture
     fixture.scenario(**scenario)
 
-    with pytest.raises(SchedulerMutationUnknown) as captured:
-        fixture.adapter.submit_held(fixture.prepared)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+        with pytest.raises(SchedulerMutationUnknown) as captured:
+            fixture.adapter.submit_held(permit.state, permit=permit)
 
     error = captured.value
     assert error.reason_code == reason_code
     assert len(error.invocation_sha256) == 64
-    assert error.stdin_sha256 == fixture.prepared.template_sha256
+    assert error.stdin_sha256 == permit.state.template_sha256
     assert not hasattr(error, "stdout")
     assert "#!/bin/sh" not in str(error)
     assert "HOME" not in str(error)
@@ -504,31 +563,31 @@ def test_submit_incomplete_stdin_is_mutation_unknown(
     def failed_writer(_descriptor: int, _data: Any) -> int:
         raise BrokenPipeError("synthetic scheduler stdin failure")
 
-    monkeypatch.setattr(runner_module.os, "write", failed_writer)
-
-    with pytest.raises(SchedulerMutationUnknown) as captured:
-        fixture.adapter.submit_held(fixture.prepared)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):
+        monkeypatch.setattr(runner_module.os, "write", failed_writer)
+        with pytest.raises(SchedulerMutationUnknown) as captured:
+            fixture.adapter.submit_held(permit.state, permit=permit)
 
     assert captured.value.io_failed is True
     assert captured.value.stdin_bytes_written == 0
-    assert captured.value.stdin_size == len(fixture.prepared.template_bytes)
+    assert captured.value.stdin_size == len(permit.state.template_bytes)
 
 
 def test_release_post_start_anomalies_are_never_reported_as_success(
     runner_fixture: RunnerFixture,
 ) -> None:
     fixture = runner_fixture
-    state = _release_ready(fixture.prepared)
 
     for scenario in (
         {"stdout_hex": _hex(b"released\n")},
         {"stderr_hex": _hex(b"warning\n")},
         {"exit_code": 1},
-        {"sleep_seconds": 2},
+        {"sleep_seconds": 3},
     ):
         fixture.scenario(**scenario)
-        with pytest.raises(SchedulerMutationUnknown):
-            fixture.adapter.release_held(state)
+        with _release_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+            with pytest.raises(SchedulerMutationUnknown):
+                fixture.adapter.release_held(permit.state, permit=permit)
 
 
 def test_pre_popen_start_error_is_distinct_from_post_start_unknown(
@@ -542,8 +601,9 @@ def test_pre_popen_start_error_is_distinct_from_post_start_unknown(
 
     monkeypatch.setattr(runner_module.subprocess, "Popen", cannot_start)
 
-    with pytest.raises(SchedulerCommandStartError) as captured:
-        fixture.adapter.submit_held(fixture.prepared)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+        with pytest.raises(SchedulerCommandStartError) as captured:
+            fixture.adapter.submit_held(permit.state, permit=permit)
     assert not isinstance(captured.value, SchedulerMutationUnknown)
     assert len(captured.value.invocation_sha256) == 64
 
@@ -552,11 +612,12 @@ def test_trusted_recheck_failure_is_precondition_not_start_or_unknown(
     runner_fixture: RunnerFixture,
 ) -> None:
     fixture = runner_fixture
-    fixture.executables["sbatch"].write_bytes(b"changed after startup")
-    fixture.executables["sbatch"].chmod(0o755)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):
+        fixture.executables["sbatch"].write_bytes(b"changed after startup")
+        fixture.executables["sbatch"].chmod(0o755)
 
-    with pytest.raises(SchedulerRunnerPreconditionError):
-        fixture.adapter.submit_held(fixture.prepared)
+        with pytest.raises(SchedulerRunnerPreconditionError):
+            fixture.adapter.submit_held(permit.state, permit=permit)
 
 
 @pytest.mark.parametrize(
@@ -564,7 +625,7 @@ def test_trusted_recheck_failure_is_precondition_not_start_or_unknown(
     [
         {"exit_code": 1},
         {"stderr_hex": _hex(b"failure\n")},
-        {"sleep_seconds": 2},
+        {"sleep_seconds": 3},
         {"stdout_hex": _hex(b"a" * 600), "stderr_hex": _hex(b"b" * 600)},
     ],
 )
@@ -644,21 +705,65 @@ def test_phase_job_and_marker_mismatches_fail_before_process_start(
         raise AssertionError("Popen must not run")
 
     monkeypatch.setattr(runner_module.subprocess, "Popen", unexpected_start)
-    with pytest.raises(SchedulerRunnerContractError):
-        fixture.adapter.release_held(fixture.prepared)
+    with _release_claim(fixture) as (  # noqa: SIM117
+        _store,
+        _snapshot,
+        release_permit,
+    ):
+        with pytest.raises(
+            SchedulerRunnerContractError,
+            match="durable scheduler mutation permit",
+        ):
+            fixture.adapter.release_held(fixture.prepared, permit=release_permit)
     with pytest.raises(SchedulerRunnerContractError):
         fixture.adapter.query_held(
             fixture.prepared,
             SlurmJobRef(job_id=_JOB_ID, submission_marker="f" * 64),
         )
-    forged_marker = replace(
-        fixture.prepared,
-        _authority=preflight_module._STATE_AUTHORITY,
-        submission_marker="e" * 64,
-    )
-    with pytest.raises(SchedulerRunnerContractError, match="manifest or template identity"):
-        fixture.adapter.submit_held(forged_marker)
+    with _submit_claim(fixture) as (_store, _snapshot, submit_permit):
+        forged_marker = replace(
+            submit_permit.state,
+            _authority=preflight_module._STATE_AUTHORITY,
+            submission_marker="e" * 64,
+        )
+        with pytest.raises(
+            SchedulerRunnerContractError,
+            match="durable scheduler mutation permit",
+        ):
+            fixture.adapter.submit_held(forged_marker, permit=submit_permit)
     assert started is False
+
+
+def test_expired_and_reused_permits_fail_before_process_start(
+    runner_fixture: RunnerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = runner_fixture
+    fixture.scenario(stdout_hex=_hex(f"{_JOB_ID}\n".encode("ascii")))
+    real_popen = runner_module.subprocess.Popen
+    starts = 0
+
+    def counted_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        nonlocal starts
+        starts += 1
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", counted_popen)
+
+    with _submit_claim(fixture) as (_store, _snapshot, expired_permit):
+        pass
+    with pytest.raises(SchedulerRunnerContractError, match="durable scheduler mutation permit"):
+        fixture.adapter.submit_held(expired_permit.state, permit=expired_permit)
+    assert starts == 0
+
+    with _submit_claim(fixture) as (_store, _snapshot, live_permit):
+        fixture.adapter.submit_held(live_permit.state, permit=live_permit)
+        with pytest.raises(
+            SchedulerRunnerContractError,
+            match="durable scheduler mutation permit",
+        ):
+            fixture.adapter.submit_held(live_permit.state, permit=live_permit)
+    assert starts == 1
 
 
 def test_manifest_paths_must_bind_componentwise_to_trusted_role_roots(
@@ -696,8 +801,16 @@ def test_manifest_paths_must_bind_componentwise_to_trusted_role_roots(
 
     for invalid_manifest in invalid_manifests:
         invalid_state = prepare_preflight(invalid_manifest)
-        with pytest.raises(SchedulerRunnerContractError, match="trusted scheduler role root"):
-            fixture.adapter.submit_held(invalid_state)
+        with _submit_claim(fixture, invalid_state) as (  # noqa: SIM117
+            _store,
+            _snapshot,
+            permit,
+        ):
+            with pytest.raises(
+                SchedulerRunnerContractError,
+                match="trusted scheduler role root",
+            ):
+                fixture.adapter.submit_held(permit.state, permit=permit)
 
 
 def test_escaped_descendant_pipe_hold_has_bounded_cleanup(
@@ -763,13 +876,14 @@ def test_mutation_interrupt_is_always_unknown_after_start_boundary(
         monkeypatch.setattr(runner_module, "_communicate_bounded", interrupted)
         expected_reason = "SCHEDULER_MUTATION_INTERRUPTED"
 
-    with pytest.raises(SchedulerMutationUnknown) as captured:
-        fixture.adapter.submit_held(fixture.prepared)
+    with _submit_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+        with pytest.raises(SchedulerMutationUnknown) as captured:
+            fixture.adapter.submit_held(permit.state, permit=permit)
 
     assert captured.value.reason_code == expected_reason
     assert captured.value.io_failed is True
     if boundary == "parser":
-        assert captured.value.stdin_bytes_written == len(fixture.prepared.template_bytes)
+        assert captured.value.stdin_bytes_written == len(permit.state.template_bytes)
 
 
 def test_release_receipt_interrupt_preserves_mutation_unknown(
@@ -784,8 +898,9 @@ def test_release_receipt_interrupt_preserves_mutation_unknown(
 
     monkeypatch.setattr(runner_module, "SchedulerMutationReceipt", interrupted)
 
-    with pytest.raises(SchedulerMutationUnknown) as captured:
-        fixture.adapter.release_held(_release_ready(fixture.prepared))
+    with _release_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+        with pytest.raises(SchedulerMutationUnknown) as captured:
+            fixture.adapter.release_held(permit.state, permit=permit)
 
     assert captured.value.reason_code == "SCHEDULER_MUTATION_INTERRUPTED"
 
@@ -812,10 +927,12 @@ def test_unexpected_mutation_failure_is_never_exposed_as_retryable(
         raise failure("synthetic mutation boundary failure")
 
     def submit_operation() -> object:
-        return fixture.adapter.submit_held(fixture.prepared)
+        with _submit_claim(fixture) as (_store, _snapshot, permit):
+            return fixture.adapter.submit_held(permit.state, permit=permit)
 
     def release_operation() -> object:
-        return fixture.adapter.release_held(_release_ready(fixture.prepared))
+        with _release_claim(fixture) as (_store, _snapshot, permit):
+            return fixture.adapter.release_held(permit.state, permit=permit)
 
     if boundary == "popen":
         monkeypatch.setattr(runner_module.subprocess, "Popen", failed)
@@ -850,8 +967,9 @@ def test_cleanup_failure_cannot_mask_post_start_mutation_unknown(
     monkeypatch.setattr(runner_module, "_communicate_bounded", failed_transport)
     monkeypatch.setattr(runner_module, "_terminate_process_group", failed_cleanup)
 
-    with pytest.raises(SchedulerMutationUnknown) as captured:
-        fixture.adapter.release_held(_release_ready(fixture.prepared))
+    with _release_claim(fixture) as (_store, _snapshot, permit):  # noqa: SIM117
+        with pytest.raises(SchedulerMutationUnknown) as captured:
+            fixture.adapter.release_held(permit.state, permit=permit)
 
     assert captured.value.reason_code == "SCHEDULER_POST_START_IO_FAILURE"
     assert captured.value.io_failed is True
@@ -917,6 +1035,51 @@ def test_deadline_expiring_during_recheck_prevents_popen(
 
     assert captured.value.reason_code == "SCHEDULER_OPERATION_DEADLINE_EXPIRED"
     assert started is False
+
+
+def test_process_exit_observed_after_absolute_deadline_is_not_success(
+    runner_fixture: RunnerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = runner_fixture
+    state = _polling(fixture.prepared)
+    invocation = runner_module._make_invocation(
+        fixture.config,
+        operation="query_queue",
+        argv=runner_module.build_squeue_argv(
+            str(fixture.config.executables["squeue"].path),
+            state.job,
+        ),
+        stdin_bytes=None,
+        timeout_seconds=1.0,
+        deadline=10.0,
+        state=state,
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        close_fds=True,
+        start_new_session=True,
+    )
+    process.wait(timeout=2)
+    observed_times = iter((9.0, 11.0))
+    monkeypatch.setattr(
+        runner_module.time,
+        "monotonic",
+        lambda: next(observed_times, 11.0),
+    )
+
+    result = runner_module._communicate_bounded(
+        process,
+        invocation,
+        runner_module._IOState(output_limit_bytes=1024),
+    )
+
+    assert result.return_code == 0
+    assert result.timed_out is True
+    assert result.transport_complete is False
 
 
 def test_invocation_identity_binds_timeout_limits_environment_and_executable_hash(
