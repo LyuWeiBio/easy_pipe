@@ -212,7 +212,9 @@ evidence only. It does not activate scheduler execution.
   permit reconstruction would violate at-most-once startup.
 - A path may still change between its final hash and process execution unless
   the service identity cannot mutate the complete path chain.
-- Active protocol-v2 dispatch, fixed workload submission and Nextflow argv,
+- ADR 0012 now defines a pure fixed batch, scheduler submission surface,
+  Nextflow argv/environment/overlay, and start-intent workload hash binding.
+  Materialization, active protocol-v2 dispatch, `sbatch`/Nextflow execution,
   scheduler status/reconciliation, durable poll-rate enforcement, the
   sleep-inclusive pre-spawn scheduler guard, and real-cluster acceptance remain
   unimplemented.
@@ -221,8 +223,11 @@ evidence only. It does not activate scheduler execution.
 
 ## Next step
 
-A later activation slice must connect the dormant pieces through an explicit
-protocol-version-2 dispatcher, define the fixed workload `sbatch` and Nextflow
-continuation, preserve positive-only lost-response recovery and indeterminate
-scheduler evidence, and complete real-cluster acceptance. It must not weaken
-the create-only run identity or start-intent boundary introduced here.
+[ADR 0012](0012-m7-fixed-workload-contract.md) defines and hash-binds the pure
+fixed `sbatch`/Nextflow workload contract while keeping execution dormant. A
+later activation slice must add verified resource compatibility, create-only
+private runtime materialization, an explicit protocol-version-2 dispatcher,
+durable workload job/status reconciliation, positive-only lost-response
+recovery, sleep-inclusive boundary checks, and real-cluster acceptance. It must
+not weaken the create-only run identity or burned start-intent boundary
+introduced here.

@@ -234,6 +234,40 @@ consumed capability binding and fully rehashes Python, Java, Nextflow,
 Apptainer, itself, the Nextflow JAR, the sealed deployment, and every SIF before
 burning one start intent. It does not invoke Nextflow or submit a workload.
 
+M7.0d-h additionally derives one pure workload plan before that intent is
+created. Its fixed batch runs only the configured absolute Python interpreter
+with `-I -S` and `bioexec-compute-bootstrap`; it contains no Nextflow command.
+The same plan records a held single-node `sbatch` argv, but no code passes the
+batch to `sbatch`. Its future Nextflow continuation is fixed to the sealed
+deployment, `-profile local`, the preflight work/output paths and samplesheet,
+a deterministic `-name`, and an explicit prior run name after `-resume` for a
+bound resume request. The isolated environment uses only configured runtime
+paths, private home/temp/config directories, a work-directory-rooted
+`NXF_CACHE_DIR`, offline Nextflow settings, and the reviewed Apptainer cache.
+
+The derived runtime layout is:
+
+```text
+private-state/scheduler-runs-v1/<run_id>/runtime-v1/
+  workload.config
+  nextflow.log
+  home/
+  nxf-home/
+  tmp/
+  apptainer-config/
+<preflight-work-dir>/.easy-pipe-nextflow-cache-v1/
+```
+
+These are plan values, not installation instructions: the current source does
+not create these directories or write `workload.config`. A future activation
+adapter must create the paths owner-only and create-only, verify stable
+ownership/mode/identity, write and `fsync` the exact hash-bound overlay, `fsync`
+its parent directory, and recheck the materialized bytes and paths immediately
+before process creation. Initial and resume work/output paths require the same
+reviewed materialization boundary. Resume additionally requires terminal
+evidence for the exact prior run and stable identity of its shared Nextflow
+cache; those activation checks are not implemented yet.
+
 Each future scheduler attempt uses the shared private layout
 `private-state/scheduler-preflights-v1/<preflight_id>/{manifest,evidence}.json`.
 The attempt directory is exact mode `0700`; both files are exact mode `0600`,
@@ -243,13 +277,19 @@ semantics before scheduler activation.
 
 Each future scheduler run separately uses
 `private-state/scheduler-runs-v1/<run_id>/identity.json` and a create-only
-`start.intent.json`. The exact reservation may be replayed before the start
-intent, but an existing, partial, or uncertain start intent never yields a new
-permit after restart. These owner-only shared-filesystem semantics also require
-real-cluster validation.
+`start.intent.json`. Private scheduler-run schema 1.1 adds the exact
+`workload_binding_sha256` and `workload_batch_sha256` to that intent and its
+live permit. The store accepts the authority-sealed plan rather than caller
+digests and recomputes its canonical, byte, argv, and environment hashes under
+the run lock and again at permit consumption. The exact reservation may be
+replayed before the start intent, but
+an existing, partial, or uncertain start intent never yields a new permit after
+restart. These owner-only shared-filesystem semantics also require real-cluster
+validation; there is no automatic migration from older private run state.
 
-The dormant M7.0d-e driver, M7.0d-f capability lifecycle, and M7.0d-g run
-bootstrap are source-level review surfaces, not an installed ForceCommand.
+The dormant M7.0d-e driver, M7.0d-f capability lifecycle, M7.0d-g run
+bootstrap, and M7.0d-h workload contract are source-level review surfaces, not
+an installed ForceCommand.
 Scheduler-preflight state schema 1.3 records a double-checked OS boot epoch and
 boot-relative monotonic start in the create-only submit intent. Each call may
 perform only the fixed action for the current phase and append at most one
@@ -262,14 +302,21 @@ reissued, and lock/CAS consumption records trusted time, actor, and consumer
 binding before success. The separate run reservation binds that exact actor and
 consumer to the authenticated approval and deployment; the compute bootstrap
 can then consume one non-reconstructible live start permit after allocated-node
-artifact rechecks. It still does not start a workflow and must not be wired into
-protocol version 2 until the remaining activation blockers are reviewed. In
-particular, activation must add a
-sleep-inclusive deadline recheck adjacent to scheduler process creation; the
-current permit guard can precede filesystem validation, and a host suspend in
-that interval cannot undo a later release. Raw capability responses must also
-be excluded from application logs, core dumps, and swap according to site
-policy.
+artifact rechecks. The pure contract binds the future batch, scheduler surface,
+overlay, Nextflow argv, and environment to that intent, but the bootstrap still
+exits without starting a workflow.
+
+Do not wire this into protocol version 2 until the remaining activation
+blockers are reviewed. The overlay carries scheduler-policy CPU and memory
+values, but no independent bounded resource summary proves that every planned
+process fits the allocation. There is also no durable workload job/status
+state, dispatcher, terminal prior-run evidence for resume, or real-cluster
+acceptance. Activation must add those controls plus create-only private
+materialization and a sleep-inclusive deadline recheck adjacent to scheduler
+process creation; the current permit guard can precede filesystem validation,
+and a host suspend in that interval cannot undo a later release. Raw capability
+responses must also be excluded from application logs, core dumps, and swap
+according to site policy.
 
 ## Create the controller approval key and profile
 
