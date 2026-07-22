@@ -374,12 +374,12 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
     )
 
     for directory in directories:
-        metadata = directory.stat(follow_symlinks=False)
+        metadata = directory.lstat()
         assert stat.S_ISDIR(metadata.st_mode)
         assert stat.S_IMODE(metadata.st_mode) == 0o700
         assert metadata.st_uid == os.geteuid()
     for path in files:
-        metadata = path.stat(follow_symlinks=False)
+        metadata = path.lstat()
         assert stat.S_ISREG(metadata.st_mode)
         assert stat.S_IMODE(metadata.st_mode) == 0o600
         assert metadata.st_uid == os.geteuid()
