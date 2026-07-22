@@ -34,14 +34,15 @@ capability.
   preflight and real-data execution support only the Nextflow `local` executor.
   There is no Slurm/PBS/SGE/Kubernetes/cloud submission implementation.
 - M7 currently contains dormant Slurm policy and version-2 profile/config/protocol
-  validators only. The current CLI, config loader, protocol dispatcher, preflight,
-  and runner do not import or activate them, and synthetic tests are not cluster
-  acceptance evidence.
-- The M7 compute-node preflight template and evidence state machine are also
-  dormant contracts. A separate version-2 loader can now bind and recheck
-  trusted startup filesystem identities, but the current service does not
-  import it. There is still no scheduler state namespace, stdin runner, compute
-  worker, scheduler capability, or active version-2 dispatch path.
+  validators, a compute-node preflight contract, a trusted-filesystem loader, a
+  bounded stdin-capable scheduler runner, and an append-only scheduler state
+  namespace with one-shot mutation permits. The installed version-1 CLI,
+  config loader, protocol dispatcher, preflight, and execution runner do not
+  import or activate them, and synthetic tests are not cluster acceptance
+  evidence.
+- There is still no installed compute worker, scheduler capability, durable
+  version-2 orchestration driver, deployment-to-compute recheck, active
+  version-2 dispatch path, or real-cluster acceptance evidence.
 
 ## Hosts and filesystems
 

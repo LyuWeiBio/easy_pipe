@@ -219,6 +219,8 @@ remote account access to data.
 - [M7 versioned scheduler contracts](docs/adr/0003-m7-versioned-scheduler-contracts.md)
 - [M7 compute-node preflight contract](docs/adr/0004-m7-compute-preflight-contract.md)
 - [M7 trusted scheduler config loader](docs/adr/0005-m7-trusted-scheduler-config-loader.md)
+- [M7 bounded scheduler transport](docs/adr/0006-m7-bounded-scheduler-transport.md)
+- [M7 durable scheduler-preflight state](docs/adr/0007-m7-durable-scheduler-preflight-state.md)
 
 ## Development checks
 
