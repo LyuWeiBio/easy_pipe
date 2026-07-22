@@ -38,9 +38,15 @@ The loaded object retains the pure scheduler configuration together with:
 
 - the configuration file identity and complete SHA-256;
 - device, inode, owner, and mode for every configured root;
-- identity plus a bounded full SHA-256 for all seven fixed executable roles;
+- identity plus a bounded full SHA-256 for all seven executable roles fixed at
+  M7.0d-a;
   and
 - identity plus the full expected SHA-256 for the pinned Nextflow JAR.
+
+ADR 0008 later adds the absolute Python interpreter and fixed compute-preflight
+worker, and ADR 0011 adds the compute bootstrap. The current closed set is ten
+roles, all subject to the same startup identity, full-hash, and
+mutation-boundary rechecks.
 
 Writable roots and the state root must be owned by root or the service account;
 the state root remains private. Read roots may retain a data-administrator
@@ -101,5 +107,8 @@ one-shot mutation permits described by ADR 0007. M7.0d-d extends this loader's
 closed executable set with the absolute Python interpreter and fixed compute
 worker, then binds their hashes into manifest 1.1 as described by ADR 0008.
 M7.0d-e joins them only through the dormant driver-to-candidate boundary in ADR
-0009. Capability persistence and active version-2 dispatch remain required
-before activation.
+0009. M7.0d-f adds hash-only capability persistence in ADR 0010, and M7.0d-g
+adds the bootstrap binding and run-start recheck in
+[ADR 0011](0011-m7-durable-run-bootstrap.md). Active version-2 dispatch, fixed
+workload execution, and real-cluster acceptance remain required before
+activation.

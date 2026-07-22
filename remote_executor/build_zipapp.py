@@ -17,11 +17,15 @@ SOURCE_DIR = PROJECT_DIR / "src" / "bioexec"
 LICENSE_FILE = REPOSITORY_ROOT / "LICENSE"
 DEFAULT_OUTPUT = PROJECT_DIR / "dist" / "bioexec.pyz"
 DEFAULT_WORKER_OUTPUT = PROJECT_DIR / "dist" / "bioexec-compute-preflight"
+DEFAULT_BOOTSTRAP_OUTPUT = PROJECT_DIR / "dist" / "bioexec-compute-bootstrap"
 DEFAULT_EPOCH = 315_532_800
 SHEBANG = b"#!/usr/bin/env python3\n"
 ARCHIVE_MAINS = {
     "executor": b"from bioexec.main import main\nraise SystemExit(main())\n",
     "compute-preflight": (b"from bioexec.compute_worker import main\nraise SystemExit(main())\n"),
+    "compute-bootstrap": (
+        b"from bioexec.compute_bootstrap import main\nraise SystemExit(main())\n"
+    ),
 }
 
 
@@ -39,7 +43,9 @@ def build(
     try:
         archive_main = ARCHIVE_MAINS[artifact]
     except KeyError as exc:
-        raise ValueError("artifact must be executor or compute-preflight") from exc
+        raise ValueError(
+            "artifact must be executor, compute-preflight, or compute-bootstrap"
+        ) from exc
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.tmp")
@@ -104,7 +110,12 @@ def main() -> int:
         raise SystemExit("SOURCE_DATE_EPOCH must be an integer") from exc
     output = args.output
     if output is None:
-        output = DEFAULT_OUTPUT if args.artifact == "executor" else DEFAULT_WORKER_OUTPUT
+        if args.artifact == "executor":
+            output = DEFAULT_OUTPUT
+        elif args.artifact == "compute-preflight":
+            output = DEFAULT_WORKER_OUTPUT
+        else:
+            output = DEFAULT_BOOTSTRAP_OUTPUT
     print(build(output, epoch, args.artifact))
     return 0
 

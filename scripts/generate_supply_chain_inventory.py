@@ -799,6 +799,14 @@ def _zipapp_inventory(repository: Path) -> dict[str, Any]:
             "bioexec.compute_worker",
             ("--artifact", "compute-preflight"),
         ),
+        (
+            "bioexec_compute_bootstrap",
+            "bioexec",
+            "remote_executor",
+            "bioexec-compute-bootstrap",
+            "bioexec.compute_bootstrap",
+            ("--artifact", "compute-bootstrap"),
+        ),
     )
     artifacts: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="easy-pipe-zipapps-") as raw_temporary:
@@ -1033,7 +1041,7 @@ def _validate_container_inventory(value: object) -> None:
 README = b"""# Reproducible environment and supply-chain inventory
 
 These files are generated create-only from `environments/m4-test.yml`,
-`pyproject.toml`, the fixed component registry, and three remote zipapp
+`pyproject.toml`, the fixed component registry, and four remote zipapp
 artifacts built from two source trees. Run
 `python scripts/generate_supply_chain_inventory.py verify` for a
 fully offline integrity and contract check.
@@ -1414,11 +1422,12 @@ def _validate_zipapp_inventory(value: object) -> None:
             "status": "pending",
         }
         or not isinstance(value.get("artifacts"), list)
-        or len(value["artifacts"]) != 3
+        or len(value["artifacts"]) != 4
     ):
         _fail("INVALID_ZIPAPP_INVENTORY")
     expected_names = {
         "bioexec": ("bioexec.pyz", "bioexec"),
+        "bioexec_compute_bootstrap": ("bioexec-compute-bootstrap", "bioexec"),
         "bioexec_compute_preflight": ("bioexec-compute-preflight", "bioexec"),
         "bioprobe": ("bioprobe.pyz", "bioprobe"),
     }

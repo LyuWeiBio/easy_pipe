@@ -113,3 +113,42 @@ def test_compute_worker_is_a_distinct_reproducible_silent_entrypoint(
     assert completed.returncode == 70
     assert completed.stdout == b""
     assert completed.stderr == b""
+
+
+def test_compute_bootstrap_is_a_distinct_reproducible_silent_entrypoint(
+    tmp_path: Path,
+) -> None:
+    builder = _builder_module()
+    first = tmp_path / "bioexec-compute-bootstrap"
+    second = tmp_path / "second-bioexec-compute-bootstrap"
+
+    builder.build(first, 315_532_800, "compute-bootstrap")  # type: ignore[attr-defined]
+    builder.build(second, 315_532_800, "compute-bootstrap")  # type: ignore[attr-defined]
+
+    assert first.read_bytes() == second.read_bytes()
+    assert stat.S_IMODE(first.stat().st_mode) == 0o755
+    with zipfile.ZipFile(first) as archive:
+        assert archive.read("__main__.py") == (
+            b"from bioexec.compute_bootstrap import main\nraise SystemExit(main())\n"
+        )
+        assert archive.read("LICENSE") == LICENSE_FILE.read_bytes()
+        assert "bioexec/compute_bootstrap.py" in archive.namelist()
+        assert "bioexec/compute_worker.py" in archive.namelist()
+    system_python = Path("/usr/bin/python3")
+    completed = subprocess.run(
+        [
+            str(system_python if system_python.exists() else Path(sys.executable)),
+            "-I",
+            "-S",
+            str(first),
+        ],
+        text=False,
+        capture_output=True,
+        timeout=5,
+        check=False,
+        shell=False,
+        env={"LANG": "C", "LC_ALL": "C"},
+    )
+    assert completed.returncode == 70
+    assert completed.stdout == b""
+    assert completed.stderr == b""

@@ -24,7 +24,7 @@ after Slurm reports a clean worker exit.
 
 ### 1. Build a third, separately installed artifact
 
-The closed zipapp builder accepts only two roles:
+At M7.0d-d the closed zipapp builder accepted only two executor roles:
 
 ```text
 executor           -> bioexec.main
@@ -35,13 +35,15 @@ The compute artifact is installed as the exact leaf
 `bioexec-compute-preflight`. It has a distinct entry point and SHA-256; it is
 not a renamed `bioexec.pyz` and cannot accept an arbitrary module or entry
 point. Reproducibility checks build it twice under the normalized timestamp,
-member-order, mode, and compression contract. The offline supply-chain
-inventory records three artifacts while the M6.1 release-evidence contract
-continues to cover only the two version-1 agents.
+member-order, mode, and compression contract. At this slice the offline
+supply-chain inventory recorded three artifacts while the M6.1
+release-evidence contract continued to cover only the two version-1 agents.
+ADR 0011 later adds the one closed `compute-bootstrap` role and fourth remote
+artifact without changing that M6.1 boundary.
 
 ### 2. Bind the interpreter and complete compute runtime in manifest 1.1
 
-Scheduler config-v2 now fixes absolute executables with the exact leaves
+At M7.0d-d scheduler config-v2 fixes absolute executables with the exact leaves
 `python3`, `java`, `nextflow`, `apptainer`, and
 `bioexec-compute-preflight`. The trusted loader records and hashes all five,
 plus the exact Nextflow one/shadow JAR. The compute manifest is explicitly
@@ -53,6 +55,11 @@ version `1.1` and adds:
 - command timeout and combined output budgets; and
 - exact device, inode, owner, group, and mode for deployment, work, and output
   directories when resuming.
+
+ADR 0011 later adds `bioexec-compute-bootstrap` as the sixth compute-side
+executable and tenth config-v2 executable overall. It is not part of the
+preflight manifest because its distinct run bootstrap rechecks itself against
+the trusted scheduler configuration immediately before the start intent.
 
 Resume identity records must appear exactly when `resume_run_id` appears, and
 all three directories must remain exact mode `0700`. The service derives the
@@ -210,17 +217,19 @@ proven terminated; site cgroup/runtime controls remain required.
   projections and root-managed runtime installation.
 - Shared-filesystem `O_EXCL`, `flock`, stable identity, and directory `fsync`
   behavior still require a real Slurm-cluster acceptance run.
-- Capability-to-run intent, post-deployment compute rechecks, active dispatch,
-  and real workflow execution remain unimplemented.
+- ADR 0011 adds dormant capability-to-run intent and post-deployment compute
+  rechecks, but active dispatch and real workflow execution remain
+  unimplemented.
 
 ## Next step
 
 M7.0d-e adds the durable driver-to-candidate connection and trusted boot clock
 described by ADR 0009. M7.0d-f adds the separate token-hash-only capability
-lifecycle in ADR 0010. A later deployment/bootstrap slice must re-open and re-hash the
-deployed bundle and all runtime artifacts on the allocated compute node
-immediately before Nextflow. No version-2 operation may be activated until
-those pieces and real cluster acceptance are complete.
+lifecycle in ADR 0010. M7.0d-g adds the fourth compute-bootstrap artifact,
+create-only run intent, and allocated-node deployment/runtime rechecks in
+[ADR 0011](0011-m7-durable-run-bootstrap.md). It still does not invoke
+Nextflow. No version-2 operation may be activated until fixed workload
+execution and real cluster acceptance are complete.
 
 ## Official scheduler basis
 

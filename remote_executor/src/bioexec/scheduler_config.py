@@ -60,6 +60,7 @@ _EXECUTABLE_FIELDS = frozenset(
         "nextflow",
         "apptainer",
         "compute_worker",
+        "compute_bootstrap",
         "sbatch",
         "squeue",
         "sacct",
@@ -72,6 +73,7 @@ _EXECUTABLE_LEAVES = {
     "nextflow": "nextflow",
     "apptainer": "apptainer",
     "compute_worker": "bioexec-compute-preflight",
+    "compute_bootstrap": "bioexec-compute-bootstrap",
     "sbatch": "sbatch",
     "squeue": "squeue",
     "sacct": "sacct",
@@ -159,6 +161,7 @@ class SchedulerExecutables:
     nextflow: str
     apptainer: str
     compute_worker: str
+    compute_bootstrap: str
     sbatch: str
     squeue: str
     sacct: str
@@ -179,6 +182,10 @@ class SchedulerExecutables:
             nextflow=_fixed_executable(mapping["nextflow"], "nextflow"),
             apptainer=_fixed_executable(mapping["apptainer"], "apptainer"),
             compute_worker=_fixed_executable(mapping["compute_worker"], "compute_worker"),
+            compute_bootstrap=_fixed_executable(
+                mapping["compute_bootstrap"],
+                "compute_bootstrap",
+            ),
             sbatch=_fixed_executable(mapping["sbatch"], "sbatch"),
             squeue=_fixed_executable(mapping["squeue"], "squeue"),
             sacct=_fixed_executable(mapping["sacct"], "sacct"),
@@ -194,6 +201,7 @@ class SchedulerExecutables:
             "nextflow": self.nextflow,
             "apptainer": self.apptainer,
             "compute_worker": self.compute_worker,
+            "compute_bootstrap": self.compute_bootstrap,
             "sbatch": self.sbatch,
             "squeue": self.squeue,
             "sacct": self.sacct,

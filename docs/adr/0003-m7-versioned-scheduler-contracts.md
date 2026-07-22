@@ -114,11 +114,17 @@ The dormant config-v2 parser accepts the full v1 configuration field set plus:
 - the exact runtime object above; and
 - the exact scheduler policy.
 
-Its executable set is exactly:
+The initial M7.0b executable set was exactly:
 
 ```text
 java, nextflow, apptainer, sbatch, squeue, sacct, scontrol
 ```
+
+ADR 0008 later adds the fixed `python3` interpreter and
+`bioexec-compute-preflight` worker needed by allocated-node preflight. ADR 0011
+adds the separate `bioexec-compute-bootstrap` artifact. The current dormant
+config-v2 executable set is therefore exactly those ten roles; the later ADRs
+do not make the syntax-only parser or protocol reachable.
 
 Every executable is one canonical absolute path with its fixed leaf name.
 `scontrol` is reserved for a later fixed held-job release operation. `docker`,
