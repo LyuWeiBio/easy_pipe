@@ -97,5 +97,7 @@ are not cluster acceptance evidence.
 
 M7.0d-b adds the separate raw-bytes, bounded, stdin-capable scheduler transport
 described by ADR 0006. M7.0d-c adds the durable scheduler-preflight state and
-one-shot mutation permits described by ADR 0007. The fixed compute worker
-remains a later M7.0d sub-slice before any version-2 activation.
+one-shot mutation permits described by ADR 0007. M7.0d-d extends this loader's
+closed executable set with the absolute Python interpreter and fixed compute
+worker, then binds their hashes into manifest 1.1 as described by ADR 0008.
+Durable version-2 orchestration remains required before activation.

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field, replace
@@ -35,7 +36,7 @@ from .slurm import (
     scheduler_policy_hash,
 )
 
-MANIFEST_VERSION = "1.0"
+MANIFEST_VERSION = "1.1"
 EVIDENCE_VERSION = "1.0"
 WORKER_CONTRACT_VERSION = "1.0"
 
@@ -91,6 +92,7 @@ _MANIFEST_FIELDS = frozenset(
         "profile_hash",
         "scheduler_policy_hash",
         "scheduler_policy",
+        "compute_runtime",
         "project_hash",
         "artifact_hashes",
         "source_host",
@@ -108,6 +110,7 @@ _MANIFEST_FIELDS = frozenset(
         "minimum_free_bytes",
         "network_disabled",
         "resume_run_id",
+        "resume_directory_identities",
         "preflight_ttl_seconds",
         "worker",
     }
@@ -132,6 +135,25 @@ _WORKER_FIELDS = frozenset(
         "evidence_path",
     }
 )
+_RUNTIME_FIELDS = frozenset(
+    {
+        "python_executable",
+        "python_sha256",
+        "java_executable",
+        "java_sha256",
+        "nextflow_executable",
+        "nextflow_sha256",
+        "nextflow_version",
+        "nextflow_jar",
+        "nextflow_jar_sha256",
+        "apptainer_executable",
+        "apptainer_sha256",
+        "command_timeout_seconds",
+        "max_command_output_bytes",
+    }
+)
+_RESUME_DIRECTORY_ROLES = frozenset({"deploy", "work", "output"})
+_DIRECTORY_IDENTITY_FIELDS = frozenset({"device", "inode", "owner", "group", "mode"})
 _EVIDENCE_FIELDS = frozenset(
     {
         "evidence_version",
@@ -239,6 +261,110 @@ class ContainerBinding:
 
 
 @dataclass(frozen=True)
+class ComputeRuntimeBinding:
+    """Exact compute-visible runtime identities and bounded command policy."""
+
+    python_executable: str
+    python_sha256: str
+    java_executable: str
+    java_sha256: str
+    nextflow_executable: str
+    nextflow_sha256: str
+    nextflow_version: str
+    nextflow_jar: str
+    nextflow_jar_sha256: str
+    apptainer_executable: str
+    apptainer_sha256: str
+    command_timeout_seconds: float
+    max_command_output_bytes: int
+
+    def __post_init__(self) -> None:
+        _fixed_runtime_path(
+            self.python_executable,
+            "compute_runtime.python_executable",
+            "python3",
+        )
+        _digest(self.python_sha256, "compute_runtime.python_sha256")
+        _fixed_runtime_path(self.java_executable, "compute_runtime.java_executable", "java")
+        _digest(self.java_sha256, "compute_runtime.java_sha256")
+        _fixed_runtime_path(
+            self.nextflow_executable,
+            "compute_runtime.nextflow_executable",
+            "nextflow",
+        )
+        _digest(self.nextflow_sha256, "compute_runtime.nextflow_sha256")
+        _identifier(self.nextflow_version, "compute_runtime.nextflow_version")
+        _absolute_path(self.nextflow_jar, "compute_runtime.nextflow_jar")
+        _digest(self.nextflow_jar_sha256, "compute_runtime.nextflow_jar_sha256")
+        _fixed_runtime_path(
+            self.apptainer_executable,
+            "compute_runtime.apptainer_executable",
+            "apptainer",
+        )
+        _digest(self.apptainer_sha256, "compute_runtime.apptainer_sha256")
+        _bounded_number(
+            self.command_timeout_seconds,
+            "compute_runtime.command_timeout_seconds",
+            1.0,
+            3600.0,
+        )
+        _strict_int(
+            self.max_command_output_bytes,
+            "compute_runtime.max_command_output_bytes",
+            1024,
+            16 * 1024 * 1024,
+        )
+
+    def as_mapping(self) -> dict[str, Any]:
+        return {
+            "python_executable": self.python_executable,
+            "python_sha256": self.python_sha256,
+            "java_executable": self.java_executable,
+            "java_sha256": self.java_sha256,
+            "nextflow_executable": self.nextflow_executable,
+            "nextflow_sha256": self.nextflow_sha256,
+            "nextflow_version": self.nextflow_version,
+            "nextflow_jar": self.nextflow_jar,
+            "nextflow_jar_sha256": self.nextflow_jar_sha256,
+            "apptainer_executable": self.apptainer_executable,
+            "apptainer_sha256": self.apptainer_sha256,
+            "command_timeout_seconds": self.command_timeout_seconds,
+            "max_command_output_bytes": self.max_command_output_bytes,
+        }
+
+
+@dataclass(frozen=True)
+class ResumeDirectoryIdentity:
+    """One exact private directory identity required for a resume attempt."""
+
+    device: int
+    inode: int
+    owner: int
+    group: int
+    mode: int
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("device", self.device),
+            ("inode", self.inode),
+            ("owner", self.owner),
+            ("group", self.group),
+        ):
+            _strict_int(value, f"resume_directory_identity.{label}", 0, 2**63 - 1)
+        if self.mode != 0o700:
+            raise SchedulerPreflightError("resume directory identity must require mode 0700")
+
+    def as_mapping(self) -> dict[str, int]:
+        return {
+            "device": self.device,
+            "inode": self.inode,
+            "owner": self.owner,
+            "group": self.group,
+            "mode": self.mode,
+        }
+
+
+@dataclass(frozen=True)
 class ComputeWorkerBinding:
     """Trusted future worker identity; without it no script can be rendered."""
 
@@ -277,6 +403,7 @@ class ComputePreflightManifest:
     profile_hash: str
     scheduler_policy_hash: str
     scheduler_policy: SlurmSchedulerPolicy
+    compute_runtime: ComputeRuntimeBinding
     project_hash: str
     artifact_hashes: Mapping[str, str]
     source_host: str
@@ -293,6 +420,7 @@ class ComputePreflightManifest:
     containers: tuple[ContainerBinding, ...]
     minimum_free_bytes: int
     resume_run_id: str | None
+    resume_directory_identities: Mapping[str, ResumeDirectoryIdentity] | None
     preflight_ttl_seconds: int
     worker: ComputeWorkerBinding
 
@@ -305,8 +433,24 @@ class ComputePreflightManifest:
         _digest(self.input_set_hash, "input_set_hash")
         if not isinstance(self.scheduler_policy, SlurmSchedulerPolicy):
             raise SchedulerPreflightError("scheduler_policy must be validated")
+        if not isinstance(self.compute_runtime, ComputeRuntimeBinding):
+            raise SchedulerPreflightError("compute_runtime must be validated")
         if not isinstance(self.worker, ComputeWorkerBinding):
             raise SchedulerPreflightError("a trusted compute worker binding is required")
+        if self.resume_run_id is None:
+            if self.resume_directory_identities is not None:
+                raise SchedulerPreflightError("initial preflight cannot carry resume identities")
+        elif (
+            not isinstance(self.resume_directory_identities, Mapping)
+            or set(self.resume_directory_identities) != _RESUME_DIRECTORY_ROLES
+            or any(
+                not isinstance(identity, ResumeDirectoryIdentity)
+                for identity in self.resume_directory_identities.values()
+            )
+        ):
+            raise SchedulerPreflightError(
+                "resume preflight requires all exact directory identities"
+            )
 
     def as_mapping(self) -> dict[str, Any]:
         return {
@@ -317,6 +461,7 @@ class ComputePreflightManifest:
             "profile_hash": self.profile_hash,
             "scheduler_policy_hash": self.scheduler_policy_hash,
             "scheduler_policy": self.scheduler_policy.as_mapping(),
+            "compute_runtime": self.compute_runtime.as_mapping(),
             "project_hash": self.project_hash,
             "artifact_hashes": dict(self.artifact_hashes),
             "source_host": self.source_host,
@@ -334,6 +479,14 @@ class ComputePreflightManifest:
             "minimum_free_bytes": self.minimum_free_bytes,
             "network_disabled": True,
             "resume_run_id": self.resume_run_id,
+            "resume_directory_identities": (
+                None
+                if self.resume_directory_identities is None
+                else {
+                    role: self.resume_directory_identities[role].as_mapping()
+                    for role in sorted(self.resume_directory_identities)
+                }
+            ),
             "preflight_ttl_seconds": self.preflight_ttl_seconds,
             "worker": self.worker.as_mapping(),
         }
@@ -559,7 +712,7 @@ def parse_compute_manifest(value: Any) -> ComputePreflightManifest:
     manifest = _object(value, "compute manifest")
     _exact_fields(manifest, _MANIFEST_FIELDS, "compute manifest")
     if manifest["manifest_version"] != MANIFEST_VERSION:
-        raise SchedulerPreflightError("manifest_version must be exactly 1.0")
+        raise SchedulerPreflightError(f"manifest_version must be exactly {MANIFEST_VERSION}")
     if manifest["profile_version"] != "2.0":
         raise SchedulerPreflightError("profile_version must be exactly 2.0")
 
@@ -573,6 +726,33 @@ def parse_compute_manifest(value: Any) -> ComputePreflightManifest:
         raise SchedulerPreflightError("scheduler_policy violates the fixed Slurm contract") from exc
     if scheduler_policy_hash(policy) != policy_hash:
         raise SchedulerPreflightError("scheduler_policy does not match scheduler_policy_hash")
+    runtime_value = _object(manifest["compute_runtime"], "compute_runtime")
+    _exact_fields(runtime_value, _RUNTIME_FIELDS, "compute_runtime")
+    runtime = ComputeRuntimeBinding(
+        python_executable=cast(str, runtime_value["python_executable"]),
+        python_sha256=cast(str, runtime_value["python_sha256"]),
+        java_executable=cast(str, runtime_value["java_executable"]),
+        java_sha256=cast(str, runtime_value["java_sha256"]),
+        nextflow_executable=cast(str, runtime_value["nextflow_executable"]),
+        nextflow_sha256=cast(str, runtime_value["nextflow_sha256"]),
+        nextflow_version=cast(str, runtime_value["nextflow_version"]),
+        nextflow_jar=cast(str, runtime_value["nextflow_jar"]),
+        nextflow_jar_sha256=cast(str, runtime_value["nextflow_jar_sha256"]),
+        apptainer_executable=cast(str, runtime_value["apptainer_executable"]),
+        apptainer_sha256=cast(str, runtime_value["apptainer_sha256"]),
+        command_timeout_seconds=_bounded_number(
+            runtime_value["command_timeout_seconds"],
+            "compute_runtime.command_timeout_seconds",
+            1.0,
+            3600.0,
+        ),
+        max_command_output_bytes=_strict_int(
+            runtime_value["max_command_output_bytes"],
+            "compute_runtime.max_command_output_bytes",
+            1024,
+            16 * 1024 * 1024,
+        ),
+    )
 
     project_hash = _digest(manifest["project_hash"], "project_hash")
     hashes_value = _object(manifest["artifact_hashes"], "artifact_hashes")
@@ -652,6 +832,68 @@ def parse_compute_manifest(value: Any) -> ComputePreflightManifest:
         raise SchedulerPreflightError("network_disabled must be true")
     resume_value = manifest["resume_run_id"]
     resume_run_id = None if resume_value is None else _identifier(resume_value, "resume_run_id")
+    resume_identities_value = manifest["resume_directory_identities"]
+    resume_identities: Mapping[str, ResumeDirectoryIdentity] | None
+    if resume_identities_value is None:
+        resume_identities = None
+    else:
+        identities_mapping = _object(
+            resume_identities_value,
+            "resume_directory_identities",
+        )
+        _exact_fields(
+            identities_mapping,
+            _RESUME_DIRECTORY_ROLES,
+            "resume_directory_identities",
+        )
+        parsed_identities: dict[str, ResumeDirectoryIdentity] = {}
+        for role in sorted(_RESUME_DIRECTORY_ROLES):
+            identity_value = _object(
+                identities_mapping[role],
+                f"resume_directory_identities.{role}",
+            )
+            _exact_fields(
+                identity_value,
+                _DIRECTORY_IDENTITY_FIELDS,
+                f"resume_directory_identities.{role}",
+            )
+            parsed_identities[role] = ResumeDirectoryIdentity(
+                device=_strict_int(
+                    identity_value["device"],
+                    f"resume_directory_identities.{role}.device",
+                    0,
+                    2**63 - 1,
+                ),
+                inode=_strict_int(
+                    identity_value["inode"],
+                    f"resume_directory_identities.{role}.inode",
+                    0,
+                    2**63 - 1,
+                ),
+                owner=_strict_int(
+                    identity_value["owner"],
+                    f"resume_directory_identities.{role}.owner",
+                    0,
+                    2**63 - 1,
+                ),
+                group=_strict_int(
+                    identity_value["group"],
+                    f"resume_directory_identities.{role}.group",
+                    0,
+                    2**63 - 1,
+                ),
+                mode=_strict_int(
+                    identity_value["mode"],
+                    f"resume_directory_identities.{role}.mode",
+                    0,
+                    0o7777,
+                ),
+            )
+        resume_identities = MappingProxyType(parsed_identities)
+    if (resume_run_id is None) != (resume_identities is None):
+        raise SchedulerPreflightError(
+            "resume_run_id and resume_directory_identities must appear together"
+        )
     ttl = _strict_int(
         manifest["preflight_ttl_seconds"],
         "preflight_ttl_seconds",
@@ -673,6 +915,7 @@ def parse_compute_manifest(value: Any) -> ComputePreflightManifest:
         profile_hash=profile_hash,
         scheduler_policy_hash=policy_hash,
         scheduler_policy=policy,
+        compute_runtime=runtime,
         project_hash=project_hash,
         artifact_hashes=MappingProxyType(dict(sorted(artifact_hashes.items()))),
         source_host=source_host,
@@ -689,6 +932,7 @@ def parse_compute_manifest(value: Any) -> ComputePreflightManifest:
         containers=tuple(containers),
         minimum_free_bytes=minimum_free,
         resume_run_id=resume_run_id,
+        resume_directory_identities=resume_identities,
         preflight_ttl_seconds=ttl,
         worker=worker,
     )
@@ -712,12 +956,13 @@ def render_compute_template(manifest: ComputePreflightManifest) -> bytes:
 
     validated = _validated_manifest(manifest)
     worker = validated.worker
+    runtime = validated.compute_runtime
     digest = manifest_hash(validated)
     script = (
         "#!/bin/sh\n"
         "set -eu\n"
         "umask 077\n"
-        f"exec {worker.executable} \\\n"
+        f"exec {runtime.python_executable} -I -S {worker.executable} \\\n"
         f"  --contract-version={WORKER_CONTRACT_VERSION} \\\n"
         f"  --manifest={worker.manifest_path} \\\n"
         f"  --manifest-sha256={digest} \\\n"
@@ -1088,13 +1333,7 @@ def record_compute_evidence(
             elapsed_seconds=elapsed,
             reason_code="SLURM_PREFLIGHT_OVERALL_TIMEOUT",
         )
-    if isinstance(value, bytes):
-        evidence = decode_compute_evidence(value)
-    elif isinstance(value, ComputePreflightEvidence):
-        evidence = parse_compute_evidence(value.as_mapping())
-    else:
-        evidence = parse_compute_evidence(dict(value))
-    _bind_evidence(state, evidence)
+    evidence = validate_compute_evidence_binding(state, value)
     digest = evidence_hash(evidence)
     if evidence.status == "failed":
         failed = next(check for check in evidence.checks if check.status == "failed")
@@ -1114,6 +1353,23 @@ def record_compute_evidence(
         evidence_sha256=digest,
         elapsed_seconds=elapsed,
     )
+
+
+def validate_compute_evidence_binding(
+    state: SchedulerPreflightState,
+    value: ComputePreflightEvidence | Mapping[str, Any] | bytes,
+) -> ComputePreflightEvidence:
+    """Parse and bind worker evidence to one scheduler-confirmed attempt."""
+
+    _require_phase(state, {"awaiting_evidence"})
+    if isinstance(value, bytes):
+        evidence = decode_compute_evidence(value)
+    elif isinstance(value, ComputePreflightEvidence):
+        evidence = parse_compute_evidence(value.as_mapping())
+    else:
+        evidence = parse_compute_evidence(dict(value))
+    _bind_evidence(state, evidence)
+    return evidence
 
 
 def issue_capability(
@@ -1640,6 +1896,15 @@ def _fixed_worker_path(value: Any, label: str, leaf: str) -> str:
     return value
 
 
+def _fixed_runtime_path(value: Any, label: str, leaf: str) -> str:
+    if not isinstance(value, str) or not _SAFE_WORKER_PATH.fullmatch(value):
+        raise SchedulerPreflightError(f"{label} must be one shell-inert ASCII path")
+    path = PurePosixPath(value)
+    if path == PurePosixPath("/") or ".." in path.parts or str(path) != value or path.name != leaf:
+        raise SchedulerPreflightError(f"{label} must end in the fixed {leaf!r} leaf")
+    return value
+
+
 def _array(
     value: Any,
     label: str,
@@ -1664,6 +1929,15 @@ def _strict_int(value: Any, label: str, minimum: int, maximum: int) -> int:
     if type(value) is not int or not minimum <= value <= maximum:
         raise SchedulerPreflightError(f"{label} is outside its strict integer range")
     return value
+
+
+def _bounded_number(value: Any, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SchedulerPreflightError(f"{label} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or not minimum <= result <= maximum:
+        raise SchedulerPreflightError(f"{label} is outside its supported range")
+    return result
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1714,10 +1988,12 @@ __all__ = [
     "ComputeCheckEvidence",
     "ComputePreflightEvidence",
     "ComputePreflightManifest",
+    "ComputeRuntimeBinding",
     "ComputeWorkerBinding",
     "ContainerBinding",
     "PathMappingBinding",
     "PreflightCapability",
+    "ResumeDirectoryIdentity",
     "SchedulerPreflightError",
     "SchedulerPreflightState",
     "canonical_evidence_bytes",
@@ -1741,4 +2017,5 @@ __all__ = [
     "record_submit_unknown",
     "render_compute_template",
     "template_hash",
+    "validate_compute_evidence_binding",
 ]

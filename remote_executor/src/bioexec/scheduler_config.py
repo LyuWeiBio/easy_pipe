@@ -54,8 +54,29 @@ _RUNTIME_FIELDS = frozenset(
     }
 )
 _EXECUTABLE_FIELDS = frozenset(
-    {"java", "nextflow", "apptainer", "sbatch", "squeue", "sacct", "scontrol"}
+    {
+        "python",
+        "java",
+        "nextflow",
+        "apptainer",
+        "compute_worker",
+        "sbatch",
+        "squeue",
+        "sacct",
+        "scontrol",
+    }
 )
+_EXECUTABLE_LEAVES = {
+    "python": "python3",
+    "java": "java",
+    "nextflow": "nextflow",
+    "apptainer": "apptainer",
+    "compute_worker": "bioexec-compute-preflight",
+    "sbatch": "sbatch",
+    "squeue": "squeue",
+    "sacct": "sacct",
+    "scontrol": "scontrol",
+}
 _LIMIT_FIELDS = frozenset(
     {
         "max_request_bytes",
@@ -133,9 +154,11 @@ class SchedulerRuntime:
 class SchedulerExecutables:
     """Absolute fixed-leaf executable paths required by the M7 topology."""
 
+    python: str
     java: str
     nextflow: str
     apptainer: str
+    compute_worker: str
     sbatch: str
     squeue: str
     sacct: str
@@ -151,9 +174,11 @@ class SchedulerExecutables:
 
         mapping = _exact_mapping(value, _EXECUTABLE_FIELDS, "executables")
         return cls(
+            python=_fixed_executable(mapping["python"], "python"),
             java=_fixed_executable(mapping["java"], "java"),
             nextflow=_fixed_executable(mapping["nextflow"], "nextflow"),
             apptainer=_fixed_executable(mapping["apptainer"], "apptainer"),
+            compute_worker=_fixed_executable(mapping["compute_worker"], "compute_worker"),
             sbatch=_fixed_executable(mapping["sbatch"], "sbatch"),
             squeue=_fixed_executable(mapping["squeue"], "squeue"),
             sacct=_fixed_executable(mapping["sacct"], "sacct"),
@@ -164,9 +189,11 @@ class SchedulerExecutables:
         """Return the canonical executable role order."""
 
         return {
+            "python": self.python,
             "java": self.java,
             "nextflow": self.nextflow,
             "apptainer": self.apptainer,
+            "compute_worker": self.compute_worker,
             "sbatch": self.sbatch,
             "squeue": self.squeue,
             "sacct": self.sacct,
@@ -503,8 +530,11 @@ def _absolute_path(value: Any, field: str) -> str:
 
 def _fixed_executable(value: Any, field: str) -> str:
     path = _absolute_path(value, f"executables.{field}")
-    if PurePosixPath(path).name != field:
-        raise SchedulerConfigError(f"executables.{field} must use the fixed {field!r} leaf")
+    expected_leaf = _EXECUTABLE_LEAVES.get(field)
+    if expected_leaf is None or PurePosixPath(path).name != expected_leaf:
+        raise SchedulerConfigError(
+            f"executables.{field} must use the fixed {expected_leaf or field!r} leaf"
+        )
     return path
 
 

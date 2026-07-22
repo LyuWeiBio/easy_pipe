@@ -43,6 +43,16 @@ restart recovery never replays them. This layer is also absent from every
 installed version-1 path and does not activate Slurm. See
 [ADR 0007](../docs/adr/0007-m7-durable-scheduler-preflight-state.md).
 
+M7.0d-d adds a third reproducible artifact,
+`bioexec-compute-preflight`, whose fixed entry point performs the twelve
+compute-node checks and publishes one canonical create-only evidence file. Its
+manifest binds an absolute Python interpreter, Java, Nextflow launcher and JAR,
+Apptainer, the worker itself, command budgets, and resume-directory identities.
+The durable state store creates the private manifest and can read and bind the
+private evidence after scheduler-confirmed success. No version-1 entry point
+imports the worker and no version-2 driver invokes it yet. See
+[ADR 0008](../docs/adr/0008-m7-fixed-compute-preflight-worker.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
@@ -51,7 +61,10 @@ identical bytes:
 
 ```bash
 SOURCE_DATE_EPOCH=315532800 python remote_executor/build_zipapp.py
+SOURCE_DATE_EPOCH=315532800 python remote_executor/build_zipapp.py \
+  --artifact compute-preflight
 sha256sum remote_executor/dist/bioexec.pyz
+sha256sum remote_executor/dist/bioexec-compute-preflight
 ```
 
 Installation is intentionally manual and should use a dedicated remote
@@ -68,6 +81,18 @@ install -d -m 0700 "$HOME/.config/bioexec" "$HOME/.local/bin"
 install -m 0755 remote_executor/dist/bioexec.pyz "$HOME/.local/bin/bioexec.pyz"
 install -m 0600 remote_executor/examples/config.json \
   "$HOME/.config/bioexec/config.json"
+```
+
+The dormant M7 worker must instead be installed by an administrator at the
+exact absolute path recorded in scheduler config-v2. The reviewed Python
+interpreter and worker path chains must be immutable to the service identity;
+do not use a symlink or rely on `PATH`. Installing this file does not activate
+Slurm:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  remote_executor/dist/bioexec-compute-preflight \
+  /srv/biopipe/runtime/bioexec-compute-preflight
 ```
 
 Without an override, the agent selects the first existing config from

@@ -156,7 +156,7 @@ service must not mint one until a later connection slice provides:
 
 - a trusted version-2 configuration loader with parent, owner, mode, symlink,
   and startup-identity checks plus mutation-boundary rechecks;
-- a hash-bound compute worker or interpreter;
+- a hash-bound compute worker and interpreter;
 - a bounded stdin-capable scheduler runner;
 - a distinct scheduler-preflight state namespace and record schema;
 - an exclusive submit-intent claim before the first `sbatch` call;
@@ -190,7 +190,7 @@ reject version-1 records.
 
 - This PR cannot run a real Slurm preflight or issue a usable capability.
 - Activation requires trusted filesystem loading, durable concurrency control,
-  and a reviewed compute worker in a separate change.
+  the reviewed compute worker, and a durable connection driver.
 - Bundle identity requires a second compute-node check after deployment.
 
 ## Official scheduler basis
@@ -209,9 +209,10 @@ handling.
 
 ## Next step
 
-M7.0d-a through M7.0d-c implement the dormant trusted loader, bounded scheduler
-runner, and durable scheduler-preflight state described by ADRs 0005 through
-0007. The next connection work must add the fixed compute worker. No version-2
-operation may be activated until every prerequisite is present, and the
-completed connection must remain unable to start a workflow until deployment
-and every runtime artifact are revalidated from the allocated compute node.
+M7.0d-a through M7.0d-d implement the dormant trusted loader, bounded scheduler
+runner, durable scheduler-preflight state, and fixed compute worker described
+by ADRs 0005 through 0008. The next connection work must add the durable
+version-2 orchestration and capability lifecycle. No version-2 operation may
+be activated until every prerequisite is present, and the completed connection
+must remain unable to start a workflow until deployment and every runtime
+artifact are revalidated from the allocated compute node.

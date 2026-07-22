@@ -36,13 +36,19 @@ capability.
 - M7 currently contains dormant Slurm policy and version-2 profile/config/protocol
   validators, a compute-node preflight contract, a trusted-filesystem loader, a
   bounded stdin-capable scheduler runner, and an append-only scheduler state
-  namespace with one-shot mutation permits. The installed version-1 CLI,
-  config loader, protocol dispatcher, preflight, and execution runner do not
-  import or activate them, and synthetic tests are not cluster acceptance
-  evidence.
-- There is still no installed compute worker, scheduler capability, durable
-  version-2 orchestration driver, deployment-to-compute recheck, active
-  version-2 dispatch path, or real-cluster acceptance evidence.
+  namespace with one-shot mutation permits. A third reproducible,
+  separately-installed `bioexec-compute-preflight` artifact now implements the
+  twelve fixed compute checks, hash-bound runtime/interpreter manifest, exact
+  resume identities, and descriptor-safe manifest/evidence files. The
+  installed version-1 CLI, config loader, protocol dispatcher, preflight, and
+  execution runner do not import or activate any of this, and synthetic tests
+  are not cluster acceptance evidence.
+- There is still no scheduler capability persistence, durable version-2
+  orchestration driver, deployment-to-compute recheck, active version-2
+  dispatch path, boot/monotonic-clock continuity proof, or real-cluster
+  acceptance evidence. Path hashing and later process execution are not
+  atomic; activation requires administrator-owned immutable runtime paths or a
+  separately reviewed descriptor-based execution design.
 
 ## Hosts and filesystems
 

@@ -16,13 +16,18 @@ from typing import Any
 import pytest
 
 import bioexec.scheduler_state as state_module
+from bioexec.scheduler_bindings import SchedulerBindingError, expected_worker_paths
 from bioexec.scheduler_config_loader import (
     TrustedSchedulerConfig,
     load_trusted_scheduler_config,
 )
 from bioexec.scheduler_preflight import (
+    COMPUTE_CHECK_NAMES,
     SchedulerPreflightState,
+    canonical_evidence_bytes,
+    canonical_manifest_bytes,
     input_set_hash,
+    parse_compute_evidence,
     parse_compute_manifest,
     prepare_preflight,
 )
@@ -38,6 +43,7 @@ from bioexec.scheduler_state import (
     SchedulerStateInvalidError,
     SchedulerStatePreconditionError,
     SchedulerStateSnapshot,
+    SchedulerWorkerEvidencePending,
 )
 from bioexec.slurm import SlurmHeldJob, SlurmJobRef, SlurmObservation
 
@@ -108,9 +114,11 @@ def state_fixture(tmp_path: Path) -> StateFixture:
         roots[role] = root
 
     executable_roles = (
+        "python",
         "java",
         "nextflow",
         "apptainer",
+        "compute_worker",
         "sbatch",
         "squeue",
         "sacct",
@@ -118,7 +126,17 @@ def state_fixture(tmp_path: Path) -> StateFixture:
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(mode=0o700)
-    executables = {role: bin_dir / role for role in executable_roles}
+    executable_leaves = {
+        role: (
+            "python3"
+            if role == "python"
+            else "bioexec-compute-preflight"
+            if role == "compute_worker"
+            else role
+        )
+        for role in executable_roles
+    }
+    executables = {role: bin_dir / executable_leaves[role] for role in executable_roles}
     for executable in executables.values():
         _write_executable(executable)
 
@@ -182,17 +200,31 @@ def state_fixture(tmp_path: Path) -> StateFixture:
     config_path.chmod(0o600)
     config = load_trusted_scheduler_config(config_path)
 
-    worker_dir = roots["state"] / "preflight-1"
-    worker_dir.mkdir(mode=0o700)
+    worker_dir = roots["state"] / "scheduler-preflights-v1" / "preflight-1"
     execution_paths = (str(roots["read"] / "sample_R1.fastq.gz"),)
     manifest_value: dict[str, Any] = {
-        "manifest_version": "1.0",
+        "manifest_version": "1.1",
         "preflight_id": "preflight-1",
         "profile_version": "2.0",
         "profile_id": config.contract.profile_id,
         "profile_hash": config.contract.profile_hash,
         "scheduler_policy_hash": config.scheduler_policy_hash,
         "scheduler_policy": policy,
+        "compute_runtime": {
+            "python_executable": str(executables["python"]),
+            "python_sha256": config.executables["python"].sha256,
+            "java_executable": str(executables["java"]),
+            "java_sha256": config.executables["java"].sha256,
+            "nextflow_executable": str(executables["nextflow"]),
+            "nextflow_sha256": config.executables["nextflow"].sha256,
+            "nextflow_version": config.contract.nextflow_version,
+            "nextflow_jar": str(nextflow_jar),
+            "nextflow_jar_sha256": config.nextflow_jar.sha256,
+            "apptainer_executable": str(executables["apptainer"]),
+            "apptainer_sha256": config.executables["apptainer"].sha256,
+            "command_timeout_seconds": config.contract.limits.command_timeout_seconds,
+            "max_command_output_bytes": config.contract.limits.max_command_output_bytes,
+        },
         "project_hash": _project_hash(),
         "artifact_hashes": _artifact_hashes(),
         "source_host": "source-host",
@@ -230,11 +262,12 @@ def state_fixture(tmp_path: Path) -> StateFixture:
         "minimum_free_bytes": 1024 * 1024,
         "network_disabled": True,
         "resume_run_id": None,
+        "resume_directory_identities": None,
         "preflight_ttl_seconds": 900,
         "worker": {
             "contract_version": "1.0",
-            "executable": str(worker_dir / "bioexec-compute-preflight"),
-            "executable_sha256": "d" * 64,
+            "executable": str(executables["compute_worker"]),
+            "executable_sha256": config.executables["compute_worker"].sha256,
             "manifest_path": str(worker_dir / "manifest.json"),
             "evidence_path": str(worker_dir / "evidence.json"),
         },
@@ -307,6 +340,64 @@ def _held_snapshot(
         )
 
 
+def _awaiting_evidence_snapshot(
+    fixture: StateFixture,
+    store: SchedulerPreflightStore,
+) -> SchedulerStateSnapshot:
+    held = _held_snapshot(fixture, store)
+    with store.claim_release(held, elapsed_seconds=1):
+        pass
+    unknown = store.load(
+        fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert unknown.state.job is not None
+    active = store.record_scheduler_poll(
+        unknown,
+        queue=SlurmObservation(source="squeue", job=unknown.state.job, state="RUNNING"),
+        accounting=None,
+        elapsed_seconds=2,
+    )
+    return store.record_scheduler_poll(
+        active,
+        queue=None,
+        accounting=SlurmObservation(
+            source="sacct",
+            job=active.state.job,
+            state="COMPLETED",
+            exit_code=(0, 0),
+        ),
+        elapsed_seconds=3,
+    )
+
+
+def _worker_evidence_value(state: SchedulerPreflightState) -> dict[str, Any]:
+    assert state.job is not None
+    return {
+        "evidence_version": "1.0",
+        "preflight_id": state.manifest.preflight_id,
+        "profile_id": state.manifest.profile_id,
+        "profile_hash": state.manifest.profile_hash,
+        "scheduler_policy_hash": state.manifest.scheduler_policy_hash,
+        "project_hash": state.manifest.project_hash,
+        "input_set_hash": state.manifest.input_set_hash,
+        "manifest_sha256": state.manifest_sha256,
+        "worker_sha256": state.manifest.worker.executable_sha256,
+        "job_id": state.job.job_id,
+        "submission_marker": state.job.submission_marker,
+        "status": "passed",
+        "checks": [
+            {
+                "name": name,
+                "status": "passed",
+                "code": "OK",
+                "evidence_sha256": hashlib.sha256(name.encode("ascii")).hexdigest(),
+            }
+            for name in COMPUTE_CHECK_NAMES
+        ],
+    }
+
+
 def _write_canonical(path: Path, value: dict[str, Any]) -> None:
     path.write_bytes(
         (
@@ -339,6 +430,9 @@ def test_create_or_load_is_idempotent_only_for_the_exact_request(
     assert first.journal_sha256 == repeated.journal_sha256 == restarted.journal_sha256
     assert first.submit_intent_sha256 is None
     assert first.release_intent_sha256 is None
+    assert (state_fixture.attempt / "manifest.json").read_bytes() == canonical_manifest_bytes(
+        state_fixture.prepared.manifest
+    )
 
     with pytest.raises(SchedulerStateConflictError) as changed:
         first_store.create_or_load(
@@ -370,6 +464,7 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         namespace / ".create.lock",
         state_fixture.attempt / "lease.lock",
         state_fixture.attempt / "identity.json",
+        state_fixture.attempt / "manifest.json",
         state_fixture.attempt / "submit.intent.json",
     )
 
@@ -384,6 +479,33 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert stat.S_IMODE(metadata.st_mode) == 0o600
         assert metadata.st_uid == os.geteuid()
         assert metadata.st_nlink == 1
+
+
+@pytest.mark.parametrize("tamper", ["mode", "hardlink", "symlink", "bytes"])
+def test_worker_manifest_tampering_blocks_state_adoption(
+    state_fixture: StateFixture,
+    tamper: str,
+) -> None:
+    store = _new_store(state_fixture)
+    _create(state_fixture, store)
+    path = state_fixture.attempt / "manifest.json"
+    if tamper == "mode":
+        path.chmod(0o640)
+    elif tamper == "hardlink":
+        os.link(path, state_fixture.attempt / "manifest-alias.json")
+    elif tamper == "symlink":
+        target = state_fixture.attempt / "manifest-target.json"
+        path.rename(target)
+        path.symlink_to(target)
+    else:
+        path.write_bytes(b"{}")
+        path.chmod(0o600)
+
+    with pytest.raises(SchedulerStateInvalidError):
+        store.load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
 
 
 def test_submit_intent_restarts_as_unknown_and_cannot_be_claimed_twice(
@@ -706,6 +828,134 @@ def test_positive_poll_evidence_recovers_release_unknown_without_releasing_again
     )
     assert completed.state.phase == "awaiting_evidence"
     assert completed.revision == 3
+
+
+def test_worker_evidence_read_is_phase_gated_stable_private_and_canonical(
+    state_fixture: StateFixture,
+) -> None:
+    store = _new_store(state_fixture)
+    initial = _create(state_fixture, store)
+    with pytest.raises(SchedulerStateConflictError):
+        store.read_worker_evidence(initial)
+
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    with pytest.raises(SchedulerWorkerEvidencePending):
+        store.read_worker_evidence(awaiting)
+    state = awaiting.state
+    value = _worker_evidence_value(state)
+    evidence = parse_compute_evidence(value)
+    path = state_fixture.attempt / "evidence.json"
+    path.write_bytes(canonical_evidence_bytes(evidence))
+    path.chmod(0o600)
+
+    assert store.read_worker_evidence(awaiting) == evidence
+
+    path.chmod(0o640)
+    with pytest.raises(SchedulerStateInvalidError):
+        store.read_worker_evidence(awaiting)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("preflight_id", "other-preflight"),
+        ("profile_id", "other-profile"),
+        ("profile_hash", "b" * 64),
+        ("manifest_sha256", "c" * 64),
+        ("worker_sha256", "d" * 64),
+        ("job_id", "67890"),
+        ("submission_marker", "e" * 64),
+    ],
+)
+def test_worker_evidence_reader_binds_the_current_attempt(
+    state_fixture: StateFixture,
+    field: str,
+    value: str,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence_value = _worker_evidence_value(awaiting.state)
+    evidence_value[field] = value
+    evidence = parse_compute_evidence(evidence_value)
+    path = state_fixture.attempt / "evidence.json"
+    path.write_bytes(canonical_evidence_bytes(evidence))
+    path.chmod(0o600)
+
+    with pytest.raises(SchedulerStateInvalidError):
+        store.read_worker_evidence(awaiting)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["hardlink", "symlink", "noncanonical", "duplicate_key", "oversized"],
+)
+def test_worker_evidence_reader_rejects_unsafe_or_noncanonical_files(
+    state_fixture: StateFixture,
+    tamper: str,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence = parse_compute_evidence(_worker_evidence_value(awaiting.state))
+    path = state_fixture.attempt / "evidence.json"
+    path.write_bytes(canonical_evidence_bytes(evidence))
+    path.chmod(0o600)
+
+    if tamper == "hardlink":
+        os.link(path, state_fixture.attempt / "evidence-alias.json")
+    elif tamper == "symlink":
+        target = state_fixture.attempt / "evidence-target.json"
+        path.rename(target)
+        path.symlink_to(target)
+    elif tamper == "noncanonical":
+        path.write_bytes(b" " + path.read_bytes())
+    elif tamper == "duplicate_key":
+        path.write_bytes(b'{"evidence_version":"1.0","evidence_version":"1.0"}')
+    else:
+        path.write_bytes(b"x" * (256 * 1024 + 1))
+    if not path.is_symlink():
+        path.chmod(0o600)
+
+    with pytest.raises(SchedulerStateInvalidError):
+        store.read_worker_evidence(awaiting)
+
+
+def test_worker_evidence_reader_detects_path_replacement_during_read(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence = parse_compute_evidence(_worker_evidence_value(awaiting.state))
+    path = state_fixture.attempt / "evidence.json"
+    path.write_bytes(canonical_evidence_bytes(evidence))
+    path.chmod(0o600)
+    evidence_inode = path.stat().st_ino
+    original_read = state_module._read_bounded
+    replaced = False
+
+    def replace_after_read(descriptor: int, maximum: int) -> bytes:
+        nonlocal replaced
+        payload = original_read(descriptor, maximum)
+        if not replaced and os.fstat(descriptor).st_ino == evidence_inode:
+            path.rename(state_fixture.attempt / "evidence-original.json")
+            path.write_bytes(payload)
+            path.chmod(0o600)
+            replaced = True
+        return payload
+
+    monkeypatch.setattr(state_module, "_read_bounded", replace_after_read)
+    with pytest.raises(SchedulerStateInvalidError):
+        store.read_worker_evidence(awaiting)
+    assert replaced is True
+
+
+@pytest.mark.parametrize("preflight_id", ["../escape", "a/b", ".", "", "a" * 129])
+def test_worker_path_derivation_rejects_unsafe_preflight_ids(
+    state_fixture: StateFixture,
+    preflight_id: str,
+) -> None:
+    with pytest.raises(SchedulerBindingError):
+        expected_worker_paths(state_fixture.config, preflight_id)
 
 
 @pytest.mark.parametrize(

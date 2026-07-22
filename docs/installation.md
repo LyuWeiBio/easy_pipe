@@ -83,15 +83,20 @@ biopipe version --json
 See [M4 validation and synthetic testing](m4-validation-testing.md) for the
 exact reviewed versions and degraded-mode behavior.
 
-## Build the remote zipapps
+## Build the remote artifacts
 
-Build both artifacts from the exact checkout that matches the controller:
+Build the two version-1 zipapps from the exact checkout that matches the
+controller. Also build the separate dormant M7 compute-preflight artifact when
+reviewing or preparing a future Slurm deployment:
 
 ```bash
 SOURCE_DATE_EPOCH=315532800 \
   python remote_probe/build_zipapp.py --output remote_probe/dist/bioprobe.pyz
 SOURCE_DATE_EPOCH=315532800 \
   python remote_executor/build_zipapp.py --output remote_executor/dist/bioexec.pyz
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-preflight \
+  --output remote_executor/dist/bioexec-compute-preflight
 ```
 
 Record the checksums before transferring the files:
@@ -99,13 +104,15 @@ Record the checksums before transferring the files:
 ```bash
 shasum -a 256 remote_probe/dist/bioprobe.pyz
 shasum -a 256 remote_executor/dist/bioexec.pyz
+shasum -a 256 remote_executor/dist/bioexec-compute-preflight
 ```
 
 On Linux, `sha256sum` is equivalent. Repeat the builds with the same source and
 `SOURCE_DATE_EPOCH` and require byte-identical output before a release. The
-zipapps contain only project modules and rely on the remote Python standard
+artifacts contain only project modules and rely on the remote Python standard
 library, plus the repository MIT `LICENSE`; they do not bundle Python itself or
-third-party Python packages.
+third-party Python packages. `bioexec-compute-preflight` is not imported by the
+installed version-1 service and is not evidence that Slurm is active.
 
 Continue with [remote deployment](remote-deployment.md). Copying a zipapp to a
 server without configuring allowlists, permissions, and a fixed SSH command is
@@ -159,7 +166,9 @@ active. Then:
 1. disable or remove the corresponding constrained SSH key;
 2. revoke the execution HMAC key and remove its controller copy;
 3. archive required audit, result, and configuration evidence;
-4. remove only the reviewed `bioprobe.pyz` or `bioexec.pyz` and configuration;
+4. remove only the reviewed `bioprobe.pyz`, `bioexec.pyz`, dormant
+   `bioexec-compute-preflight`, and configuration that belong to this
+   deployment;
 5. separately decide whether deployments, work, results, cache, and private
    state may be retained or removed.
 
