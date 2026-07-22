@@ -39,16 +39,25 @@ capability.
   namespace with one-shot mutation permits. A third reproducible,
   separately-installed `bioexec-compute-preflight` artifact now implements the
   twelve fixed compute checks, hash-bound runtime/interpreter manifest, exact
-  resume identities, and descriptor-safe manifest/evidence files. The
+  resume identities, and descriptor-safe manifest/evidence files. A dormant
+  start-or-one-poll driver now binds a trusted boot-relative clock, prevents
+  submit/release replay, and journals complete compute evidence only through
+  the non-authorizing `candidate` phase. The
   installed version-1 CLI, config loader, protocol dispatcher, preflight, and
   execution runner do not import or activate any of this, and synthetic tests
   are not cluster acceptance evidence.
-- There is still no scheduler capability persistence, durable version-2
-  orchestration driver, deployment-to-compute recheck, active version-2
-  dispatch path, boot/monotonic-clock continuity proof, or real-cluster
-  acceptance evidence. Path hashing and later process execution are not
+- There is still no scheduler capability persistence, deployment-to-compute
+  recheck, active version-2 dispatch path, or real-cluster acceptance evidence.
+  The dormant driver's retry hint is not a rate limiter; active dispatch must
+  enforce durable per-attempt poll cadence before exposing scheduler queries.
+  The clock contract is implemented for Linux and Darwin but still needs real
+  deployment validation. Path hashing and later process execution are not
   atomic; activation requires administrator-owned immutable runtime paths or a
-  separately reviewed descriptor-based execution design.
+  separately reviewed descriptor-based execution design. A suspend between the
+  mutation permit guard and process creation can also cause a late scheduler
+  mutation; the durable post-action timeout prevents authorization or replay
+  but cannot undo that mutation, so a sleep-inclusive pre-spawn recheck is an
+  activation blocker.
 
 ## Hosts and filesystems
 

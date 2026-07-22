@@ -28,6 +28,7 @@ from .scheduler_bindings import (
     SchedulerBindingError,
     validate_compute_bindings,
 )
+from .scheduler_clock import ClockSample, SchedulerClock, SchedulerClockError, SystemSchedulerClock
 from .scheduler_config_loader import (
     SchedulerConfigLoadError,
     TrustedSchedulerConfig,
@@ -41,12 +42,18 @@ from .scheduler_preflight import (
     canonical_evidence_bytes,
     canonical_manifest_bytes,
     decode_compute_evidence,
+    evidence_hash,
     parse_compute_manifest,
+    preflight_overall_timeout_seconds,
     prepare_preflight,
+    record_clock_discontinuity,
+    record_compute_evidence,
+    record_driver_timeout,
     record_held_release,
     record_held_submission,
     record_release_intent,
     record_release_unknown,
+    record_revision_budget_exhausted,
     record_scheduler_poll,
     record_submit_unknown,
     validate_compute_evidence_binding,
@@ -55,7 +62,7 @@ from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservati
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
-SCHEDULER_STATE_SCHEMA_VERSION = "1.0"
+SCHEDULER_STATE_SCHEMA_VERSION = "1.1"
 _NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
@@ -67,7 +74,7 @@ _SUBMIT_INTENT_FILE = "submit.intent.json"
 _RELEASE_INTENT_FILE = "release.intent.json"
 _MAX_IDENTITY_OVERHEAD_BYTES = 64 * 1024
 _MAX_INTENT_BYTES = 64 * 1024
-_MAX_REVISION_BYTES = 256 * 1024
+_MAX_REVISION_BYTES = 512 * 1024
 _MAX_REVISIONS = 8192
 _REVISION_NAME = re.compile(r"[0-9]{20}\.json", re.ASCII)
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", re.ASCII)
@@ -130,6 +137,8 @@ _SUBMIT_INTENT_FIELDS = frozenset(
         "manifest_sha256",
         "template_sha256",
         "submission_marker",
+        "clock_epoch_id",
+        "clock_started_boottime_ns",
     }
 )
 _RELEASE_INTENT_FIELDS = frozenset(
@@ -202,6 +211,17 @@ class SchedulerWorkerEvidencePending(SchedulerStateError):
     """Scheduler success is visible but the create-only evidence file is absent."""
 
 
+class SchedulerClockDiscontinuityError(SchedulerStateError):
+    """The durable submit clock can no longer be continued safely."""
+
+    def __init__(self, snapshot: SchedulerStateSnapshot) -> None:
+        self.snapshot = snapshot
+        super().__init__(
+            "SCHEDULER_CLOCK_DISCONTINUITY",
+            "the trusted scheduler clock epoch is discontinuous",
+        )
+
+
 @dataclass(frozen=True)
 class SchedulerStateSnapshot:
     """Opaque immutable view of one replayed durable attempt."""
@@ -235,6 +255,9 @@ class _LeaseSession:
     config_sha256: str
     contract_sha256: str
     scheduler_policy_sha256: str
+    clock: SchedulerClock
+    clock_started: ClockSample
+    overall_timeout_seconds: int
     operation: SchedulerMutationOperation
     pid: int
     thread: threading.Thread
@@ -307,11 +330,14 @@ class SchedulerPreflightStore:
     """Trusted append-only scheduler-preflight state store."""
 
     config: TrustedSchedulerConfig
+    clock: SchedulerClock = field(default_factory=SystemSchedulerClock, repr=False, compare=False)
     _store_token: object = field(default_factory=object, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.config, TrustedSchedulerConfig):
             raise SchedulerStateContractError("trusted scheduler configuration is required")
+        if not callable(getattr(self.clock, "sample", None)):
+            raise SchedulerStateContractError("trusted scheduler clock is required")
 
     def create_or_load(
         self,
@@ -372,39 +398,146 @@ class SchedulerPreflightStore:
             _require_snapshot_cas(loaded, selected)
             if loaded.state.phase != "awaiting_evidence":
                 raise _conflict("SCHEDULER_EVIDENCE_PHASE_CONFLICT")
+            return _read_bound_worker_evidence(opened, loaded)
+
+    def ingest_worker_evidence(
+        self,
+        snapshot: SchedulerStateSnapshot,
+        *,
+        elapsed_seconds: int,
+    ) -> SchedulerStateSnapshot:
+        """Atomically bind one stable worker result into the append-only journal."""
+
+        elapsed = _strict_int(elapsed_seconds, "elapsed_seconds", 0, 2**63 - 1)
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            if loaded.state.phase != "awaiting_evidence":
+                raise _conflict("SCHEDULER_EVIDENCE_PHASE_CONFLICT")
+            evidence = _read_bound_worker_evidence(opened, loaded)
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=elapsed,
+            )
+            if authoritative is None:
+                return self._snapshot(current)
+            current = _append_timeout_if_due(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
+            )
+            if current is not loaded:
+                return self._snapshot(current)
             try:
-                payload = _read_private_bytes(
-                    opened.attempt_fd,
-                    _WORKER_EVIDENCE_FILE,
-                    256 * 1024,
+                advanced = record_compute_evidence(
+                    current.state,
+                    evidence,
+                    elapsed_seconds=authoritative,
                 )
-            except FileNotFoundError as exc:
-                raise SchedulerWorkerEvidencePending(
-                    "SCHEDULER_WORKER_EVIDENCE_PENDING",
-                    "compute evidence is not visible after scheduler success",
+            except SchedulerPreflightError as exc:
+                raise SchedulerStateContractError(
+                    "worker evidence elapsed time is invalid"
                 ) from exc
-        try:
-            evidence = decode_compute_evidence(payload)
-            if canonical_evidence_bytes(evidence) != payload:
-                raise SchedulerPreflightError("worker evidence bytes are not canonical")
-            evidence = validate_compute_evidence_binding(loaded.state, evidence)
-        except SchedulerPreflightError as exc:
-            raise _invalid("SCHEDULER_WORKER_EVIDENCE_INVALID") from exc
-        return evidence
+            event = {
+                "type": "compute_evidence",
+                "evidence_sha256": evidence_hash(evidence),
+                "elapsed_seconds": authoritative,
+                "evidence": evidence.as_mapping(),
+            }
+            current = _append_revision(self.config, opened, current, event)
+        if current.state != advanced:
+            raise SchedulerStateCommitUnknown(
+                "SCHEDULER_EVIDENCE_POST_COMMIT_UNKNOWN",
+                "durable worker evidence did not replay to the expected state",
+            )
+        return self._snapshot(current)
+
+    def observe_elapsed(
+        self,
+        snapshot: SchedulerStateSnapshot,
+    ) -> tuple[SchedulerStateSnapshot, int | None]:
+        """Read trusted elapsed time or durably invalidate a discontinuous epoch."""
+
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            if loaded.submit_intent is None:
+                raise _conflict("SCHEDULER_CLOCK_NOT_STARTED")
+            current, elapsed = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=0,
+            )
+            if elapsed is None:
+                return self._snapshot(current), None
+        return selected, elapsed
+
+    def record_timeout_if_due(
+        self,
+        snapshot: SchedulerStateSnapshot,
+        *,
+        elapsed_seconds: int,
+    ) -> SchedulerStateSnapshot:
+        """Durably make any reached driver deadline irreversible."""
+
+        elapsed = _strict_int(elapsed_seconds, "elapsed_seconds", 0, 2**63 - 1)
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=elapsed,
+            )
+            if authoritative is None:
+                return self._snapshot(current)
+            current = _append_timeout_if_due(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
+            )
+            if current is loaded:
+                return selected
+        return self._snapshot(current)
 
     @contextlib.contextmanager
     def claim_submit(self, snapshot: SchedulerStateSnapshot) -> Iterator[SchedulerMutationPermit]:
         """Durably burn the sole submit attempt before yielding a live permit."""
 
-        deadline = _operation_deadline(float(self.config.contract.scheduler.submit_timeout_seconds))
         selected = self._bound_snapshot(snapshot)
         with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
             loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
             _require_snapshot_cas(loaded, selected)
             if loaded.state.phase != "prepared" or loaded.submit_intent is not None:
                 raise _conflict("SCHEDULER_SUBMIT_ALREADY_CLAIMED")
+            try:
+                clock_sample = self.clock.sample()
+            except SchedulerClockError as exc:
+                raise SchedulerStatePreconditionError(
+                    "SCHEDULER_CLOCK_UNAVAILABLE",
+                    "trusted boot clock is unavailable before scheduler submission",
+                ) from exc
+            overall_timeout = preflight_overall_timeout_seconds(loaded.state)
+            deadline = _lease_deadline(
+                float(self.config.contract.scheduler.submit_timeout_seconds),
+                started=clock_sample,
+                current=clock_sample,
+                overall_timeout_seconds=overall_timeout,
+            )
             _require_live_deadline(deadline)
-            intent = _submit_intent_mapping(self.config, loaded)
+            intent = _submit_intent_mapping(self.config, loaded, clock_sample)
             intent_sha256 = _create_record(
                 opened.attempt_fd,
                 _SUBMIT_INTENT_FILE,
@@ -418,6 +551,9 @@ class SchedulerPreflightStore:
                 config_sha256=self.config.config_sha256,
                 contract_sha256=self.config.contract_sha256,
                 scheduler_policy_sha256=self.config.scheduler_policy_hash,
+                clock=self.clock,
+                clock_started=clock_sample,
+                overall_timeout_seconds=overall_timeout,
                 operation="submit_held",
                 pid=os.getpid(),
                 thread=threading.current_thread(),
@@ -453,7 +589,12 @@ class SchedulerPreflightStore:
     ) -> Iterator[SchedulerMutationPermit]:
         """Durably burn the sole exact held-job release before yielding a permit."""
 
-        deadline = _operation_deadline(self.config.contract.limits.command_timeout_seconds)
+        requested_elapsed = _strict_int(
+            elapsed_seconds,
+            "elapsed_seconds",
+            0,
+            2**63 - 1,
+        )
         selected = self._bound_snapshot(snapshot)
         with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
             loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
@@ -461,7 +602,16 @@ class SchedulerPreflightStore:
             if loaded.state.phase != "held" or loaded.release_intent is not None:
                 raise _conflict("SCHEDULER_RELEASE_ALREADY_CLAIMED")
             try:
-                ready = record_release_intent(loaded.state, elapsed_seconds=elapsed_seconds)
+                current_clock, trusted_elapsed = _trusted_elapsed_sample(self.clock, loaded)
+            except (SchedulerClockError, SchedulerStateContractError):
+                invalidated = _append_clock_discontinuity(self.config, opened, loaded)
+                raise SchedulerClockDiscontinuityError(self._snapshot(invalidated)) from None
+            effective_elapsed = max(requested_elapsed, trusted_elapsed)
+            try:
+                ready = record_release_intent(
+                    loaded.state,
+                    elapsed_seconds=effective_elapsed,
+                )
             except SchedulerPreflightError as exc:
                 raise SchedulerStateContractError("release elapsed time is invalid") from exc
             if ready.phase == "timed_out":
@@ -473,6 +623,13 @@ class SchedulerPreflightStore:
                 raise SchedulerStateDeadlineError(self._snapshot(current))
             if ready.phase != "release_ready":
                 raise SchedulerStateContractError("release intent did not produce release_ready")
+            overall_timeout = preflight_overall_timeout_seconds(loaded.state)
+            deadline = _lease_deadline(
+                self.config.contract.limits.command_timeout_seconds,
+                started=_clock_sample_from_intent(cast(Mapping[str, Any], loaded.submit_intent)),
+                current=current_clock,
+                overall_timeout_seconds=overall_timeout,
+            )
             _require_live_deadline(deadline)
             intent = _release_intent_mapping(self.config, loaded, ready)
             intent_sha256 = _create_record(
@@ -488,6 +645,11 @@ class SchedulerPreflightStore:
                 config_sha256=self.config.config_sha256,
                 contract_sha256=self.config.contract_sha256,
                 scheduler_policy_sha256=self.config.scheduler_policy_hash,
+                clock=self.clock,
+                clock_started=_clock_sample_from_intent(
+                    cast(Mapping[str, Any], loaded.submit_intent)
+                ),
+                overall_timeout_seconds=overall_timeout,
                 operation="release_held",
                 pid=os.getpid(),
                 thread=threading.current_thread(),
@@ -524,6 +686,8 @@ class SchedulerPreflightStore:
         """Bind exact held evidence while the original submit lease is live."""
 
         session = self._active_session(permit, "submit_held", require_consumed=True)
+        if _advance_session_clock(session) is not None:
+            return self._snapshot(session.current)
         loaded = session.current
         held = _validated_held(held_job)
         invocation_digest = _optional_digest(invocation_sha256)
@@ -570,6 +734,23 @@ class SchedulerPreflightStore:
             _require_phase(loaded.state, "submit_unknown")
             if loaded.submit_intent_sha256 is None:
                 raise _invalid("SCHEDULER_SUBMIT_INTENT_MISSING")
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=loaded.state.elapsed_seconds,
+            )
+            if authoritative is None:
+                return self._snapshot(current)
+            current = _append_timeout_if_due(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
+            )
+            if current is not loaded:
+                return self._snapshot(current)
             _validate_held_transition(loaded.state, held)
             event = {
                 "type": "held_bound",
@@ -577,7 +758,7 @@ class SchedulerPreflightStore:
                 "held_job": _held_mapping(held),
                 "invocation_sha256": None,
             }
-            current = _append_revision(self.config, opened, loaded, event)
+            current = _append_revision(self.config, opened, current, event)
         return self._snapshot(current)
 
     def record_release_success(
@@ -589,6 +770,8 @@ class SchedulerPreflightStore:
         """Append release success only for the consumed live release permit."""
 
         session = self._active_session(permit, "release_held", require_consumed=True)
+        if _advance_session_clock(session) is not None:
+            return self._snapshot(session.current)
         digest = _digest(invocation_sha256, "invocation_sha256")
         loaded = session.current
         if loaded.state.phase == "polling":
@@ -624,6 +807,12 @@ class SchedulerPreflightStore:
     ) -> SchedulerStateSnapshot:
         """Append one read-only recovery or lifecycle observation transition."""
 
+        requested_elapsed = _strict_int(
+            elapsed_seconds,
+            "elapsed_seconds",
+            0,
+            2**63 - 1,
+        )
         selected = self._bound_snapshot(snapshot)
         with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
             loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
@@ -632,23 +821,56 @@ class SchedulerPreflightStore:
                 raise _conflict("SCHEDULER_POLL_PHASE_CONFLICT")
             if loaded.release_intent_sha256 is None:
                 raise _invalid("SCHEDULER_RELEASE_INTENT_MISSING")
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=requested_elapsed,
+            )
+            if authoritative is None:
+                return self._snapshot(current)
+            current = _append_timeout_if_due(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
+            )
+            if current is not loaded:
+                return self._snapshot(current)
             try:
-                record_scheduler_poll(
-                    loaded.state,
+                advanced = record_scheduler_poll(
+                    current.state,
                     queue=queue,
                     accounting=accounting,
-                    elapsed_seconds=elapsed_seconds,
+                    elapsed_seconds=authoritative,
                 )
             except SchedulerPreflightError as exc:
                 raise SchedulerStateContractError("scheduler poll evidence is invalid") from exc
+            if not _poll_transition_changed(current.state, advanced):
+                return selected
+            if current.revision >= _MAX_REVISIONS - 1:
+                exhausted = record_revision_budget_exhausted(current.state)
+                current = _append_revision(
+                    self.config,
+                    opened,
+                    current,
+                    {"type": "revision_budget_exhausted"},
+                )
+                if current.state != exhausted:
+                    raise SchedulerStateCommitUnknown(
+                        "SCHEDULER_REVISION_BUDGET_POST_COMMIT_UNKNOWN",
+                        "revision-budget exhaustion did not replay safely",
+                    )
+                return self._snapshot(current)
             event = {
                 "type": "scheduler_poll",
-                "release_intent_sha256": loaded.release_intent_sha256,
+                "release_intent_sha256": current.release_intent_sha256,
                 "queue": _observation_mapping(queue),
                 "accounting": _observation_mapping(accounting),
-                "elapsed_seconds": elapsed_seconds,
+                "elapsed_seconds": authoritative,
             }
-            current = _append_revision(self.config, opened, loaded, event)
+            current = _append_revision(self.config, opened, current, event)
         return self._snapshot(current)
 
     def _active_session(
@@ -800,6 +1022,30 @@ class SchedulerPreflightStore:
             _close_open_attempt(opened)
 
 
+def _read_bound_worker_evidence(
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+) -> ComputePreflightEvidence:
+    try:
+        payload = _read_private_bytes(
+            opened.attempt_fd,
+            _WORKER_EVIDENCE_FILE,
+            256 * 1024,
+        )
+    except FileNotFoundError as exc:
+        raise SchedulerWorkerEvidencePending(
+            "SCHEDULER_WORKER_EVIDENCE_PENDING",
+            "compute evidence is not visible after scheduler success",
+        ) from exc
+    try:
+        evidence = decode_compute_evidence(payload)
+        if canonical_evidence_bytes(evidence) != payload:
+            raise SchedulerPreflightError("worker evidence bytes are not canonical")
+        return validate_compute_evidence_binding(loaded.state, evidence)
+    except SchedulerPreflightError as exc:
+        raise _invalid("SCHEDULER_WORKER_EVIDENCE_INVALID") from exc
+
+
 def _consume_mutation_permit(
     permit: SchedulerMutationPermit,
     operation: SchedulerMutationOperation,
@@ -836,15 +1082,72 @@ def _consume_mutation_permit(
             and session.scheduler_policy_sha256 == config.scheduler_policy_hash
             and permit.intent_sha256 == session.intent_sha256
             and permit.deadline == session.deadline
-            and time.monotonic() < session.deadline
         )
         if not valid:
             raise SchedulerMutationPermitError(
                 "SCHEDULER_MUTATION_PERMIT_INVALID",
                 "the scheduler mutation permit is expired, stale, or already consumed",
             )
+        _guard_mutation_clock(session)
+        if time.monotonic() >= session.deadline:
+            raise SchedulerMutationPermitError(
+                "SCHEDULER_MUTATION_PERMIT_EXPIRED",
+                "the scheduler mutation permit expired before process creation",
+            )
         session.consumed = True
     return session.deadline
+
+
+def _guard_mutation_clock(session: _LeaseSession) -> None:
+    failure = _advance_session_clock(session)
+    if failure is None:
+        return
+    if failure == "clock":
+        reason_code = "SCHEDULER_CLOCK_DISCONTINUITY"
+        message = "the trusted scheduler clock changed before process creation"
+    else:
+        reason_code = "SCHEDULER_MUTATION_DEADLINE_EXPIRED"
+        message = "the scheduler mutation deadline expired before process creation"
+    session.active = False
+    raise SchedulerMutationPermitError(reason_code, message)
+
+
+def _advance_session_clock(session: _LeaseSession) -> Literal["clock", "timeout"] | None:
+    try:
+        current = session.clock.sample()
+        if (
+            current.epoch_id != session.clock_started.epoch_id
+            or current.boottime_ns < session.clock_started.boottime_ns
+        ):
+            raise SchedulerClockError("trusted scheduler clock epoch is discontinuous")
+        delta_ns = current.boottime_ns - session.clock_started.boottime_ns
+        elapsed = (delta_ns + 999_999_999) // 1_000_000_000
+        if elapsed < session.current.state.elapsed_seconds:
+            raise SchedulerClockError("trusted scheduler elapsed time regressed")
+    except SchedulerClockError:
+        current_attempt = _append_clock_discontinuity(
+            session.config,
+            _OpenAttempt(session.attempt_fd, session.revisions_fd, session.lock_fd),
+            session.current,
+        )
+        session.current = current_attempt
+        return "clock"
+    timed = record_driver_timeout(session.current.state, elapsed_seconds=elapsed)
+    if timed is session.current.state:
+        return None
+    current_attempt = _append_revision(
+        session.config,
+        _OpenAttempt(session.attempt_fd, session.revisions_fd, session.lock_fd),
+        session.current,
+        {"type": "driver_timeout", "elapsed_seconds": elapsed},
+    )
+    if current_attempt.state != timed:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_TIMEOUT_POST_COMMIT_UNKNOWN",
+            "mutation timeout did not replay to the expected state",
+        )
+    session.current = current_attempt
+    return "timeout"
 
 
 def _require_durable_directory(descriptor: int) -> None:
@@ -1483,6 +1786,51 @@ def _replay(
                 )
                 if state.phase != "timed_out":
                     raise SchedulerPreflightError("release timeout revision is not terminal")
+            elif event_type == "compute_evidence":
+                _exact_fields(
+                    event,
+                    {"type", "evidence_sha256", "elapsed_seconds", "evidence"},
+                    "compute evidence revision",
+                )
+                if state.phase != "awaiting_evidence":
+                    raise SchedulerPreflightError("compute evidence revision is out of order")
+                expected_digest = _digest(event["evidence_sha256"], "evidence_sha256")
+                state = record_compute_evidence(
+                    state,
+                    _object(event["evidence"], "compute evidence"),
+                    elapsed_seconds=_strict_int(
+                        event["elapsed_seconds"],
+                        "elapsed_seconds",
+                        0,
+                        2**63 - 1,
+                    ),
+                )
+                if state.evidence_sha256 != expected_digest:
+                    raise SchedulerPreflightError("compute evidence revision hash conflicts")
+            elif event_type == "clock_discontinuity":
+                _exact_fields(event, {"type"}, "clock discontinuity revision")
+                state = record_clock_discontinuity(state)
+            elif event_type == "driver_timeout":
+                _exact_fields(
+                    event,
+                    {"type", "elapsed_seconds"},
+                    "driver timeout revision",
+                )
+                timed = record_driver_timeout(
+                    state,
+                    elapsed_seconds=_strict_int(
+                        event["elapsed_seconds"],
+                        "elapsed_seconds",
+                        0,
+                        2**63 - 1,
+                    ),
+                )
+                if timed is state or timed.phase != "timed_out":
+                    raise SchedulerPreflightError("driver timeout revision is not terminal")
+                state = timed
+            elif event_type == "revision_budget_exhausted":
+                _exact_fields(event, {"type"}, "revision budget revision")
+                state = record_revision_budget_exhausted(state)
             else:
                 raise SchedulerPreflightError("scheduler revision event type is unsupported")
 
@@ -1505,6 +1853,7 @@ def _replay(
                 "release_unknown",
                 "polling",
                 "awaiting_evidence",
+                "candidate",
                 "failed",
                 "indeterminate",
                 "timed_out",
@@ -1583,8 +1932,11 @@ def _identity_mapping(
 def _submit_intent_mapping(
     config: TrustedSchedulerConfig,
     loaded: _LoadedAttempt,
+    clock_sample: ClockSample,
 ) -> dict[str, Any]:
     state = loaded.state
+    if not isinstance(clock_sample, ClockSample):
+        raise SchedulerStateContractError("trusted scheduler clock sample is invalid")
     return {
         "schema_version": SCHEDULER_STATE_SCHEMA_VERSION,
         "operation": "submit_held",
@@ -1598,7 +1950,123 @@ def _submit_intent_mapping(
         "manifest_sha256": state.manifest_sha256,
         "template_sha256": state.template_sha256,
         "submission_marker": state.submission_marker,
+        "clock_epoch_id": clock_sample.epoch_id,
+        "clock_started_boottime_ns": clock_sample.boottime_ns,
     }
+
+
+def _clock_sample_from_intent(intent: Mapping[str, Any]) -> ClockSample:
+    try:
+        return ClockSample(
+            epoch_id=cast(str, intent["clock_epoch_id"]),
+            boottime_ns=cast(int, intent["clock_started_boottime_ns"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SchedulerStateContractError("submit intent clock anchor is invalid") from exc
+
+
+def _trusted_elapsed_sample(
+    clock: SchedulerClock,
+    loaded: _LoadedAttempt,
+) -> tuple[ClockSample, int]:
+    if loaded.submit_intent is None:
+        raise SchedulerStateContractError("submit intent clock anchor is missing")
+    started = _clock_sample_from_intent(loaded.submit_intent)
+    current = clock.sample()
+    if current.epoch_id != started.epoch_id or current.boottime_ns < started.boottime_ns:
+        raise SchedulerClockError("trusted scheduler clock epoch is discontinuous")
+    delta_ns = current.boottime_ns - started.boottime_ns
+    elapsed = (delta_ns + 999_999_999) // 1_000_000_000
+    if elapsed > 2**63 - 1 or elapsed < loaded.state.elapsed_seconds:
+        raise SchedulerClockError("trusted scheduler elapsed time is discontinuous")
+    return current, elapsed
+
+
+def _trusted_elapsed_seconds(clock: SchedulerClock, loaded: _LoadedAttempt) -> int:
+    return _trusted_elapsed_sample(clock, loaded)[1]
+
+
+def _lease_deadline(
+    command_timeout_seconds: float,
+    *,
+    started: ClockSample,
+    current: ClockSample,
+    overall_timeout_seconds: int,
+) -> float:
+    if current.epoch_id != started.epoch_id or current.boottime_ns < started.boottime_ns:
+        raise SchedulerClockError("trusted scheduler clock epoch is discontinuous")
+    overall = _strict_int(
+        overall_timeout_seconds,
+        "overall_timeout_seconds",
+        1,
+        2**63 - 1,
+    )
+    remaining_ns = overall * 1_000_000_000 - (current.boottime_ns - started.boottime_ns)
+    if remaining_ns <= 0:
+        raise SchedulerClockError("trusted scheduler deadline has expired")
+    return min(
+        _operation_deadline(command_timeout_seconds),
+        time.monotonic() + (remaining_ns / 1_000_000_000),
+    )
+
+
+def _append_clock_discontinuity(
+    config: TrustedSchedulerConfig,
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+) -> _LoadedAttempt:
+    expected = record_clock_discontinuity(loaded.state)
+    current = _append_revision(
+        config,
+        opened,
+        loaded,
+        {"type": "clock_discontinuity"},
+    )
+    if current.state != expected:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_CLOCK_POST_COMMIT_UNKNOWN",
+            "clock invalidation did not replay to the expected state",
+        )
+    return current
+
+
+def _authoritative_elapsed_or_invalidate(
+    config: TrustedSchedulerConfig,
+    clock: SchedulerClock,
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+    *,
+    minimum_elapsed: int,
+) -> tuple[_LoadedAttempt, int | None]:
+    try:
+        trusted_elapsed = _trusted_elapsed_seconds(clock, loaded)
+    except (SchedulerClockError, SchedulerStateContractError):
+        return _append_clock_discontinuity(config, opened, loaded), None
+    return loaded, max(minimum_elapsed, trusted_elapsed)
+
+
+def _append_timeout_if_due(
+    config: TrustedSchedulerConfig,
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+    *,
+    elapsed_seconds: int,
+) -> _LoadedAttempt:
+    timed = record_driver_timeout(loaded.state, elapsed_seconds=elapsed_seconds)
+    if timed is loaded.state:
+        return loaded
+    current = _append_revision(
+        config,
+        opened,
+        loaded,
+        {"type": "driver_timeout", "elapsed_seconds": elapsed_seconds},
+    )
+    if current.state != timed:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_TIMEOUT_POST_COMMIT_UNKNOWN",
+            "durable driver timeout did not replay to the expected state",
+        )
+    return current
 
 
 def _release_intent_mapping(
@@ -1794,6 +2262,10 @@ def _validate_submit_intent_state(
         or intent["submission_marker"] != prepared.submission_marker
     ):
         raise SchedulerPreflightError("submit intent does not bind prepared state")
+    try:
+        _clock_sample_from_intent(intent)
+    except (SchedulerClockError, SchedulerStateContractError) as exc:
+        raise SchedulerPreflightError("submit intent clock anchor is invalid") from exc
 
 
 def _validate_release_intent_state(
@@ -1892,6 +2364,37 @@ def _observation_mapping(observation: SlurmObservation | None) -> dict[str, Any]
         "exit_code": list(observation.exit_code) if observation.exit_code is not None else None,
         "cancelled_by_uid": observation.cancelled_by_uid,
     }
+
+
+def _poll_transition_changed(
+    before: SchedulerPreflightState,
+    after: SchedulerPreflightState,
+) -> bool:
+    """Ignore elapsed-only duplicate polls; the trusted clock remains authoritative."""
+
+    return (
+        before.phase,
+        before.job,
+        before.held_job,
+        before.terminal_observation,
+        before.pending_since_seconds,
+        before.started,
+        before.terminal_seen,
+        before.evidence,
+        before.evidence_sha256,
+        before.capability,
+    ) != (
+        after.phase,
+        after.job,
+        after.held_job,
+        after.terminal_observation,
+        after.pending_since_seconds,
+        after.started,
+        after.terminal_seen,
+        after.evidence,
+        after.evidence_sha256,
+        after.capability,
+    )
 
 
 def _parse_observation(value: Any) -> SlurmObservation | None:

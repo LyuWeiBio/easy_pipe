@@ -124,6 +124,6 @@ the current path recheck eliminates a same-identity replacement race.
 M7.0d-c adds the owner-only, append-only scheduler-preflight state and
 exclusive submit/release intents described by ADR 0007. M7.0d-d adds the
 separately installed, hash-bound compute worker and submission-bound runtime
-rechecks described by ADR 0008. The transport still has no installed
-version-2 caller; recovery remains read-only and non-resubmitting until a
-durable orchestration slice is reviewed.
+rechecks described by ADR 0008. M7.0d-e adds the uninstalled, start-or-one-poll
+driver described by ADR 0009; it preserves read-only recovery and stops at
+`candidate`. The transport still has no installed version-2 caller.

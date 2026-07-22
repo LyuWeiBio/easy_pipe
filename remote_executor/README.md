@@ -50,8 +50,18 @@ manifest binds an absolute Python interpreter, Java, Nextflow launcher and JAR,
 Apptainer, the worker itself, command budgets, and resume-directory identities.
 The durable state store creates the private manifest and can read and bind the
 private evidence after scheduler-confirmed success. No version-1 entry point
-imports the worker and no version-2 driver invokes it yet. See
+imports the worker. See
 [ADR 0008](../docs/adr/0008-m7-fixed-compute-preflight-worker.md).
+
+M7.0d-e adds an uninstalled start-or-one-poll driver that connects the trusted
+loader, fixed Slurm runner, append-only store, and worker evidence only as far
+as `candidate`. The submit intent now anchors a double-checked boot-relative
+clock; clock discontinuity and reached deadlines become irreversible journal
+events, and complete parsed worker evidence is committed into the hash chain.
+The result always carries `preflight_token: null`: capability persistence is a
+separate M7.0d-f boundary. Version 1 still does not import this driver and no
+version-2 dispatcher calls it. See
+[ADR 0009](../docs/adr/0009-m7-durable-preflight-driver.md).
 
 ## Build and install
 

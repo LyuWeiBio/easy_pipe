@@ -100,4 +100,6 @@ described by ADR 0006. M7.0d-c adds the durable scheduler-preflight state and
 one-shot mutation permits described by ADR 0007. M7.0d-d extends this loader's
 closed executable set with the absolute Python interpreter and fixed compute
 worker, then binds their hashes into manifest 1.1 as described by ADR 0008.
-Durable version-2 orchestration remains required before activation.
+M7.0d-e joins them only through the dormant driver-to-candidate boundary in ADR
+0009. Capability persistence and active version-2 dispatch remain required
+before activation.

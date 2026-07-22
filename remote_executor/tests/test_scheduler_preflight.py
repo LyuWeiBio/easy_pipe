@@ -38,7 +38,9 @@ from bioexec.scheduler_preflight import (
     parse_compute_manifest,
     preflight_result,
     prepare_preflight,
+    record_clock_discontinuity,
     record_compute_evidence,
+    record_driver_timeout,
     record_held_release,
     record_held_submission,
     record_release_intent,
@@ -1092,6 +1094,173 @@ def test_overall_deadline_blocks_late_scheduler_evidence_and_capability() -> Non
         record_held_release(late_release)
 
 
+def test_driver_timeout_returns_same_state_before_any_deadline() -> None:
+    submit_unknown = record_submit_unknown(_prepared())
+    held = record_held_submission(submit_unknown, _held_job(submit_unknown))
+    release_unknown = record_release_unknown(record_release_intent(held, elapsed_seconds=1))
+    polling = _polling()
+    awaiting = _awaiting_evidence()
+    candidate = _candidate()
+
+    assert record_driver_timeout(submit_unknown, elapsed_seconds=1_029) is submit_unknown
+    assert record_driver_timeout(held, elapsed_seconds=1_029) is held
+    assert record_driver_timeout(release_unknown, elapsed_seconds=60) is release_unknown
+    assert record_driver_timeout(polling, elapsed_seconds=59) is polling
+    assert record_driver_timeout(awaiting, elapsed_seconds=1_029) is awaiting
+    assert record_driver_timeout(candidate, elapsed_seconds=1_029) is candidate
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(record_submit_unknown(_prepared()), id="submit-unknown"),
+        pytest.param(
+            record_held_submission(
+                record_submit_unknown(_prepared()),
+                _held_job(record_submit_unknown(_prepared())),
+            ),
+            id="held",
+        ),
+        pytest.param(
+            record_release_unknown(
+                record_release_intent(
+                    record_held_submission(_prepared(), _held_job(_prepared())),
+                    elapsed_seconds=1,
+                )
+            ),
+            id="release-unknown",
+        ),
+        pytest.param(_polling(), id="polling"),
+        pytest.param(_awaiting_evidence(), id="awaiting-evidence"),
+        pytest.param(_candidate(), id="candidate"),
+    ],
+)
+def test_driver_timeout_applies_exact_overall_boundary(
+    state: SchedulerPreflightState,
+) -> None:
+    timed_out = record_driver_timeout(state, elapsed_seconds=1_030)
+
+    assert timed_out.phase == "timed_out"
+    assert timed_out.reason_code == "SLURM_PREFLIGHT_OVERALL_TIMEOUT"
+    assert timed_out.elapsed_seconds == 1_030
+    assert timed_out.job == state.job
+    assert timed_out.evidence == state.evidence
+    assert timed_out.evidence_sha256 == state.evidence_sha256
+
+
+def test_driver_timeout_applies_pending_boundary_only_before_started() -> None:
+    polling = _polling()
+    before = record_driver_timeout(polling, elapsed_seconds=59)
+    assert before is polling
+
+    timed_out = record_driver_timeout(polling, elapsed_seconds=60)
+    assert timed_out.phase == "timed_out"
+    assert timed_out.reason_code == "SLURM_PREFLIGHT_TIMEOUT"
+    assert timed_out.elapsed_seconds == 60
+
+    release_ready = record_release_intent(
+        record_held_submission(_prepared(), _held_job(_prepared())),
+        elapsed_seconds=7,
+    )
+    release_unknown = record_release_unknown(release_ready)
+    assert record_driver_timeout(release_unknown, elapsed_seconds=66) is release_unknown
+    release_timed_out = record_driver_timeout(release_unknown, elapsed_seconds=67)
+    assert release_timed_out.phase == "timed_out"
+    assert release_timed_out.reason_code == "SLURM_PREFLIGHT_TIMEOUT"
+
+    started = record_scheduler_poll(
+        polling,
+        queue=_queue(polling, "RUNNING"),
+        accounting=None,
+        elapsed_seconds=10,
+    )
+    assert started.started is True
+    assert record_driver_timeout(started, elapsed_seconds=60) is started
+
+
+def test_driver_timeout_rejects_elapsed_regression() -> None:
+    candidate = _candidate()
+
+    with pytest.raises(SchedulerPreflightError, match="must be monotonic"):
+        record_driver_timeout(candidate, elapsed_seconds=candidate.elapsed_seconds - 1)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(_prepared(), id="prepared"),
+        pytest.param(
+            record_release_intent(
+                record_held_submission(_prepared(), _held_job(_prepared())),
+                elapsed_seconds=1,
+            ),
+            id="release-ready",
+        ),
+        pytest.param(_passed(), id="passed"),
+        pytest.param(
+            record_driver_timeout(_candidate(), elapsed_seconds=1_030),
+            id="timed-out",
+        ),
+        pytest.param(
+            record_clock_discontinuity(_candidate()),
+            id="indeterminate",
+        ),
+        pytest.param(
+            record_compute_evidence(
+                _awaiting_evidence(),
+                _evidence_mapping(_awaiting_evidence(), failed="input_paths"),
+                elapsed_seconds=11,
+            ),
+            id="failed",
+        ),
+    ],
+)
+def test_driver_transitions_reject_phases_outside_durable_recovery(
+    state: SchedulerPreflightState,
+) -> None:
+    with pytest.raises(SchedulerPreflightError, match="current phase"):
+        record_driver_timeout(state, elapsed_seconds=max(1_030, state.elapsed_seconds))
+    with pytest.raises(SchedulerPreflightError, match="current phase"):
+        record_clock_discontinuity(state)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(record_submit_unknown(_prepared()), id="submit-unknown"),
+        pytest.param(
+            record_held_submission(_prepared(), _held_job(_prepared())),
+            id="held",
+        ),
+        pytest.param(
+            record_release_unknown(
+                record_release_intent(
+                    record_held_submission(_prepared(), _held_job(_prepared())),
+                    elapsed_seconds=1,
+                )
+            ),
+            id="release-unknown",
+        ),
+        pytest.param(_polling(), id="polling"),
+        pytest.param(_awaiting_evidence(), id="awaiting-evidence"),
+        pytest.param(_candidate(), id="candidate"),
+    ],
+)
+def test_clock_discontinuity_preserves_bound_attempt_evidence(
+    state: SchedulerPreflightState,
+) -> None:
+    result = record_clock_discontinuity(state)
+
+    assert result.phase == "indeterminate"
+    assert result.reason_code == "SCHEDULER_CLOCK_DISCONTINUITY"
+    assert result.elapsed_seconds == state.elapsed_seconds
+    assert result.job == state.job
+    assert result.held_job == state.held_job
+    assert result.terminal_observation == state.terminal_observation
+    assert result.evidence == state.evidence
+    assert result.evidence_sha256 == state.evidence_sha256
+
+
 def test_ambiguous_submit_and_release_recover_only_from_positive_evidence() -> None:
     submit_unknown = record_submit_unknown(_prepared())
     assert submit_unknown.phase == "submit_unknown"
@@ -1555,6 +1724,8 @@ def test_public_api_does_not_offer_generic_command_script_or_argv_inputs() -> No
         record_held_release,
         record_submit_unknown,
         record_release_unknown,
+        record_clock_discontinuity,
+        record_driver_timeout,
         record_scheduler_poll,
         record_compute_evidence,
         issue_capability,

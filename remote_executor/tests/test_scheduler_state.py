@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 import bioexec.scheduler_state as state_module
 from bioexec.scheduler_bindings import SchedulerBindingError, expected_worker_paths
+from bioexec.scheduler_clock import ClockSample
 from bioexec.scheduler_config_loader import (
     TrustedSchedulerConfig,
     load_trusted_scheduler_config,
@@ -29,6 +31,7 @@ from bioexec.scheduler_preflight import (
     input_set_hash,
     parse_compute_evidence,
     parse_compute_manifest,
+    preflight_overall_timeout_seconds,
     prepare_preflight,
 )
 from bioexec.scheduler_state import (
@@ -54,12 +57,32 @@ _JOB_ID = "12345"
 _NAMESPACE = "scheduler-preflights-v1"
 
 
+class _AdvancingClock:
+    """Deterministic sleep-inclusive clock shared by restarted test stores."""
+
+    def __init__(self) -> None:
+        self.epoch_id = "test-boot"
+        self.boottime_ns = 1_000_000_000
+        self.step_ns = 1_000_000_000
+        self._lock = threading.Lock()
+
+    def sample(self) -> ClockSample:
+        with self._lock:
+            sample = ClockSample(
+                epoch_id=self.epoch_id,
+                boottime_ns=self.boottime_ns,
+            )
+            self.boottime_ns += self.step_ns
+        return sample
+
+
 @dataclass(frozen=True)
 class StateFixture:
     config: TrustedSchedulerConfig
     config_path: Path
     prepared: SchedulerPreflightState
     state_root: Path
+    clock: _AdvancingClock
 
     @property
     def attempt(self) -> Path:
@@ -278,11 +301,12 @@ def state_fixture(tmp_path: Path) -> StateFixture:
         config_path=config_path,
         prepared=prepared,
         state_root=roots["state"],
+        clock=_AdvancingClock(),
     )
 
 
 def _new_store(fixture: StateFixture) -> SchedulerPreflightStore:
-    return SchedulerPreflightStore(fixture.config)
+    return SchedulerPreflightStore(fixture.config, clock=fixture.clock)
 
 
 def _create(fixture: StateFixture, store: SchedulerPreflightStore) -> SchedulerStateSnapshot:
@@ -480,6 +504,11 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert metadata.st_uid == os.geteuid()
         assert metadata.st_nlink == 1
 
+    submit_intent = json.loads(files[-1].read_text(encoding="ascii"))
+    assert submit_intent["schema_version"] == "1.1"
+    assert isinstance(submit_intent["clock_epoch_id"], str)
+    assert type(submit_intent["clock_started_boottime_ns"]) is int
+
 
 @pytest.mark.parametrize("tamper", ["mode", "hardlink", "symlink", "bytes"])
 def test_worker_manifest_tampering_blocks_state_adoption(
@@ -609,7 +638,7 @@ def test_claim_and_consume_fail_closed_at_the_absolute_deadline(
 ) -> None:
     store = _new_store(state_fixture)
     initial = _create(state_fixture, store)
-    before_intent = iter((10.0, 11.0))
+    before_intent = iter((10.0, 10.0, 11.0))
     with monkeypatch.context() as patch:
         patch.setattr(state_module.time, "monotonic", lambda: next(before_intent))
         with (
@@ -620,7 +649,7 @@ def test_claim_and_consume_fail_closed_at_the_absolute_deadline(
     assert expired.value.reason_code == "SCHEDULER_MUTATION_DEADLINE_EXPIRED"
     assert not (state_fixture.attempt / "submit.intent.json").exists()
 
-    live_times = iter((20.0, 20.5, 21.0))
+    live_times = iter((20.0, 20.0, 20.5, 21.0))
     with monkeypatch.context() as patch:
         patch.setattr(state_module.time, "monotonic", lambda: next(live_times))
         with (
@@ -830,6 +859,99 @@ def test_positive_poll_evidence_recovers_release_unknown_without_releasing_again
     assert completed.revision == 3
 
 
+def test_diagnostic_only_active_polls_do_not_consume_revisions(
+    state_fixture: StateFixture,
+) -> None:
+    store = _new_store(state_fixture)
+    held = _held_snapshot(state_fixture, store)
+    with store.claim_release(held, elapsed_seconds=1):
+        pass
+    unknown = store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert unknown.state.job is not None
+    running = store.record_scheduler_poll(
+        unknown,
+        queue=SlurmObservation(
+            source="squeue",
+            job=unknown.state.job,
+            state="RUNNING",
+        ),
+        accounting=None,
+        elapsed_seconds=2,
+    )
+    suspended = store.record_scheduler_poll(
+        running,
+        queue=SlurmObservation(
+            source="squeue",
+            job=running.state.job,
+            state="SUSPENDED",
+        ),
+        accounting=None,
+        elapsed_seconds=3,
+    )
+
+    assert running.state.reason_code == "SLURM_RUNNING"
+    assert suspended.revision == running.revision
+    assert suspended.journal_sha256 == running.journal_sha256
+
+
+def test_revision_budget_keeps_one_terminal_slot(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    held = _held_snapshot(state_fixture, store)
+    with store.claim_release(held, elapsed_seconds=1):
+        pass
+    unknown = store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert unknown.state.job is not None
+    running = store.record_scheduler_poll(
+        unknown,
+        queue=SlurmObservation(
+            source="squeue",
+            job=unknown.state.job,
+            state="RUNNING",
+        ),
+        accounting=None,
+        elapsed_seconds=2,
+    )
+    assert running.revision == 2
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_module, "_MAX_REVISIONS", 3)
+        exhausted = store.record_scheduler_poll(
+            running,
+            queue=None,
+            accounting=SlurmObservation(
+                source="sacct",
+                job=running.state.job,
+                state="COMPLETED",
+                exit_code=(0, 0),
+            ),
+            elapsed_seconds=3,
+        )
+        replayed = store.load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
+
+    assert exhausted.state.phase == "indeterminate"
+    assert exhausted.state.reason_code == "SCHEDULER_REVISION_BUDGET_EXHAUSTED"
+    assert exhausted.revision == 3
+    assert replayed.state == exhausted.state
+    revision = json.loads(
+        (state_fixture.attempt / "revisions" / "00000000000000000003.json").read_text(
+            encoding="ascii"
+        )
+    )
+    assert revision["event"] == {"type": "revision_budget_exhausted"}
+
+
 def test_worker_evidence_read_is_phase_gated_stable_private_and_canonical(
     state_fixture: StateFixture,
 ) -> None:
@@ -883,6 +1005,97 @@ def test_worker_evidence_reader_binds_the_current_attempt(
 
     with pytest.raises(SchedulerStateInvalidError):
         store.read_worker_evidence(awaiting)
+
+
+def test_worker_evidence_ingest_is_self_contained_append_only_and_replayable(
+    state_fixture: StateFixture,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence_path = state_fixture.attempt / "evidence.json"
+    value = _worker_evidence_value(awaiting.state)
+    evidence_path.write_bytes(canonical_evidence_bytes(parse_compute_evidence(value)))
+    evidence_path.chmod(0o600)
+
+    candidate = store.ingest_worker_evidence(awaiting, elapsed_seconds=4)
+    assert candidate.state.phase == "candidate"
+    assert candidate.state.evidence_sha256 is not None
+    assert candidate.revision == awaiting.revision + 1
+
+    revision_path = state_fixture.attempt / "revisions" / f"{candidate.revision:020d}.json"
+    revision = json.loads(revision_path.read_text(encoding="ascii"))
+    event = revision["event"]
+    assert event["type"] == "compute_evidence"
+    assert event["evidence"] == value
+    assert event["evidence_sha256"] == candidate.state.evidence_sha256
+
+    evidence_path.unlink()
+    restarted = _new_store(state_fixture).load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert restarted.state == candidate.state
+    assert restarted.journal_sha256 == candidate.journal_sha256
+
+
+def test_evidence_at_the_exact_overall_deadline_replays_as_timeout(
+    state_fixture: StateFixture,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence_path = state_fixture.attempt / "evidence.json"
+    evidence_path.write_bytes(
+        canonical_evidence_bytes(parse_compute_evidence(_worker_evidence_value(awaiting.state)))
+    )
+    evidence_path.chmod(0o600)
+    intent = json.loads((state_fixture.attempt / "submit.intent.json").read_text(encoding="ascii"))
+    overall = preflight_overall_timeout_seconds(awaiting.state)
+    state_fixture.clock.step_ns = 0
+    state_fixture.clock.boottime_ns = intent["clock_started_boottime_ns"] + overall * 1_000_000_000
+
+    terminal = store.ingest_worker_evidence(awaiting, elapsed_seconds=0)
+    assert terminal.state.phase == "timed_out"
+    assert terminal.state.evidence is None
+    assert terminal.state.evidence_sha256 is None
+    assert terminal.revision == awaiting.revision + 1
+    event = json.loads(
+        (state_fixture.attempt / "revisions" / f"{terminal.revision:020d}.json").read_text(
+            encoding="ascii"
+        )
+    )["event"]
+    assert event == {"type": "driver_timeout", "elapsed_seconds": overall}
+
+    evidence_path.unlink()
+    restarted = _new_store(state_fixture).load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert restarted.state == terminal.state
+    assert restarted.journal_sha256 == terminal.journal_sha256
+
+
+def test_compute_evidence_revision_digest_tampering_fails_closed(
+    state_fixture: StateFixture,
+) -> None:
+    store = _new_store(state_fixture)
+    awaiting = _awaiting_evidence_snapshot(state_fixture, store)
+    evidence_path = state_fixture.attempt / "evidence.json"
+    evidence_path.write_bytes(
+        canonical_evidence_bytes(parse_compute_evidence(_worker_evidence_value(awaiting.state)))
+    )
+    evidence_path.chmod(0o600)
+    candidate = store.ingest_worker_evidence(awaiting, elapsed_seconds=4)
+    revision_path = state_fixture.attempt / "revisions" / f"{candidate.revision:020d}.json"
+    revision = json.loads(revision_path.read_text(encoding="ascii"))
+    revision["event"]["evidence_sha256"] = "0" * 64
+    _write_canonical(revision_path, revision)
+
+    with pytest.raises(SchedulerStateInvalidError) as captured:
+        _new_store(state_fixture).load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
+    assert captured.value.reason_code == "SCHEDULER_STATE_REPLAY_INVALID"
 
 
 @pytest.mark.parametrize(
