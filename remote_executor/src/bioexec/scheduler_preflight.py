@@ -20,7 +20,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import InitVar, dataclass, replace
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, Literal, cast
@@ -575,40 +575,67 @@ class ComputePreflightEvidence:
 
 @dataclass(frozen=True)
 class PreflightCapability:
-    """In-memory one-use grant; durable adapters must store only ``token_hash``."""
+    """Durable token-hash-only one-use grant bound to trusted elapsed time."""
 
     _authority: InitVar[object]
     preflight_id: str
-    token: str = field(repr=False)
     token_hash: str
     binding_hash: str
     issued_at: int
     expires_at: int
     consumed: bool = False
     consumed_by: str | None = None
+    consumer_binding_hash: str | None = None
     consumed_at: int | None = None
+    expired: bool = False
+    expired_at: int | None = None
 
     def __post_init__(self, _authority: object) -> None:
         if _authority is not _CAPABILITY_AUTHORITY:
             raise SchedulerPreflightError("capability construction is internal to transitions")
         _identifier(self.preflight_id, "capability.preflight_id")
-        _token(self.token)
         _digest(self.token_hash, "capability.token_hash")
         _digest(self.binding_hash, "capability.binding_hash")
         _strict_int(self.issued_at, "capability.issued_at", 0, 2**63 - 1)
         _strict_int(self.expires_at, "capability.expires_at", self.issued_at + 1, 2**63 - 1)
+        if not isinstance(self.expired, bool):
+            raise SchedulerPreflightError("capability.expired must be a boolean")
+        if self.consumed and self.expired:
+            raise SchedulerPreflightError("capability cannot be both consumed and expired")
         if self.consumed:
-            if self.consumed_by is None or self.consumed_at is None:
-                raise SchedulerPreflightError("consumed capability requires actor and time")
+            if (
+                self.consumed_by is None
+                or self.consumer_binding_hash is None
+                or self.consumed_at is None
+            ):
+                raise SchedulerPreflightError(
+                    "consumed capability requires actor, binding, and time"
+                )
             _identifier(self.consumed_by, "capability.consumed_by")
+            _digest(self.consumer_binding_hash, "capability.consumer_binding_hash")
             _strict_int(
                 self.consumed_at,
                 "capability.consumed_at",
                 self.issued_at,
-                self.expires_at,
+                self.expires_at - 1,
             )
-        elif self.consumed_by is not None or self.consumed_at is not None:
+        elif (
+            self.consumed_by is not None
+            or self.consumer_binding_hash is not None
+            or self.consumed_at is not None
+        ):
             raise SchedulerPreflightError("unconsumed capability cannot carry consumption data")
+        if self.expired:
+            if self.expired_at is None:
+                raise SchedulerPreflightError("expired capability requires trusted elapsed time")
+            _strict_int(
+                self.expired_at,
+                "capability.expired_at",
+                self.expires_at,
+                2**63 - 1,
+            )
+        elif self.expired_at is not None:
+            raise SchedulerPreflightError("live capability cannot carry expiration data")
 
     def as_record(self) -> dict[str, Any]:
         """Return the owner-only durable shape without the raw capability token."""
@@ -621,7 +648,10 @@ class PreflightCapability:
             "expires_at": self.expires_at,
             "consumed": self.consumed,
             "consumed_by": self.consumed_by,
+            "consumer_binding_hash": self.consumer_binding_hash,
             "consumed_at": self.consumed_at,
+            "expired": self.expired,
+            "expired_at": self.expired_at,
         }
 
 
@@ -676,6 +706,16 @@ class SchedulerPreflightState:
             raise SchedulerPreflightError("terminal scheduler evidence must bind the exact job")
         if self.capability is not None and not isinstance(self.capability, PreflightCapability):
             raise SchedulerPreflightError("state capability must use the fixed capability contract")
+        if self.capability is not None and self.phase not in {
+            "passed",
+            "indeterminate",
+            "timed_out",
+        }:
+            raise SchedulerPreflightError(
+                "capability may exist only in a passed or invalidated state"
+            )
+        if self.phase == "passed" and self.capability is None:
+            raise SchedulerPreflightError("passed state requires one durable capability grant")
         _strict_int(self.elapsed_seconds, "state.elapsed_seconds", 0, 2**63 - 1)
         if self.pending_since_seconds is not None:
             _strict_int(
@@ -1191,6 +1231,7 @@ def record_clock_discontinuity(state: SchedulerPreflightState) -> SchedulerPrefl
             "polling",
             "awaiting_evidence",
             "candidate",
+            "passed",
         },
     )
     return _replace_state(
@@ -1205,7 +1246,7 @@ def record_revision_budget_exhausted(
 ) -> SchedulerPreflightState:
     """Fail closed while one final journal slot is still available."""
 
-    _require_phase(state, {"release_unknown", "polling"})
+    _require_phase(state, {"release_unknown", "polling", "awaiting_evidence", "candidate"})
     return _replace_state(
         state,
         phase="indeterminate",
@@ -1229,9 +1270,16 @@ def record_driver_timeout(
             "polling",
             "awaiting_evidence",
             "candidate",
+            "passed",
         },
     )
     elapsed = _fresh_elapsed(state, elapsed_seconds, "driver timeout")
+    if state.phase == "passed" and (
+        state.capability is None or state.capability.consumed or state.capability.expired
+    ):
+        raise SchedulerPreflightError(
+            "driver timeout may invalidate only a live unconsumed capability"
+        )
     if elapsed >= _overall_timeout_seconds(state.manifest.scheduler_policy):
         return _replace_state(
             state,
@@ -1461,11 +1509,10 @@ def validate_compute_evidence_binding(
 def issue_capability(
     state: SchedulerPreflightState,
     *,
-    trusted_token: str,
-    issued_at: int,
+    token_hash: str,
     elapsed_seconds: int,
 ) -> SchedulerPreflightState:
-    """Issue an injected token only for a scheduler- and evidence-passed candidate."""
+    """Record one token hash only for a scheduler- and evidence-passed candidate."""
 
     _require_phase(state, {"candidate"})
     elapsed = _fresh_elapsed(state, elapsed_seconds, "capability issuance")
@@ -1476,8 +1523,8 @@ def issue_capability(
             elapsed_seconds=elapsed,
             reason_code="SLURM_PREFLIGHT_OVERALL_TIMEOUT",
         )
-    token = _token(trusted_token)
-    issued = _strict_int(issued_at, "issued_at", 0, 2**63 - 1)
+    digest = _digest(token_hash, "token_hash")
+    issued = elapsed
     expires = issued + state.manifest.preflight_ttl_seconds
     if expires > 2**63 - 1:
         raise SchedulerPreflightError("capability expiry is outside the supported range")
@@ -1486,21 +1533,22 @@ def issue_capability(
     _validate_capability_candidate(state)
     issued_state = _replace_state(state, elapsed_seconds=elapsed)
     success_binding = _capability_binding_hash(issued_state)
-    token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
     binding = _capability_grant_hash(
         success_binding=success_binding,
-        token_hash=token_hash,
+        token_hash=digest,
         issued_at=issued,
         expires_at=expires,
         consumed=False,
         consumed_by=None,
+        consumer_binding_hash=None,
         consumed_at=None,
+        expired=False,
+        expired_at=None,
     )
     capability = PreflightCapability(
         _authority=_CAPABILITY_AUTHORITY,
         preflight_id=state.manifest.preflight_id,
-        token=token,
-        token_hash=token_hash,
+        token_hash=digest,
         binding_hash=binding,
         issued_at=issued,
         expires_at=expires,
@@ -1518,9 +1566,10 @@ def consume_capability(
     *,
     token: str,
     consumed_by: str,
-    consumed_at: int,
+    consumer_binding_hash: str,
+    elapsed_seconds: int,
 ) -> SchedulerPreflightState:
-    """Apply the pure one-use transition; a future state adapter must claim it."""
+    """Verify a raw token transiently and apply the one-use transition."""
 
     _require_phase(state, {"passed"})
     _validate_passed_state(state)
@@ -1529,13 +1578,54 @@ def consume_capability(
         raise SchedulerPreflightError("passed state has no capability")
     if capability.consumed:
         raise SchedulerPreflightError("preflight capability was already consumed")
+    if capability.expired:
+        raise SchedulerPreflightError("preflight capability has expired")
     supplied = _token(token)
     supplied_hash = hashlib.sha256(supplied.encode("ascii")).hexdigest()
     if not hmac.compare_digest(capability.token_hash, supplied_hash):
         raise SchedulerPreflightError("preflight capability token is invalid")
+    at = _fresh_elapsed(state, elapsed_seconds, "capability consumption")
+    if at >= capability.expires_at:
+        raise SchedulerPreflightError("preflight capability has expired")
+    return record_capability_consumed(
+        state,
+        token_hash=capability.token_hash,
+        capability_binding_hash=capability.binding_hash,
+        consumed_by=consumed_by,
+        consumer_binding_hash=consumer_binding_hash,
+        elapsed_seconds=at,
+    )
+
+
+def record_capability_consumed(
+    state: SchedulerPreflightState,
+    *,
+    token_hash: str,
+    capability_binding_hash: str,
+    consumed_by: str,
+    consumer_binding_hash: str,
+    elapsed_seconds: int,
+) -> SchedulerPreflightState:
+    """Replay one trusted, hash-bound capability-consumption event."""
+
+    _require_phase(state, {"passed"})
+    _validate_passed_state(state)
+    capability = state.capability
+    if capability is None:
+        raise SchedulerPreflightError("passed state has no capability")
+    if capability.consumed:
+        raise SchedulerPreflightError("preflight capability was already consumed")
+    if capability.expired:
+        raise SchedulerPreflightError("preflight capability has expired")
+    if (
+        _digest(token_hash, "token_hash") != capability.token_hash
+        or _digest(capability_binding_hash, "capability_binding_hash") != capability.binding_hash
+    ):
+        raise SchedulerPreflightError("capability consumption does not bind the current grant")
     actor = _identifier(consumed_by, "consumed_by")
-    at = _strict_int(consumed_at, "consumed_at", capability.issued_at, 2**63 - 1)
-    if at > capability.expires_at:
+    consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
+    at = _fresh_elapsed(state, elapsed_seconds, "capability consumption")
+    if at >= capability.expires_at:
         raise SchedulerPreflightError("preflight capability has expired")
     consumed_binding = _capability_grant_hash(
         success_binding=_capability_binding_hash(state),
@@ -1544,20 +1634,80 @@ def consume_capability(
         expires_at=capability.expires_at,
         consumed=True,
         consumed_by=actor,
+        consumer_binding_hash=consumer_binding,
         consumed_at=at,
+        expired=False,
+        expired_at=None,
     )
     consumed = _replace_capability(
         capability,
         binding_hash=consumed_binding,
         consumed=True,
         consumed_by=actor,
+        consumer_binding_hash=consumer_binding,
         consumed_at=at,
     )
-    return _replace_state(state, capability=consumed)
+    return _replace_state(
+        state,
+        reason_code="COMPUTE_PREFLIGHT_CAPABILITY_CONSUMED",
+        capability=consumed,
+    )
+
+
+def record_capability_expired(
+    state: SchedulerPreflightState,
+    *,
+    token_hash: str,
+    capability_binding_hash: str,
+    elapsed_seconds: int,
+) -> SchedulerPreflightState:
+    """Replay one irreversible trusted capability-expiration event."""
+
+    _require_phase(state, {"passed"})
+    _validate_passed_state(state)
+    capability = state.capability
+    if capability is None:
+        raise SchedulerPreflightError("passed state has no capability")
+    if capability.consumed:
+        raise SchedulerPreflightError("consumed capability cannot expire")
+    if capability.expired:
+        raise SchedulerPreflightError("preflight capability was already expired")
+    if (
+        _digest(token_hash, "token_hash") != capability.token_hash
+        or _digest(capability_binding_hash, "capability_binding_hash") != capability.binding_hash
+    ):
+        raise SchedulerPreflightError("capability expiration does not bind the current grant")
+    at = _fresh_elapsed(state, elapsed_seconds, "capability expiration")
+    if at < capability.expires_at:
+        raise SchedulerPreflightError("preflight capability has not expired")
+    expired_binding = _capability_grant_hash(
+        success_binding=_capability_binding_hash(state),
+        token_hash=capability.token_hash,
+        issued_at=capability.issued_at,
+        expires_at=capability.expires_at,
+        consumed=False,
+        consumed_by=None,
+        consumer_binding_hash=None,
+        consumed_at=None,
+        expired=True,
+        expired_at=at,
+    )
+    expired = _replace_capability(
+        capability,
+        binding_hash=expired_binding,
+        expired=True,
+        expired_at=at,
+    )
+    return _replace_state(
+        state,
+        phase="timed_out",
+        reason_code="COMPUTE_PREFLIGHT_CAPABILITY_EXPIRED",
+        capability=expired,
+    )
 
 
 def preflight_result(state: SchedulerPreflightState) -> dict[str, Any]:
-    """Return a sanitized result; only a passed state discloses its injected token."""
+    """Return a sanitized durable result that never contains a raw capability token."""
 
     if not isinstance(state, SchedulerPreflightState):
         raise SchedulerPreflightError("state must be a SchedulerPreflightState")
@@ -1567,15 +1717,7 @@ def preflight_result(state: SchedulerPreflightState) -> dict[str, Any]:
         "preflight_id": state.manifest.preflight_id,
         "status": state.phase,
         "code": state.reason_code,
-        "preflight_token": (
-            state.capability.token
-            if (
-                state.phase == "passed"
-                and state.capability is not None
-                and not state.capability.consumed
-            )
-            else None
-        ),
+        "preflight_token": None,
         "manifest_sha256": state.manifest_sha256,
         "template_sha256": state.template_sha256,
         "evidence_sha256": state.evidence_sha256,
@@ -1670,14 +1812,12 @@ def _validate_capability_candidate(state: SchedulerPreflightState) -> None:
 
 
 def _validate_passed_state(state: SchedulerPreflightState) -> None:
-    """Reject reconstructed or corrupted passed state before token use or disclosure."""
+    """Reject a reconstructed or corrupted token-hash-only passed state."""
 
     _validate_success_bindings(state)
     capability = state.capability
     if capability is None:
         raise SchedulerPreflightError("passed state has no capability")
-    validated_token = _token(capability.token)
-    expected_token_hash = hashlib.sha256(validated_token.encode("ascii")).hexdigest()
     expected_binding = _capability_grant_hash(
         success_binding=_capability_binding_hash(state),
         token_hash=capability.token_hash,
@@ -1685,11 +1825,13 @@ def _validate_passed_state(state: SchedulerPreflightState) -> None:
         expires_at=capability.expires_at,
         consumed=capability.consumed,
         consumed_by=capability.consumed_by,
+        consumer_binding_hash=capability.consumer_binding_hash,
         consumed_at=capability.consumed_at,
+        expired=capability.expired,
+        expired_at=capability.expired_at,
     )
     if (
         capability.preflight_id != state.manifest.preflight_id
-        or capability.token_hash != expected_token_hash
         or capability.binding_hash != expected_binding
         or capability.expires_at != capability.issued_at + state.manifest.preflight_ttl_seconds
     ):
@@ -1741,7 +1883,10 @@ def _capability_grant_hash(
     expires_at: int,
     consumed: bool,
     consumed_by: str | None,
+    consumer_binding_hash: str | None,
     consumed_at: int | None,
+    expired: bool,
+    expired_at: int | None,
 ) -> str:
     """Bind one exact token hash and issuance window to passed evidence."""
 
@@ -1749,16 +1894,35 @@ def _capability_grant_hash(
     expires = _strict_int(expires_at, "expires_at", issued + 1, 2**63 - 1)
     if not isinstance(consumed, bool):
         raise SchedulerPreflightError("capability consumed flag must be a boolean")
+    if not isinstance(expired, bool) or (consumed and expired):
+        raise SchedulerPreflightError("capability terminal flags are invalid")
     if consumed:
-        if consumed_by is None or consumed_at is None:
-            raise SchedulerPreflightError("consumed grant binding requires actor and time")
+        if consumed_by is None or consumer_binding_hash is None or consumed_at is None:
+            raise SchedulerPreflightError(
+                "consumed grant binding requires actor, binding, and time"
+            )
         actor = _identifier(consumed_by, "consumed_by")
-        at: int | None = _strict_int(consumed_at, "consumed_at", issued, expires)
+        consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
+        at: int | None = _strict_int(consumed_at, "consumed_at", issued, expires - 1)
     else:
-        if consumed_by is not None or consumed_at is not None:
+        if consumed_by is not None or consumer_binding_hash is not None or consumed_at is not None:
             raise SchedulerPreflightError("unconsumed grant binding cannot carry actor or time")
         actor = None
+        consumer_binding = None
         at = None
+    if expired:
+        if expired_at is None:
+            raise SchedulerPreflightError("expired grant binding requires trusted elapsed time")
+        expiration: int | None = _strict_int(
+            expired_at,
+            "expired_at",
+            expires,
+            2**63 - 1,
+        )
+    else:
+        if expired_at is not None:
+            raise SchedulerPreflightError("live grant binding cannot carry expiration data")
+        expiration = None
     payload = {
         "success_binding": _digest(success_binding, "success_binding"),
         "token_hash": _digest(token_hash, "token_hash"),
@@ -1766,7 +1930,10 @@ def _capability_grant_hash(
         "expires_at": expires,
         "consumed": consumed,
         "consumed_by": actor,
+        "consumer_binding_hash": consumer_binding,
         "consumed_at": at,
+        "expired": expired,
+        "expired_at": expiration,
     }
     return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
 
@@ -2094,6 +2261,8 @@ __all__ = [
     "parse_compute_manifest",
     "preflight_result",
     "prepare_preflight",
+    "record_capability_consumed",
+    "record_capability_expired",
     "record_clock_discontinuity",
     "record_compute_evidence",
     "record_driver_timeout",

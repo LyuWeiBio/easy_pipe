@@ -62,6 +62,8 @@ _PROFILE_HASH = "a" * 64
 _POLICY_HASH_PLACEHOLDER = "b" * 64
 _WORKER_HASH = "c" * 64
 _TOKEN = "e" * 64
+_TOKEN_HASH = hashlib.sha256(_TOKEN.encode("ascii")).hexdigest()
+_CONSUMER_BINDING_HASH = "d" * 64
 _SUBMITTED_AT = "2026-07-19T12:34:56"
 _JOB_ID = "12345"
 
@@ -287,8 +289,7 @@ def _candidate() -> SchedulerPreflightState:
 def _passed() -> SchedulerPreflightState:
     return issue_capability(
         _candidate(),
-        trusted_token=_TOKEN,
-        issued_at=1_000,
+        token_hash=_TOKEN_HASH,
         elapsed_seconds=12,
     )
 
@@ -788,14 +789,14 @@ def test_happy_transcript_mints_and_consumes_one_bound_capability() -> None:
     assert preflight_result(state)["preflight_token"] is None
     state = issue_capability(
         state,
-        trusted_token=_TOKEN,
-        issued_at=1_000,
+        token_hash=_TOKEN_HASH,
         elapsed_seconds=17,
     )
     result = preflight_result(state)
     assert result["status"] == "passed"
-    assert result["preflight_token"] == _TOKEN
+    assert result["preflight_token"] is None
     assert state.capability is not None
+    assert not hasattr(state.capability, "token")
     assert _TOKEN not in repr(state.capability)
     record = state.capability.as_record()
     assert "token" not in record
@@ -806,7 +807,8 @@ def test_happy_transcript_mints_and_consumes_one_bound_capability() -> None:
         state,
         token=_TOKEN,
         consumed_by="run-1",
-        consumed_at=1_001,
+        consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        elapsed_seconds=18,
     )
     assert consumed.capability is not None and consumed.capability.consumed is True
     assert preflight_result(consumed)["preflight_token"] is None
@@ -815,7 +817,8 @@ def test_happy_transcript_mints_and_consumes_one_bound_capability() -> None:
             consumed,
             token=_TOKEN,
             consumed_by="run-2",
-            consumed_at=1_002,
+            consumer_binding_hash="f" * 64,
+            elapsed_seconds=19,
         )
 
 
@@ -866,8 +869,7 @@ def test_capability_gate_rechecks_persisted_success_bindings(mutation: str) -> N
     with pytest.raises(SchedulerPreflightError):
         issue_capability(
             state,
-            trusted_token=_TOKEN,
-            issued_at=1_000,
+            token_hash=_TOKEN_HASH,
             elapsed_seconds=12,
         )
 
@@ -886,7 +888,8 @@ def test_passed_result_and_consume_reject_corrupted_capability_record() -> None:
             state,
             token=_TOKEN,
             consumed_by="run-1",
-            consumed_at=1_001,
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+            elapsed_seconds=13,
         )
 
 
@@ -909,7 +912,8 @@ def test_grant_binding_rejects_token_window_and_consumption_reconstruction(
             _passed(),
             token=_TOKEN,
             consumed_by="run-1",
-            consumed_at=1_001,
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+            elapsed_seconds=13,
         )
     else:
         state = _passed()
@@ -917,7 +921,6 @@ def test_grant_binding_rejects_token_window_and_consumption_reconstruction(
     assert state.capability is not None
     capability = copy.copy(state.capability)
     if mutation == "token":
-        object.__setattr__(capability, "token", "f" * 64)
         object.__setattr__(
             capability,
             "token_hash",
@@ -929,6 +932,7 @@ def test_grant_binding_rejects_token_window_and_consumption_reconstruction(
     else:
         object.__setattr__(capability, "consumed", False)
         object.__setattr__(capability, "consumed_by", None)
+        object.__setattr__(capability, "consumer_binding_hash", None)
         object.__setattr__(capability, "consumed_at", None)
     object.__setattr__(corrupted, "capability", capability)
 
@@ -996,8 +1000,7 @@ def test_missing_observations_poll_until_exact_timeout_without_token() -> None:
     with pytest.raises(SchedulerPreflightError):
         issue_capability(
             state,
-            trusted_token=_TOKEN,
-            issued_at=1_000,
+            token_hash=_TOKEN_HASH,
             elapsed_seconds=60,
         )
 
@@ -1079,8 +1082,7 @@ def test_overall_deadline_blocks_late_scheduler_evidence_and_capability() -> Non
 
     late_issue = issue_capability(
         _candidate(),
-        trusted_token=_TOKEN,
-        issued_at=2_000,
+        token_hash=_TOKEN_HASH,
         elapsed_seconds=1_030,
     )
     assert late_issue.phase == "timed_out"
@@ -1218,10 +1220,23 @@ def test_driver_timeout_rejects_elapsed_regression() -> None:
 def test_driver_transitions_reject_phases_outside_durable_recovery(
     state: SchedulerPreflightState,
 ) -> None:
-    with pytest.raises(SchedulerPreflightError, match="current phase"):
-        record_driver_timeout(state, elapsed_seconds=max(1_030, state.elapsed_seconds))
-    with pytest.raises(SchedulerPreflightError, match="current phase"):
-        record_clock_discontinuity(state)
+    if state.phase == "passed":
+        timed_out = record_driver_timeout(
+            state,
+            elapsed_seconds=max(1_030, state.elapsed_seconds),
+        )
+        assert timed_out.phase == "timed_out"
+        assert timed_out.capability == state.capability
+    else:
+        with pytest.raises(SchedulerPreflightError, match="current phase"):
+            record_driver_timeout(state, elapsed_seconds=max(1_030, state.elapsed_seconds))
+    if state.phase == "passed":
+        invalidated = record_clock_discontinuity(state)
+        assert invalidated.phase == "indeterminate"
+        assert invalidated.capability == state.capability
+    else:
+        with pytest.raises(SchedulerPreflightError, match="current phase"):
+            record_clock_discontinuity(state)
 
 
 @pytest.mark.parametrize(
@@ -1278,8 +1293,7 @@ def test_ambiguous_submit_and_release_recover_only_from_positive_evidence() -> N
         with pytest.raises(SchedulerPreflightError):
             issue_capability(
                 unknown,
-                trusted_token=_TOKEN,
-                issued_at=1_000,
+                token_hash=_TOKEN_HASH,
                 elapsed_seconds=1,
             )
 
@@ -1368,8 +1382,7 @@ def test_indeterminate_conflict_and_restart_never_mint_token() -> None:
         with pytest.raises(SchedulerPreflightError):
             issue_capability(
                 terminal,
-                trusted_token=_TOKEN,
-                issued_at=1_000,
+                token_hash=_TOKEN_HASH,
                 elapsed_seconds=11,
             )
 
@@ -1396,8 +1409,7 @@ def test_terminal_like_observation_cannot_regress_to_active_then_pass() -> None:
     with pytest.raises(SchedulerPreflightError):
         issue_capability(
             regressed,
-            trusted_token=_TOKEN,
-            issued_at=1_000,
+            token_hash=_TOKEN_HASH,
             elapsed_seconds=7,
         )
 
@@ -1545,23 +1557,22 @@ def test_failed_compute_check_is_retained_but_never_becomes_candidate() -> None:
     with pytest.raises(SchedulerPreflightError):
         issue_capability(
             failed,
-            trusted_token=_TOKEN,
-            issued_at=1_000,
+            token_hash=_TOKEN_HASH,
             elapsed_seconds=12,
         )
 
 
 @pytest.mark.parametrize(
-    ("token", "consumed_at", "message"),
+    ("token", "elapsed_seconds", "message"),
     [
-        ("f" * 64, 1_001, "invalid"),
-        (_TOKEN, 1_901, "expired"),
-        ("0" * 64, 1_001, "trusted token"),
+        ("f" * 64, 13, "invalid"),
+        (_TOKEN, 912, "expired"),
+        ("0" * 64, 13, "trusted token"),
     ],
 )
 def test_capability_consumption_rejects_wrong_expired_and_placeholder_tokens(
     token: str,
-    consumed_at: int,
+    elapsed_seconds: int,
     message: str,
 ) -> None:
     with pytest.raises(SchedulerPreflightError, match=message):
@@ -1569,27 +1580,27 @@ def test_capability_consumption_rejects_wrong_expired_and_placeholder_tokens(
             _passed(),
             token=token,
             consumed_by="run-1",
-            consumed_at=consumed_at,
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+            elapsed_seconds=elapsed_seconds,
         )
 
 
-def test_capability_token_is_injected_not_generated_and_never_available_early() -> None:
-    assert "trusted_token" in inspect.signature(issue_capability).parameters
+def test_capability_state_accepts_only_hash_and_never_exposes_raw_token() -> None:
+    parameters = inspect.signature(issue_capability).parameters
+    assert "token_hash" in parameters and "trusted_token" not in parameters
     for state in (_prepared(), _polling(), _awaiting_evidence()):
         assert preflight_result(state)["preflight_token"] is None
         with pytest.raises(SchedulerPreflightError):
             issue_capability(
                 state,
-                trusted_token=_TOKEN,
-                issued_at=1_000,
+                token_hash=_TOKEN_HASH,
                 elapsed_seconds=12,
             )
 
     with pytest.raises(SchedulerPreflightError):
         issue_capability(
             _candidate(),
-            trusted_token="0" * 64,
-            issued_at=1_000,
+            token_hash="0" * 64,
             elapsed_seconds=12,
         )
 
@@ -1708,8 +1719,7 @@ def test_pure_contract_does_not_touch_host_process_network_clock_or_rng(
     state = record_compute_evidence(state, _evidence_mapping(state), elapsed_seconds=11)
     state = issue_capability(
         state,
-        trusted_token=_TOKEN,
-        issued_at=1_000,
+        token_hash=_TOKEN_HASH,
         elapsed_seconds=12,
     )
     assert preflight_result(state)["status"] == "passed"

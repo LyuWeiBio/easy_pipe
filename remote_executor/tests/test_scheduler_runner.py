@@ -314,11 +314,11 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
                 "file_sha256": "8" * 64,
             },
         ],
-        "minimum_free_bytes": 1024 * 1024,
+        "minimum_free_bytes": config.contract.limits.minimum_free_bytes,
         "network_disabled": True,
         "resume_run_id": None,
         "resume_directory_identities": None,
-        "preflight_ttl_seconds": 900,
+        "preflight_ttl_seconds": config.contract.limits.preflight_ttl_seconds,
         "worker": {
             "contract_version": "1.0",
             "executable": str(executables["compute_worker"]),

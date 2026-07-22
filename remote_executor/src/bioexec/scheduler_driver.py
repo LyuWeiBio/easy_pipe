@@ -331,7 +331,7 @@ class SchedulerPreflightDriver:
     ) -> SchedulerDriverResult:
         state: SchedulerPreflightState = snapshot.state
         if retry is None:
-            retry = state.phase not in _TERMINAL_PHASES | {"candidate"}
+            retry = state.phase not in _TERMINAL_PHASES | {"candidate", "passed"}
         return SchedulerDriverResult(
             preflight_id=state.manifest.preflight_id,
             status=state.phase,

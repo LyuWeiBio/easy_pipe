@@ -104,7 +104,8 @@ Durable records may contain parsed job and scheduler observations, stable
 reason codes, invocation hashes, and bounded transport flags. They never
 contain scheduler raw stdout or stderr, the submit template duplicated in an
 error, argv, environment, approval keys, HMAC keys, or a raw capability token.
-Capability issuance and consumption remain outside this slice.
+Capability issuance and consumption remain outside this slice and are added by
+the schema-1.2 follow-up in ADR 0010, still without storing a raw token.
 
 M7.0d-e evolves this private schema to 1.1. The submit intent additionally
 binds the trusted boot-clock anchor, while clock discontinuity, reached driver
@@ -139,16 +140,17 @@ combined by future reviewed version-2 orchestration.
   `fsync` semantics.
 - A hostile same-identity process can still race path-based scheduler
   execution as described by ADR 0006.
-- Administrator-owned runtime installation, capability lost-response
-  semantics, active version-2 dispatch, and real Slurm acceptance remain
-  activation blockers.
+- Administrator-owned runtime installation, capability-to-run intent,
+  active version-2 dispatch, and real Slurm acceptance remain activation
+  blockers.
 
-## Next step
+## Follow-up
 
 M7.0d-d adds the separately installed, hash-bound fixed compute-preflight
 worker and its descriptor-safe manifest/evidence files as described by ADR
 0008. M7.0d-e adds the trusted-clock, durable driver-to-candidate connection in
-ADR 0009 without permitting mutation replay. M7.0d-f must add the separate
-capability lifecycle. No protocol-version-2 activation is allowed until that
-lifecycle, deployment rechecks, immutable runtime installation, and
-real-cluster acceptance are complete.
+ADR 0009 without permitting mutation replay. M7.0d-f then adds the separate
+capability lifecycle in ADR 0010 and evolves the private schema to
+1.2. No protocol-version-2 activation is allowed until a create-only run permit,
+deployment rechecks, immutable runtime installation, and real-cluster
+acceptance are complete.

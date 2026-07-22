@@ -76,6 +76,7 @@ def validate_compute_bindings(
         raise SchedulerBindingError("a validated compute manifest is required")
     expected_manifest, expected_evidence = expected_worker_paths(config, manifest.preflight_id)
     worker = config.executables["compute_worker"]
+    limits = config.contract.limits
     if worker.sha256 is None:
         raise SchedulerBindingError("trusted compute worker has no SHA-256 binding")
     if (
@@ -84,6 +85,8 @@ def validate_compute_bindings(
         or manifest.worker.executable_sha256 != worker.sha256
         or manifest.worker.manifest_path != expected_manifest
         or manifest.worker.evidence_path != expected_evidence
+        or manifest.preflight_ttl_seconds != limits.preflight_ttl_seconds
+        or manifest.minimum_free_bytes != limits.minimum_free_bytes
     ):
         raise SchedulerBindingError("compute manifest does not bind the trusted installation")
 

@@ -228,18 +228,25 @@ create-only, no-follow, bounded, canonical, and file/directory-fsynced. The
 selected shared filesystem still needs real-cluster validation for these
 semantics before scheduler activation.
 
-The dormant M7.0d-e driver is a source-level review surface, not an installed
-ForceCommand. Its state schema 1.1 records a double-checked OS boot epoch and
+The dormant M7.0d-e driver and M7.0d-f capability lifecycle are source-level
+review surfaces, not an installed ForceCommand. State schema 1.2 records a
+double-checked OS boot epoch and
 boot-relative monotonic start in the create-only submit intent. Each call may
 perform only the fixed action for the current phase and append at most one
 journal revision. Exact worker evidence is copied as a bounded parsed object
 into that private hash chain, so later handoff-file changes cannot alter the
-recorded result. The driver stops at `candidate`, always returns a null
-preflight token, and must not be wired into protocol version 2 until durable
-capability semantics and the remaining activation blockers are reviewed. In
-particular, activation must add a sleep-inclusive deadline recheck adjacent to
-scheduler process creation; the current permit guard can precede filesystem
-validation, and a host suspend in that interval cannot undo a later release.
+recorded result. The driver stops at `candidate` and always returns a null
+preflight token. The separate lifecycle can generate one raw token only after a
+hash-only issuance revision is fsynced and replayed; a lost response cannot be
+reissued, and lock/CAS consumption records trusted time, actor, and consumer
+binding before success. It still does not start a workflow and must not be wired
+into protocol version 2 until a create-only run permit and the remaining
+activation blockers are reviewed. In particular, activation must add a
+sleep-inclusive deadline recheck adjacent to scheduler process creation; the
+current permit guard can precede filesystem validation, and a host suspend in
+that interval cannot undo a later release. Raw capability responses must also
+be excluded from application logs, core dumps, and swap according to site
+policy.
 
 ## Create the controller approval key and profile
 
