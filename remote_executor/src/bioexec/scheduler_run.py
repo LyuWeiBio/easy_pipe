@@ -23,7 +23,7 @@ from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .scheduler_clock import SchedulerClock, SystemSchedulerClock
 from .scheduler_config_loader import (
@@ -54,7 +54,10 @@ from .scheduler_state import (
     _require_durable_directory,
 )
 
-SCHEDULER_RUN_SCHEMA_VERSION = "1.0"
+if TYPE_CHECKING:
+    from .scheduler_workload import SchedulerWorkloadPlan
+
+SCHEDULER_RUN_SCHEMA_VERSION = "1.1"
 SCHEDULER_RUN_NAMESPACE = "scheduler-runs-v1"
 
 _CREATE_LOCK = ".create.lock"
@@ -355,6 +358,8 @@ class _StartSession:
     run_id: str
     identity_sha256: str
     start_intent_sha256: str
+    workload_binding_sha256: str
+    workload_batch_sha256: str
     run_fd: int
     lock_fd: int
     active: bool = True
@@ -370,6 +375,8 @@ class SchedulerStartPermit:
     run_id: str
     identity_sha256: str
     start_intent_sha256: str
+    workload_binding_sha256: str
+    workload_batch_sha256: str
     _session: _StartSession = field(repr=False, compare=False)
 
     def __post_init__(self, _authority: object) -> None:
@@ -378,6 +385,8 @@ class SchedulerStartPermit:
         _identifier(self.run_id, "run_id")
         _digest(self.identity_sha256, "identity_sha256")
         _digest(self.start_intent_sha256, "start_intent_sha256")
+        _digest(self.workload_binding_sha256, "workload_binding_sha256")
+        _digest(self.workload_batch_sha256, "workload_batch_sha256")
 
 
 def verify_scheduler_run_request(
@@ -719,8 +728,10 @@ class SchedulerRunStore:
         snapshot: SchedulerRunSnapshot,
         preflight: SchedulerStateSnapshot,
         verifier: BootstrapVerifier,
+        *,
+        workload: SchedulerWorkloadPlan,
     ) -> Iterator[SchedulerStartPermit]:
-        """Verify compute artifacts, burn one start intent, and yield one live permit."""
+        """Verify artifacts, bind one workload, and yield one live start permit."""
 
         selected = self._bound_snapshot(snapshot)
         if not callable(verifier):
@@ -737,6 +748,11 @@ class SchedulerRunStore:
                 "SCHEDULER_RUN_PREFLIGHT_STALE",
                 "the consumed preflight snapshot is stale or belongs to another run",
             )
+        binding_sha256, batch_sha256 = _validated_workload_hashes(
+            workload,
+            selected,
+            current_preflight,
+        )
         root = namespace = run = lock = -1
         session: _StartSession | None = None
         try:
@@ -779,6 +795,11 @@ class SchedulerRunStore:
                     "SCHEDULER_RUN_PREFLIGHT_CHANGED",
                     "consumed preflight state changed during compute verification",
                 )
+            binding_sha256, batch_sha256 = _validated_workload_hashes(
+                workload,
+                selected,
+                refreshed,
+            )
             capability = refreshed.state.capability
             assert capability is not None and capability.consumed_at is not None
             intent = {
@@ -794,6 +815,8 @@ class SchedulerRunStore:
                 "consumed_by": capability.consumed_by,
                 "consumer_binding_hash": capability.consumer_binding_hash,
                 "consumed_at": capability.consumed_at,
+                "workload_binding_sha256": binding_sha256,
+                "workload_batch_sha256": batch_sha256,
             }
             try:
                 intent_sha = _create_record(
@@ -830,6 +853,8 @@ class SchedulerRunStore:
                 run_id=selected.run_id,
                 identity_sha256=selected.identity_sha256,
                 start_intent_sha256=intent_sha,
+                workload_binding_sha256=binding_sha256,
+                workload_batch_sha256=batch_sha256,
                 run_fd=run,
                 lock_fd=lock,
             )
@@ -838,6 +863,8 @@ class SchedulerRunStore:
                 run_id=selected.run_id,
                 identity_sha256=selected.identity_sha256,
                 start_intent_sha256=intent_sha,
+                workload_binding_sha256=binding_sha256,
+                workload_batch_sha256=batch_sha256,
                 _session=session,
             )
             yield permit
@@ -943,6 +970,7 @@ class SchedulerRunStore:
 def consume_start_permit(
     permit: SchedulerStartPermit,
     snapshot: SchedulerRunSnapshot,
+    workload: SchedulerWorkloadPlan,
 ) -> None:
     """Consume the one live permit immediately before fixed workflow continuation."""
 
@@ -953,6 +981,17 @@ def consume_start_permit(
             "SCHEDULER_RUN_START_PERMIT_INVALID",
             "a live scheduler start permit and snapshot are required",
         )
+    try:
+        workload_binding_sha256, workload_batch_sha256 = _validated_workload_hashes(
+            workload,
+            snapshot,
+            None,
+        )
+    except SchedulerRunContractError as exc:
+        raise SchedulerStartPermitError(
+            "SCHEDULER_RUN_START_PERMIT_INVALID",
+            "the scheduler start permit workload is invalid or cross-bound",
+        ) from exc
     session = permit._session
     with session.guard:
         if (
@@ -964,6 +1003,10 @@ def consume_start_permit(
             or permit.run_id != session.run_id
             or permit.identity_sha256 != session.identity_sha256
             or permit.start_intent_sha256 != session.start_intent_sha256
+            or permit.workload_binding_sha256 != session.workload_binding_sha256
+            or permit.workload_batch_sha256 != session.workload_batch_sha256
+            or workload_binding_sha256 != session.workload_binding_sha256
+            or workload_batch_sha256 != session.workload_batch_sha256
             or snapshot.run_id != session.run_id
             or snapshot.identity_sha256 != session.identity_sha256
         ):
@@ -972,6 +1015,54 @@ def consume_start_permit(
                 "the scheduler start permit is stale, consumed, or cross-bound",
             )
         session.consumed = True
+
+
+def _validated_workload_hashes(
+    workload: object,
+    snapshot: SchedulerRunSnapshot,
+    preflight: SchedulerStateSnapshot | None,
+) -> tuple[str, str]:
+    """Recompute one authority-sealed workload binding at the start boundary."""
+
+    # Delayed to keep protocol-v1 and scheduler-run imports free of the dormant
+    # workload module until a compute bootstrap explicitly crosses this boundary.
+    from .scheduler_workload import (
+        SchedulerWorkloadError,
+        SchedulerWorkloadPlan,
+        canonical_workload_plan_bytes,
+    )
+
+    if not isinstance(workload, SchedulerWorkloadPlan):
+        raise SchedulerRunContractError("an authority-sealed scheduler workload plan is required")
+    try:
+        binding_sha256 = _digest(workload.binding_sha256, "workload_binding_sha256")
+        batch_sha256 = _digest(workload.batch_sha256, "workload_batch_sha256")
+        if (
+            hashlib.sha256(canonical_workload_plan_bytes(workload)).hexdigest() != binding_sha256
+            or hashlib.sha256(workload.batch_bytes).hexdigest() != batch_sha256
+            or hashlib.sha256(workload.overlay_bytes).hexdigest() != workload.overlay_sha256
+            or _canonical_hash(list(workload.nextflow_argv)) != workload.command_sha256
+            or _canonical_hash(dict(workload.environment)) != workload.environment_sha256
+        ):
+            raise SchedulerRunContractError("scheduler workload plan integrity changed")
+    except (SchedulerWorkloadError, TypeError, ValueError, AttributeError) as exc:
+        if isinstance(exc, SchedulerRunContractError):
+            raise
+        raise SchedulerRunContractError("scheduler workload plan is invalid") from exc
+    if (
+        workload.run_id != snapshot.run_id
+        or workload.run_identity_sha256 != snapshot.identity_sha256
+        or workload.preflight_request_sha256 != snapshot.preflight_request_sha256
+    ):
+        raise SchedulerRunContractError("scheduler workload plan belongs to another run")
+    if preflight is not None and (
+        workload.preflight_request_sha256 != preflight.request_sha256
+        or workload.preflight_revision != preflight.revision
+        or workload.preflight_journal_sha256 != preflight.journal_sha256
+        or workload.manifest_sha256 != preflight.state.manifest_sha256
+    ):
+        raise SchedulerRunContractError("scheduler workload plan belongs to another preflight")
+    return binding_sha256, batch_sha256
 
 
 def _open_and_close_run_lock(run: int, *, create: bool) -> None:

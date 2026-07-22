@@ -134,6 +134,7 @@ def test_compute_bootstrap_is_a_distinct_reproducible_silent_entrypoint(
         assert archive.read("LICENSE") == LICENSE_FILE.read_bytes()
         assert "bioexec/compute_bootstrap.py" in archive.namelist()
         assert "bioexec/compute_worker.py" in archive.namelist()
+        assert "bioexec/scheduler_workload.py" in archive.namelist()
     system_python = Path("/usr/bin/python3")
     completed = subprocess.run(
         [

@@ -41,6 +41,7 @@ from bioexec.scheduler_state import (
     SchedulerStateBusyError,
     SchedulerStateSnapshot,
 )
+from bioexec.scheduler_workload import SchedulerWorkloadPlan, prepare_scheduler_workload
 
 from .test_scheduler_state import (
     StateFixture,
@@ -92,11 +93,17 @@ def _deployment(state: StateFixture) -> SchedulerDeploymentBinding:
     contents = {
         "main.nf": b"workflow {}\n",
         "nextflow.config": b"manifest.main {}\n",
+        "assets/samplesheet.csv": b"sample_id,lane,chunk,read1,read2\n",
+        "conf/base.config": b"process.errorStrategy = 'terminate'\n",
+        "conf/local.config": b"process.executor = 'local'\n",
     }
     for name, content in contents.items():
         target = deployment_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         target.chmod(0o400)
+    for directory in (deployment_path / "assets", deployment_path / "conf"):
+        directory.chmod(0o500)
     deployment_path.chmod(0o500)
     metadata = deployment_path.stat()
     files = tuple(
@@ -428,6 +435,10 @@ def test_fixed_compute_bootstrap_burns_one_intent_and_never_replays(
     intent = run_fixture.run_directory / "start.intent.json"
     assert intent.is_file()
     assert _RAW_CAPABILITY.encode("ascii") not in intent.read_bytes()
+    intent_value = json.loads(intent.read_text(encoding="ascii"))
+    assert intent_value["schema_version"] == "1.1"
+    assert len(intent_value["workload_binding_sha256"]) == 64
+    assert len(intent_value["workload_batch_sha256"]) == 64
     with pytest.raises(SchedulerRunConflictError) as captured:
         bootstrap_module._run_fixed_bootstrap(
             invocation,
@@ -530,37 +541,64 @@ def test_compute_bootstrap_rehashes_every_fixed_runtime(
 def test_claim_start_verifier_failure_leaves_no_intent(run_fixture: RunFixture) -> None:
     snapshot = run_fixture.run_store.reserve(run_fixture.verified)
     consumed = _consume_capability(run_fixture)
+    workload = prepare_scheduler_workload(run_fixture.state.config, snapshot, consumed)
 
     def failed_verifier() -> None:
         raise RuntimeError("synthetic bootstrap failure")
 
     with (
         pytest.raises(RuntimeError, match="synthetic bootstrap failure"),
-        run_fixture.run_store.claim_start(snapshot, consumed, failed_verifier),
+        run_fixture.run_store.claim_start(
+            snapshot,
+            consumed,
+            failed_verifier,
+            workload=workload,
+        ),
     ):
         pytest.fail("a failed bootstrap verifier must not yield a permit")
 
     assert not (run_fixture.run_directory / "start.intent.json").exists()
-    with run_fixture.run_store.claim_start(snapshot, consumed, lambda: None) as permit:
-        consume_start_permit(permit, snapshot)
+    with run_fixture.run_store.claim_start(
+        snapshot,
+        consumed,
+        lambda: None,
+        workload=workload,
+    ) as permit:
+        consume_start_permit(permit, snapshot, workload)
 
 
 def test_start_permit_is_one_use_and_restart_never_reissues(run_fixture: RunFixture) -> None:
     snapshot = run_fixture.run_store.reserve(run_fixture.verified)
     consumed = _consume_capability(run_fixture)
+    workload = prepare_scheduler_workload(run_fixture.state.config, snapshot, consumed)
 
-    with run_fixture.run_store.claim_start(snapshot, consumed, lambda: None) as permit:
+    with run_fixture.run_store.claim_start(
+        snapshot,
+        consumed,
+        lambda: None,
+        workload=workload,
+    ) as permit:
         assert _RAW_CAPABILITY not in repr(permit)
-        consume_start_permit(permit, snapshot)
+        consume_start_permit(permit, snapshot, workload)
         with pytest.raises(SchedulerStartPermitError):
-            consume_start_permit(permit, snapshot)
+            consume_start_permit(permit, snapshot, workload)
 
     restarted_store = SchedulerRunStore(run_fixture.state.config)
     restarted = restarted_store.load(snapshot.run_id)
     recovered_preflight = restarted_store.load_consumed_preflight(restarted)
+    recovered_workload = prepare_scheduler_workload(
+        run_fixture.state.config,
+        restarted,
+        recovered_preflight,
+    )
     with (
         pytest.raises(SchedulerRunConflictError) as captured,
-        restarted_store.claim_start(restarted, recovered_preflight, lambda: None),
+        restarted_store.claim_start(
+            restarted,
+            recovered_preflight,
+            lambda: None,
+            workload=recovered_workload,
+        ),
     ):
         pytest.fail("restart must not recreate a start permit")
     assert captured.value.reason_code == "SCHEDULER_RUN_START_ALREADY_CLAIMED"
@@ -569,17 +607,29 @@ def test_start_permit_is_one_use_and_restart_never_reissues(run_fixture: RunFixt
 def test_start_permit_rejects_another_thread(run_fixture: RunFixture) -> None:
     snapshot = run_fixture.run_store.reserve(run_fixture.verified)
     consumed = _consume_capability(run_fixture)
+    workload = prepare_scheduler_workload(run_fixture.state.config, snapshot, consumed)
 
-    with run_fixture.run_store.claim_start(snapshot, consumed, lambda: None) as permit:
+    with run_fixture.run_store.claim_start(
+        snapshot,
+        consumed,
+        lambda: None,
+        workload=workload,
+    ) as permit:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            failure = executor.submit(_permit_failure_code, permit, snapshot).result(timeout=2)
+            failure = executor.submit(_permit_failure_code, permit, snapshot, workload).result(
+                timeout=2
+            )
         assert failure == "SCHEDULER_RUN_START_PERMIT_INVALID"
-        consume_start_permit(permit, snapshot)
+        consume_start_permit(permit, snapshot, workload)
 
 
-def _permit_failure_code(permit: Any, snapshot: SchedulerRunSnapshot) -> str | None:
+def _permit_failure_code(
+    permit: Any,
+    snapshot: SchedulerRunSnapshot,
+    workload: SchedulerWorkloadPlan,
+) -> str | None:
     try:
-        consume_start_permit(permit, snapshot)
+        consume_start_permit(permit, snapshot, workload)
     except SchedulerStartPermitError as exc:
         return exc.reason_code
     return None
@@ -615,15 +665,26 @@ def test_concurrent_start_claim_has_exactly_one_permit(run_fixture: RunFixture) 
     preflights = tuple(
         stores[index].load_consumed_preflight(snapshots[index]) for index in range(len(stores))
     )
+    workloads = tuple(
+        prepare_scheduler_workload(
+            run_fixture.state.config,
+            snapshots[index],
+            preflights[index],
+        )
+        for index in range(len(stores))
+    )
     barrier = threading.Barrier(2)
 
     def claim(index: int) -> str:
         barrier.wait(timeout=2)
         try:
             with stores[index].claim_start(
-                snapshots[index], preflights[index], lambda: None
+                snapshots[index],
+                preflights[index],
+                lambda: None,
+                workload=workloads[index],
             ) as permit:
-                consume_start_permit(permit, snapshots[index])
+                consume_start_permit(permit, snapshots[index], workloads[index])
         except (SchedulerRunBusyError, SchedulerRunConflictError, SchedulerStateBusyError):
             return "rejected"
         return "started"

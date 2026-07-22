@@ -2,9 +2,10 @@
 
 The installed protocol-v1 service never imports this module.  The separately
 built entry point is intentionally silent and accepts only the fixed arguments
-rendered by the future workload template.  It replays owner-only run state,
+rendered by the dormant workload contract.  It replays owner-only run state,
 reopens every execution artifact from the allocated node, and burns a
-create-only start intent before a later fixed template may start Nextflow.
+create-only start intent bound to the exact future Nextflow continuation.  It
+still exits without executing that continuation.
 """
 
 from __future__ import annotations
@@ -172,6 +173,7 @@ def _run_fixed_bootstrap(
     # The scheduler-run store is imported here so protocol-v1 import graphs do
     # not gain a transitive scheduler-run dependency.
     from .scheduler_run import SchedulerRunStore, consume_start_permit
+    from .scheduler_workload import prepare_scheduler_workload
 
     config = load_trusted_scheduler_config(Path(invocation.config_path))
     binding = config.executables["compute_bootstrap"]
@@ -182,6 +184,7 @@ def _run_fixed_bootstrap(
     if snapshot.identity_sha256 != invocation.identity_sha256:
         raise ComputeBootstrapError("bootstrap invocation does not bind the run reservation")
     preflight = store.load_consumed_preflight(snapshot)
+    workload = prepare_scheduler_workload(config, snapshot, preflight)
 
     def verify() -> None:
         verify_compute_artifacts(
@@ -192,8 +195,13 @@ def _run_fixed_bootstrap(
             python_path=python_path,
         )
 
-    with store.claim_start(snapshot, preflight, verify) as permit:
-        consume_start_permit(permit, snapshot)
+    with store.claim_start(
+        snapshot,
+        preflight,
+        verify,
+        workload=workload,
+    ) as permit:
+        consume_start_permit(permit, snapshot, workload)
 
 
 def _verify_deployment(

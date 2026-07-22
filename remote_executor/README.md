@@ -85,6 +85,19 @@ internal permit and exits; it does not submit a workload or invoke Nextflow,
 and no installed protocol path calls it. See
 [ADR 0011](../docs/adr/0011-m7-durable-run-bootstrap.md).
 
+M7.0d-h adds a pure, closed workload contract derived only from trusted
+config-v2, the exact run reservation, and its consumed preflight. It fixes the
+bootstrap-only batch bytes, held-`sbatch` argv and minimal environment,
+private-runtime paths, offline local-executor/Apptainer overlay, and exact
+Nextflow argv and environment, including a work-directory-rooted cache and
+explicit deterministic resume session. Private scheduler-run schema 1.1
+recomputes the authority-sealed plan and commits the complete workload binding
+and batch hash into `start.intent.json`. The plan
+does not create those paths or bytes, call `sbatch`, or invoke Nextflow; the
+bootstrap still consumes its internal permit and exits, and version 2 still has
+no dispatcher. See
+[ADR 0012](../docs/adr/0012-m7-fixed-workload-contract.md).
+
 ## Build and install
 
 The zipapp builder sorts sources and normalizes ZIP timestamps, permissions,
@@ -256,6 +269,8 @@ job-lifetime leases, signed abandonment races, compatible resume, executable,
 JAR, config and ancestor trust, dormant scheduler-config startup identities and
 mutation-boundary rechecks, append-only scheduler state, one-shot mutation
 permits, exact scheduler-run reservations, consumer-bound capability recovery,
-compute-node bootstrap rehashing, at-most-once start permits, restart and
-corruption recovery, isolated client environments, and reproducible zipapp
-execution.
+compute-node bootstrap rehashing, deterministic secret-free workload bytes,
+closed Nextflow argv/environment/overlay construction, schema-1.1 workload-bound
+start permits, restart and corruption recovery, isolated client environments,
+and reproducible zipapp execution. These synthetic tests do not execute a
+Slurm workload or constitute cluster acceptance.

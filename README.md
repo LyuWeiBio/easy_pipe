@@ -122,8 +122,12 @@ production path. The trusted-clock driver advances durable Slurm preflight only
 to the non-authorizing `candidate` state. A separate private-schema-1.3
 lifecycle can bind a consumed capability to a create-only run reservation,
 rehash deployment and runtime artifacts from a compute node, and burn one start
-intent, but it is not connected to protocol version 2 and does not submit or
-start a workflow.
+intent. A pure workload contract now derives the exact bootstrap batch,
+held-`sbatch` argv, local-executor overlay, Nextflow argv, and isolated
+environment; private scheduler-run schema 1.1 binds its plan and batch hashes
+into that intent. Nothing materializes those bytes or directories, calls
+`sbatch`, invokes Nextflow, or connects protocol version 2, so this remains
+review evidence rather than an active workflow path.
 
 The normal artifact flow is:
 
@@ -234,6 +238,7 @@ remote account access to data.
 - [M7 durable preflight driver](docs/adr/0009-m7-durable-preflight-driver.md)
 - [M7 durable capability lifecycle](docs/adr/0010-m7-durable-capability-lifecycle.md)
 - [M7 durable run bootstrap](docs/adr/0011-m7-durable-run-bootstrap.md)
+- [M7 fixed workload contract](docs/adr/0012-m7-fixed-workload-contract.md)
 
 ## Development checks
 

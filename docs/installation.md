@@ -119,9 +119,12 @@ third-party Python packages. Neither `bioexec-compute-preflight` nor
 `bioexec-compute-bootstrap` is imported by the installed version-1 service, and
 building either is not evidence that Slurm is active. The source archives also
 contain the dormant trusted-clock driver, private-schema-1.3 hash-only
-capability and run state, and at-most-once start-permit boundary. They expose no
-active protocol-version-2 dispatch path, workload submission, or Nextflow
-start.
+capability state, private scheduler-run schema 1.1, and the at-most-once
+start-permit boundary. A pure workload contract can derive fixed
+bootstrap-batch, held-`sbatch`, local-Apptainer overlay, Nextflow argv, and
+isolated-environment values and bind their hashes into the start intent. It
+does not materialize its private runtime paths or bytes, execute `sbatch` or
+Nextflow, or expose an active protocol-version-2 dispatch path.
 
 Continue with [remote deployment](remote-deployment.md). Copying a zipapp to a
 server without configuring allowlists, permissions, and a fixed SSH command is

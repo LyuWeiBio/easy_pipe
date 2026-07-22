@@ -33,40 +33,50 @@ capability.
 - `plan --executor slurm` can render the reviewed site placeholder, but M5
   preflight and real-data execution support only the Nextflow `local` executor.
   There is no Slurm/PBS/SGE/Kubernetes/cloud submission implementation.
-- M7 currently contains dormant Slurm policy and version-2 profile/config/protocol
-  validators, a compute-node preflight contract, a trusted-filesystem loader, a
-  bounded stdin-capable scheduler runner, and append-only scheduler state with
-  one-shot mutation permits. The separately installed
-  `bioexec-compute-preflight` artifact implements the twelve fixed compute
+- M7 currently contains dormant Slurm policy and version-2
+  profile/config/protocol validators, a compute-node preflight contract, a
+  trusted-filesystem loader, a bounded stdin-capable scheduler runner, and
+  append-only scheduler state with one-shot mutation permits. The separately
+  installed `bioexec-compute-preflight` performs the twelve fixed compute
   checks. The dormant driver still stops at non-authorizing `candidate`; the
-  hash-only capability lifecycle burns lost issuance responses and never places
-  a raw token in generic state or driver results. The fourth remote artifact,
-  `bioexec-compute-bootstrap`, reloads an
-  exact consumed capability binding, fully rehashes the sealed deployment,
-  Python, Java, Nextflow launcher/JAR, Apptainer, itself, and every SIF from a
-  compute node, and burns one create-only start intent. Private
-  scheduler-preflight schema 1.3 preserves the exact authenticated actor and
-  domain-separated consumer binding in owner-only preflight and run state. A
-  lost or restarted live permit is never
-  reconstructed. The installed version-1 CLI, config loader, protocol
-  dispatcher, preflight, and execution runner do not import or activate any of
-  this, and synthetic tests are not cluster acceptance evidence.
-- There is still no active version-2 dispatch path, workload `sbatch` template
-  or submission, fixed Nextflow continuation, workload status reconciliation,
-  scheduler cancellation, or real-cluster acceptance evidence. The dormant
-  bootstrap consumes only an internal at-most-once permit and exits; it does not
-  start or permit an installed workflow path. A commit-unknown or lost start
-  intent intentionally strands the run instead of authorizing replay.
-  The dormant driver's retry hint is not a rate limiter; active dispatch must
-  enforce durable per-attempt poll cadence before exposing scheduler queries.
-  The clock contract is implemented for Linux and Darwin but still needs real
-  deployment validation. Path hashing and later process execution are not
-  atomic; activation requires administrator-owned immutable runtime paths or a
-  separately reviewed descriptor-based execution design. A suspend between the
-  mutation permit guard and process creation can also cause a late scheduler
-  mutation; the durable post-action timeout prevents authorization or replay
-  but cannot undo that mutation, so a sleep-inclusive pre-spawn recheck is an
-  activation blocker.
+  private scheduler-preflight schema remains 1.3, and its hash-only capability
+  lifecycle burns lost issuance responses without placing a raw token in
+  generic state or driver results.
+- The fourth remote artifact, `bioexec-compute-bootstrap`, reloads the exact
+  consumed actor/consumer binding, fully rehashes the sealed deployment and
+  every runtime/JAR/SIF artifact from a compute node, and burns one create-only
+  start intent. A pure workload contract now derives a deterministic
+  bootstrap-only batch, held-`sbatch` argv, private runtime paths, offline local
+  Apptainer overlay, and exact Nextflow argv/environment. It explicitly names
+  each run and binds resume to the prior name plus a cache rooted below the
+  approved work directory. Private scheduler-run schema 1.1 recomputes the
+  authority-sealed workload plan and binds its complete plan and batch hashes
+  into the intent.
+  A lost or restarted live permit is never reconstructed.
+- These values are not an active execution path. No implementation creates the
+  planned private runtime directories or `workload.config`, invokes `sbatch` or
+  Nextflow, binds a workload job ID, reconciles workload status, dispatches
+  protocol version 2, or cancels a job. The bootstrap consumes only its internal
+  at-most-once permit and exits. A commit-unknown or lost start intent
+  intentionally strands the run instead of authorizing replay.
+- Resource activation evidence is incomplete. The overlay records policy CPU
+  and memory values and queue size one, but there is no bounded authenticated
+  proof that every planned Nextflow process resource request fits that
+  allocation. Initial/resume work and output paths and the private runtime tree
+  and Nextflow cache also need create-only owner/mode/identity checks, exact byte
+  materialization, `fsync`, and an adjacent recheck before any process starts.
+  Terminal prior-run status evidence is likewise not connected to workload
+  resume. The local executor/container closure also depends on accepting only
+  the exact approval-bound compiler deployment and rejecting unknown process
+  names, labels, or higher-priority overrides at activation.
+- Active dispatch must still enforce durable per-attempt poll cadence and add a
+  sleep-inclusive deadline recheck adjacent to scheduler process creation.
+  Path hashing and later execution are not atomic, so administrator-owned
+  immutable runtime paths or a separately reviewed descriptor-based design
+  remain mandatory. The clock contract and shared-filesystem `flock`, `O_EXCL`,
+  stable-identity, and directory-`fsync` semantics, plus held-job/status
+  recovery, still require site-specific real-cluster acceptance. Synthetic
+  tests are not cluster evidence.
 
 ## Hosts and filesystems
 
