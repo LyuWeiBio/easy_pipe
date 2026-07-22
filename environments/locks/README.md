@@ -1,8 +1,9 @@
 # Reproducible environment and supply-chain inventory
 
 These files are generated create-only from `environments/m4-test.yml`,
-`pyproject.toml`, the fixed component registry, and the two remote zipapp source
-trees. Run `python scripts/generate_supply_chain_inventory.py verify` for a
+`pyproject.toml`, the fixed component registry, and three remote zipapp
+artifacts built from two source trees. Run
+`python scripts/generate_supply_chain_inventory.py verify` for a
 fully offline integrity and contract check.
 
 The explicit locks are cross-platform solver transactions, not proof that the

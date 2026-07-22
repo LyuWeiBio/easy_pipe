@@ -48,13 +48,19 @@ SOURCE_DATE_EPOCH=315532800 \
   python remote_probe/build_zipapp.py --output remote_probe/dist/bioprobe.pyz
 SOURCE_DATE_EPOCH=315532800 \
   python remote_executor/build_zipapp.py --output remote_executor/dist/bioexec.pyz
+SOURCE_DATE_EPOCH=315532800 \
+  python remote_executor/build_zipapp.py --artifact compute-preflight \
+  --output remote_executor/dist/bioexec-compute-preflight
 shasum -a 256 remote_probe/dist/bioprobe.pyz
 shasum -a 256 remote_executor/dist/bioexec.pyz
+shasum -a 256 remote_executor/dist/bioexec-compute-preflight
 ```
 
 Record the hashes in the deployment ticket or equivalent audit system. Verify
 the transferred files against those values on each remote host. Each zipapp
-must contain a root `LICENSE` entry matching the reviewed checkout.
+must contain a root `LICENSE` entry matching the reviewed checkout. The third
+artifact is dormant M7 material: building or transferring it does not activate
+the version-2 scheduler path.
 
 ## Deploy the read-only Remote Probe
 
@@ -189,6 +195,38 @@ Copy the reviewed Nextflow JAR to the runtime directory, make it immutable to
 the service account, and record its hash. Provision SIFs below the cache root
 and record each complete file hash. The exact commands are site-specific; do
 not use a URL or a floating image tag in the executor configuration.
+
+### Stage the dormant M7 compute worker
+
+This step prepares only the separately reviewed M7 artifact. The current
+version-1 ForceCommand, protocol, preflight, and execution lifecycle do not
+invoke it. Scheduler config-v2 additionally fixes absolute paths with exact
+leaves `python3`, `java`, `nextflow`, `apptainer`, and
+`bioexec-compute-preflight`, plus the Nextflow JAR path and every full SHA-256.
+Install the worker at one root-managed path visible with identical bytes on the
+login and compute nodes:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  bioexec-compute-preflight \
+  /srv/biopipe/runtime/bioexec-compute-preflight
+```
+
+The fixed batch template invokes the reviewed absolute Python path as
+`<absolute-python3> -I -S /srv/biopipe/runtime/bioexec-compute-preflight`; it
+never uses the archive shebang or `PATH`. Do not install either path as a symlink. The
+service identity must not be able to replace the interpreter, worker, Java,
+Nextflow launcher/JAR, Apptainer, SIFs, or their complete parent chains. The
+path-based recheck and later process start are not one atomic operation, so
+this administrator-owned deployment boundary remains mandatory before
+activation.
+
+Each future scheduler attempt uses the shared private layout
+`private-state/scheduler-preflights-v1/<preflight_id>/{manifest,evidence}.json`.
+The attempt directory is exact mode `0700`; both files are exact mode `0600`,
+create-only, no-follow, bounded, canonical, and file/directory-fsynced. The
+selected shared filesystem still needs real-cluster validation for these
+semantics before scheduler activation.
 
 ## Create the controller approval key and profile
 

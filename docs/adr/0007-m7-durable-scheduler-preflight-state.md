@@ -134,13 +134,15 @@ combined by future reviewed version-2 orchestration.
   `fsync` semantics.
 - A hostile same-identity process can still race path-based scheduler
   execution as described by ADR 0006.
-- Boot/monotonic-clock continuity, fixed compute-worker installation,
-  capability lost-response semantics, and real Slurm acceptance remain
-  activation blockers.
+- Boot/monotonic-clock continuity, administrator-owned runtime installation,
+  capability lost-response semantics, durable version-2 orchestration, and
+  real Slurm acceptance remain activation blockers.
 
 ## Next step
 
-M7.0d-d must add the separately installed, hash-bound fixed compute-preflight
-worker and its descriptor-safe manifest/evidence files. No protocol-version-2
-activation is allowed until the worker, durable driver, deployment rechecks,
-and real-cluster acceptance are complete.
+M7.0d-d adds the separately installed, hash-bound fixed compute-preflight
+worker and its descriptor-safe manifest/evidence files as described by ADR
+0008. The next slice must connect them through a durable version-2 driver and
+capability lifecycle without permitting mutation replay. No protocol-version-2
+activation is allowed until the driver, deployment rechecks, immutable runtime
+installation, and real-cluster acceptance are complete.

@@ -39,9 +39,11 @@ _DIRECTORY_FLAGS = (
 )
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 _EXECUTABLE_ROLES = (
+    "python",
     "java",
     "nextflow",
     "apptainer",
+    "compute_worker",
     "sbatch",
     "squeue",
     "sacct",
@@ -60,9 +62,11 @@ RootRole = Literal[
     "state",
 ]
 ExecutableRole = Literal[
+    "python",
     "java",
     "nextflow",
     "apptainer",
+    "compute_worker",
     "sbatch",
     "squeue",
     "sacct",

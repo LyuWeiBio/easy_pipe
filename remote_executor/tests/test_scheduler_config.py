@@ -56,9 +56,11 @@ def _valid_config() -> dict[str, Any]:
         "cache_roots": ["/srv/biopipe/container-cache"],
         "state_root": "/srv/biopipe/private-state",
         "executables": {
+            "python": "/usr/bin/python3",
             "java": "/usr/bin/java",
             "nextflow": "/usr/local/bin/nextflow",
             "apptainer": "/usr/bin/apptainer",
+            "compute_worker": "/opt/biopipe/bin/bioexec-compute-preflight",
             "sbatch": "/opt/slurm/bin/sbatch",
             "squeue": "/opt/slurm/bin/squeue",
             "sacct": "/opt/slurm/bin/sacct",
@@ -170,7 +172,18 @@ def test_executable_contract_has_no_forbidden_command_surface(forbidden: str) ->
 
 
 @pytest.mark.parametrize(
-    "field", ["java", "nextflow", "apptainer", "sbatch", "squeue", "sacct", "scontrol"]
+    "field",
+    [
+        "python",
+        "java",
+        "nextflow",
+        "apptainer",
+        "compute_worker",
+        "sbatch",
+        "squeue",
+        "sacct",
+        "scontrol",
+    ],
 )
 def test_every_fixed_executable_is_required(field: str) -> None:
     config = _valid_config()
@@ -186,6 +199,8 @@ def test_every_fixed_executable_is_required(field: str) -> None:
         ("sbatch", "sbatch"),
         ("sbatch", "/opt/slurm/bin/squeue"),
         ("scontrol", "/opt/slurm/../bin/scontrol"),
+        ("python", "/usr/bin/python"),
+        ("compute_worker", "/opt/biopipe/bin/compute_worker"),
         ("java", "/"),
         ("nextflow", "/usr/local/bin/nextflow\n--help"),
     ],

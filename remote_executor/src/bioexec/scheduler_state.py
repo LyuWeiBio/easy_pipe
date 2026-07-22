@@ -23,6 +23,11 @@ from dataclasses import InitVar, dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from .scheduler_bindings import (
+    SCHEDULER_PREFLIGHT_NAMESPACE,
+    SchedulerBindingError,
+    validate_compute_bindings,
+)
 from .scheduler_config_loader import (
     SchedulerConfigLoadError,
     TrustedSchedulerConfig,
@@ -30,9 +35,12 @@ from .scheduler_config_loader import (
     verify_scheduler_root,
 )
 from .scheduler_preflight import (
+    ComputePreflightEvidence,
     SchedulerPreflightError,
     SchedulerPreflightState,
+    canonical_evidence_bytes,
     canonical_manifest_bytes,
+    decode_compute_evidence,
     parse_compute_manifest,
     prepare_preflight,
     record_held_release,
@@ -41,16 +49,19 @@ from .scheduler_preflight import (
     record_release_unknown,
     record_scheduler_poll,
     record_submit_unknown,
+    validate_compute_evidence_binding,
 )
 from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservation
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
 SCHEDULER_STATE_SCHEMA_VERSION = "1.0"
-_NAMESPACE = "scheduler-preflights-v1"
+_NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
 _IDENTITY_FILE = "identity.json"
+_WORKER_MANIFEST_FILE = "manifest.json"
+_WORKER_EVIDENCE_FILE = "evidence.json"
 _REVISIONS_DIRECTORY = "revisions"
 _SUBMIT_INTENT_FILE = "submit.intent.json"
 _RELEASE_INTENT_FILE = "release.intent.json"
@@ -185,6 +196,10 @@ class SchedulerStateDeadlineError(SchedulerStateError):
             "SCHEDULER_RELEASE_DEADLINE_EXPIRED",
             "the scheduler release deadline expired before an intent was created",
         )
+
+
+class SchedulerWorkerEvidencePending(SchedulerStateError):
+    """Scheduler success is visible but the create-only evidence file is absent."""
 
 
 @dataclass(frozen=True)
@@ -344,6 +359,38 @@ class SchedulerPreflightStore:
         if loaded.request_sha256 != request_digest:
             raise _conflict("SCHEDULER_REQUEST_HASH_CONFLICT")
         return self._snapshot(loaded)
+
+    def read_worker_evidence(
+        self,
+        snapshot: SchedulerStateSnapshot,
+    ) -> ComputePreflightEvidence:
+        """Read one stable canonical evidence file only after scheduler success."""
+
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            if loaded.state.phase != "awaiting_evidence":
+                raise _conflict("SCHEDULER_EVIDENCE_PHASE_CONFLICT")
+            try:
+                payload = _read_private_bytes(
+                    opened.attempt_fd,
+                    _WORKER_EVIDENCE_FILE,
+                    256 * 1024,
+                )
+            except FileNotFoundError as exc:
+                raise SchedulerWorkerEvidencePending(
+                    "SCHEDULER_WORKER_EVIDENCE_PENDING",
+                    "compute evidence is not visible after scheduler success",
+                ) from exc
+        try:
+            evidence = decode_compute_evidence(payload)
+            if canonical_evidence_bytes(evidence) != payload:
+                raise SchedulerPreflightError("worker evidence bytes are not canonical")
+            evidence = validate_compute_evidence_binding(loaded.state, evidence)
+        except SchedulerPreflightError as exc:
+            raise _invalid("SCHEDULER_WORKER_EVIDENCE_INVALID") from exc
+        return evidence
 
     @contextlib.contextmanager
     def claim_submit(self, snapshot: SchedulerStateSnapshot) -> Iterator[SchedulerMutationPermit]:
@@ -709,6 +756,13 @@ class SchedulerPreflightStore:
             identity = _identity_mapping(self.config, prepared, request_sha256)
             maximum = self.config.contract.limits.max_request_bytes + (_MAX_IDENTITY_OVERHEAD_BYTES)
             _create_record(attempt, _IDENTITY_FILE, identity, maximum, fsync_parent=False)
+            _create_private_bytes(
+                attempt,
+                _WORKER_MANIFEST_FILE,
+                canonical_manifest_bytes(prepared.manifest),
+                self.config.contract.limits.max_request_bytes,
+                fsync_parent=False,
+            )
             os.fsync(attempt)
             os.fsync(namespace)
             return attempt
@@ -1056,6 +1110,114 @@ def _create_record(
     return hashlib.sha256(data).hexdigest()
 
 
+def _create_private_bytes(
+    directory: int,
+    name: str,
+    data: bytes,
+    maximum_bytes: int,
+    *,
+    fsync_parent: bool = True,
+) -> str:
+    if not isinstance(data, bytes) or not 0 < len(data) <= maximum_bytes:
+        raise SchedulerStateContractError("private scheduler file exceeds its byte budget")
+    try:
+        descriptor = os.open(name, _CREATE_FILE_FLAGS, 0o600, dir_fd=directory)
+    except FileExistsError as exc:
+        raise _conflict("SCHEDULER_CREATE_ONLY_RECORD_EXISTS") from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        _write_all(descriptor, data)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size != len(data)
+        ):
+            raise OSError("private scheduler file metadata changed")
+        os.fsync(descriptor)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_CREATE_ONLY_COMMIT_UNKNOWN",
+            "a create-only scheduler file may be incomplete",
+        ) from exc
+    try:
+        os.close(descriptor)
+    except BaseException as exc:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_CREATE_ONLY_COMMIT_UNKNOWN",
+            "a create-only scheduler file may be incomplete",
+        ) from exc
+    try:
+        if fsync_parent:
+            os.fsync(directory)
+    except OSError as exc:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_DIRECTORY_COMMIT_UNKNOWN",
+            "a scheduler file directory entry may not be durable",
+        ) from exc
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read_private_bytes(directory: int, name: str, maximum_bytes: int) -> bytes:
+    try:
+        descriptor = os.open(name, _READ_FLAGS, dir_fd=directory)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise _invalid("SCHEDULER_STATE_FILE_INVALID") from exc
+    try:
+        before = _verify_private_file(
+            descriptor,
+            directory,
+            name,
+            allow_empty=False,
+            maximum_bytes=maximum_bytes,
+        )
+        raw = _read_bounded(descriptor, maximum_bytes + 1)
+        after = os.fstat(descriptor)
+        current_after = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except SchedulerStateInvalidError:
+        raise
+    except OSError as exc:
+        raise _invalid("SCHEDULER_STATE_FILE_CHANGED") from exc
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_uid,
+        before.st_gid,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_uid,
+        after.st_gid,
+        after.st_mode,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if (
+        len(raw) > maximum_bytes
+        or before_identity != after_identity
+        or stat.S_ISLNK(current_after.st_mode)
+        or (after.st_dev, after.st_ino) != (current_after.st_dev, current_after.st_ino)
+    ):
+        raise _invalid("SCHEDULER_STATE_FILE_CHANGED")
+    return raw
+
+
 def _read_record(
     directory: int,
     name: str,
@@ -1122,6 +1284,14 @@ def _load_attempt(
     )
     _exact_fields(identity, _IDENTITY_FIELDS, "scheduler identity")
     _validate_identity(config, identity, preflight_id)
+    manifest_payload = _read_private_bytes(
+        opened.attempt_fd,
+        _WORKER_MANIFEST_FILE,
+        config.contract.limits.max_request_bytes,
+    )
+    expected_manifest = canonical_manifest_bytes(parse_compute_manifest(identity["manifest"]))
+    if manifest_payload != expected_manifest:
+        raise _invalid("SCHEDULER_WORKER_MANIFEST_INVALID")
 
     names: list[str] = []
     try:
@@ -1493,6 +1663,12 @@ def _validate_prepared(
         rebuilt = prepare_preflight(state.manifest)
     except SchedulerPreflightError as exc:
         raise SchedulerStateContractError("compute preflight manifest is invalid") from exc
+    try:
+        validate_compute_bindings(config, state.manifest)
+    except SchedulerBindingError as exc:
+        raise SchedulerStateContractError(
+            "prepared state does not bind trusted compute installation"
+        ) from exc
     if (
         rebuilt != state
         or state.manifest.profile_id != config.contract.profile_id
@@ -1895,4 +2071,5 @@ __all__ = [
     "SchedulerStateInvalidError",
     "SchedulerStatePreconditionError",
     "SchedulerStateSnapshot",
+    "SchedulerWorkerEvidencePending",
 ]

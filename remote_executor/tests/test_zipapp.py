@@ -75,3 +75,41 @@ def test_zipapp_build_is_byte_reproducible_and_health_is_one_json_line(
     assert response["success"] is True
     assert response["result"]["status"] == "ok"
     assert "exec" not in response["result"]["operations"]
+
+
+def test_compute_worker_is_a_distinct_reproducible_silent_entrypoint(
+    tmp_path: Path,
+) -> None:
+    builder = _builder_module()
+    first = tmp_path / "bioexec-compute-preflight"
+    second = tmp_path / "second-bioexec-compute-preflight"
+
+    builder.build(first, 315_532_800, "compute-preflight")  # type: ignore[attr-defined]
+    builder.build(second, 315_532_800, "compute-preflight")  # type: ignore[attr-defined]
+
+    assert first.read_bytes() == second.read_bytes()
+    assert stat.S_IMODE(first.stat().st_mode) == 0o755
+    with zipfile.ZipFile(first) as archive:
+        assert archive.read("__main__.py") == (
+            b"from bioexec.compute_worker import main\nraise SystemExit(main())\n"
+        )
+        assert archive.read("LICENSE") == LICENSE_FILE.read_bytes()
+        assert "bioexec/compute_worker.py" in archive.namelist()
+    system_python = Path("/usr/bin/python3")
+    completed = subprocess.run(
+        [
+            str(system_python if system_python.exists() else Path(sys.executable)),
+            "-I",
+            "-S",
+            str(first),
+        ],
+        text=False,
+        capture_output=True,
+        timeout=5,
+        check=False,
+        shell=False,
+        env={"LANG": "C", "LC_ALL": "C"},
+    )
+    assert completed.returncode == 70
+    assert completed.stdout == b""
+    assert completed.stderr == b""

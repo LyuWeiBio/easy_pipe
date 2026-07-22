@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -342,6 +343,24 @@ def test_source_reader_rejects_symlinked_parent_component(tmp_path: Path) -> Non
 def test_offline_zipapp_inventory_deeply_validates_members() -> None:
     value = inventory._zipapp_inventory(REPOSITORY_ROOT)
     inventory._validate_zipapp_inventory(value)
+    assert [artifact["role"] for artifact in value["artifacts"]] == [
+        "bioprobe",
+        "bioexec",
+        "bioexec_compute_preflight",
+    ]
+    assert [artifact["archive_name"] for artifact in value["artifacts"]] == [
+        "bioprobe.pyz",
+        "bioexec.pyz",
+        "bioexec-compute-preflight",
+    ]
+    worker = value["artifacts"][2]
+    main = next(member for member in worker["members"] if member["name"] == "__main__.py")
+    assert (
+        main["sha256"]
+        == hashlib.sha256(
+            b"from bioexec.compute_worker import main\nraise SystemExit(main())\n"
+        ).hexdigest()
+    )
 
     forged_mode = copy.deepcopy(value)
     forged_mode["artifacts"][0]["members"][0]["mode"] = "0777"

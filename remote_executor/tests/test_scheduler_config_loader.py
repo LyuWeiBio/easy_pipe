@@ -64,15 +64,27 @@ def scheduler_config_fixture(tmp_path: Path) -> SchedulerConfigFixture:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(mode=0o700)
     executable_roles = (
+        "python",
         "java",
         "nextflow",
         "apptainer",
+        "compute_worker",
         "sbatch",
         "squeue",
         "sacct",
         "scontrol",
     )
-    executables = {role: bin_dir / role for role in executable_roles}
+    executable_leaves = {
+        role: (
+            "python3"
+            if role == "python"
+            else "bioexec-compute-preflight"
+            if role == "compute_worker"
+            else role
+        )
+        for role in executable_roles
+    }
+    executables = {role: bin_dir / executable_leaves[role] for role in executable_roles}
     for role, path in executables.items():
         _write_executable(path, role)
 
@@ -155,9 +167,11 @@ def test_trusted_loader_binds_exact_config_roots_executables_and_jar(
     assert loaded.read_roots[0].path == fixture.roots["read"]
     assert loaded.state_root.mode == 0o700
     assert tuple(loaded.executables) == (
+        "python",
         "java",
         "nextflow",
         "apptainer",
+        "compute_worker",
         "sbatch",
         "squeue",
         "sacct",

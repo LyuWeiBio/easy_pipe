@@ -683,7 +683,11 @@ def _validate_zip_member_name(name: str) -> PurePosixPath:
 
 
 def _expected_zip_members(
-    repository: Path, package: str, project_directory: str
+    repository: Path,
+    package: str,
+    project_directory: str,
+    *,
+    main_module: str | None = None,
 ) -> dict[str, bytes]:
     source = repository / project_directory / "src" / package
     try:
@@ -715,8 +719,9 @@ def _expected_zip_members(
                     python_files.append(path)
             else:
                 _fail("UNSAFE_ZIPAPP_SOURCE")
+    selected_main = main_module or f"{package}.main"
     members = {
-        "__main__.py": f"from {package}.main import main\nraise SystemExit(main())\n".encode(),
+        "__main__.py": f"from {selected_main} import main\nraise SystemExit(main())\n".encode(),
         "LICENSE": _read_source(repository / "LICENSE", maximum=128 * 1024),
     }
     for path in sorted(python_files):
@@ -784,8 +789,16 @@ def _inspect_zipapp(
 
 def _zipapp_inventory(repository: Path) -> dict[str, Any]:
     roles = (
-        ("bioprobe", "remote_probe", "bioprobe.pyz"),
-        ("bioexec", "remote_executor", "bioexec.pyz"),
+        ("bioprobe", "bioprobe", "remote_probe", "bioprobe.pyz", None, ()),
+        ("bioexec", "bioexec", "remote_executor", "bioexec.pyz", None, ()),
+        (
+            "bioexec_compute_preflight",
+            "bioexec",
+            "remote_executor",
+            "bioexec-compute-preflight",
+            "bioexec.compute_worker",
+            ("--artifact", "compute-preflight"),
+        ),
     )
     artifacts: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="easy-pipe-zipapps-") as raw_temporary:
@@ -800,14 +813,25 @@ def _zipapp_inventory(repository: Path) -> dict[str, Any]:
             "SOURCE_DATE_EPOCH": str(SOURCE_DATE_EPOCH),
             "TMPDIR": str(temporary),
         }
-        for package, project_directory, artifact_name in roles:
+        for role, package, project_directory, artifact_name, main_module, build_args in roles:
             builder = repository / project_directory / "build_zipapp.py"
             builder_payload = _read_source(builder, maximum=256 * 1024)
-            expected = _expected_zip_members(repository, package, project_directory)
-            outputs = [temporary / f"{package}-{index}.pyz" for index in (1, 2)]
+            expected = _expected_zip_members(
+                repository,
+                package,
+                project_directory,
+                main_module=main_module,
+            )
+            outputs = [temporary / f"{role}-{index}.pyz" for index in (1, 2)]
             for output in outputs:
                 _run_bounded(
-                    [sys.executable, str(builder), "--output", str(output)],
+                    [
+                        sys.executable,
+                        str(builder),
+                        *build_args,
+                        "--output",
+                        str(output),
+                    ],
                     cwd=repository,
                     environment=environment,
                     timeout=60,
@@ -817,7 +841,12 @@ def _zipapp_inventory(repository: Path) -> dict[str, Any]:
             if first != second:
                 _fail("ZIPAPP_BUILD_NOT_REPRODUCIBLE")
             if builder_payload != _read_source(builder, maximum=256 * 1024) or expected != (
-                _expected_zip_members(repository, package, project_directory)
+                _expected_zip_members(
+                    repository,
+                    package,
+                    project_directory,
+                    main_module=main_module,
+                )
             ):
                 _fail("UNSTABLE_ZIPAPP_SOURCE")
             digest, size, members = _inspect_zipapp(outputs[0], expected_members=expected)
@@ -829,7 +858,7 @@ def _zipapp_inventory(repository: Path) -> dict[str, Any]:
                     "build_count": 2,
                     "bytes_equal": True,
                     "members": members,
-                    "role": package,
+                    "role": role,
                     "version": _version_from_source(
                         repository / project_directory / "src" / package / "__init__.py"
                     ),
@@ -1004,8 +1033,9 @@ def _validate_container_inventory(value: object) -> None:
 README = b"""# Reproducible environment and supply-chain inventory
 
 These files are generated create-only from `environments/m4-test.yml`,
-`pyproject.toml`, the fixed component registry, and the two remote zipapp source
-trees. Run `python scripts/generate_supply_chain_inventory.py verify` for a
+`pyproject.toml`, the fixed component registry, and three remote zipapp
+artifacts built from two source trees. Run
+`python scripts/generate_supply_chain_inventory.py verify` for a
 fully offline integrity and contract check.
 
 The explicit locks are cross-platform solver transactions, not proof that the
@@ -1384,10 +1414,14 @@ def _validate_zipapp_inventory(value: object) -> None:
             "status": "pending",
         }
         or not isinstance(value.get("artifacts"), list)
-        or len(value["artifacts"]) != 2
+        or len(value["artifacts"]) != 3
     ):
         _fail("INVALID_ZIPAPP_INVENTORY")
-    expected_names = {"bioexec": "bioexec.pyz", "bioprobe": "bioprobe.pyz"}
+    expected_names = {
+        "bioexec": ("bioexec.pyz", "bioexec"),
+        "bioexec_compute_preflight": ("bioexec-compute-preflight", "bioexec"),
+        "bioprobe": ("bioprobe.pyz", "bioprobe"),
+    }
     observed_roles: set[str] = set()
     for artifact in value["artifacts"]:
         if not isinstance(artifact, dict) or set(artifact) != {
@@ -1410,7 +1444,7 @@ def _validate_zipapp_inventory(value: object) -> None:
             not isinstance(role, str)
             or role not in expected_names
             or role in observed_roles
-            or artifact.get("archive_name") != expected_names[role]
+            or artifact.get("archive_name") != expected_names[role][0]
             or artifact.get("build_count") != 2
             or artifact.get("bytes_equal") is not True
             or not isinstance(archive_sha256, str)
@@ -1452,7 +1486,8 @@ def _validate_zipapp_inventory(value: object) -> None:
             or len(names) != len(set(names))
             or names[2:] != sorted(names[2:])
             or any(
-                not name.startswith(f"{role}/") or not name.endswith(".py") for name in names[2:]
+                not name.startswith(f"{expected_names[role][1]}/") or not name.endswith(".py")
+                for name in names[2:]
             )
             or total_member_size >= archive_size
         ):

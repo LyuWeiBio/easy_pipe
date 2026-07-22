@@ -34,6 +34,11 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import IO, Literal, TypeVar
 
+from .scheduler_bindings import (
+    SchedulerBindingError,
+    validate_compute_bindings,
+    verify_compute_installation,
+)
 from .scheduler_config_loader import (
     RootRole,
     SchedulerConfigLoadError,
@@ -352,6 +357,14 @@ class SchedulerRunnerAdapter:
             deadline=deadline,
             state=state,
         )
+        try:
+            verify_compute_installation(self.config, state.manifest)
+        except (SchedulerBindingError, SchedulerConfigLoadError) as exc:
+            raise SchedulerRunnerPreconditionError(
+                invocation.operation,
+                invocation.invocation_sha256,
+                "SCHEDULER_COMPUTE_INSTALLATION_CHANGED",
+            ) from exc
         result: SchedulerCommandResult | None = None
         try:
             result = self._run_mutation(invocation)
@@ -609,8 +622,9 @@ def _validate_state(
             "scheduler preflight state does not bind trusted config-v2"
         )
     try:
+        validate_compute_bindings(config, manifest)
         rebuilt = prepare_preflight(manifest)
-    except SchedulerPreflightError as exc:
+    except (SchedulerBindingError, SchedulerPreflightError) as exc:
         raise SchedulerRunnerContractError(
             "scheduler preflight state cannot be revalidated"
         ) from exc

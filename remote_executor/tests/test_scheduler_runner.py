@@ -46,6 +46,7 @@ from bioexec.scheduler_runner import (
 from bioexec.scheduler_state import (
     SchedulerMutationPermit,
     SchedulerPreflightStore,
+    SchedulerStateContractError,
     SchedulerStateSnapshot,
 )
 from bioexec.slurm import SlurmHeldJob, SlurmJobRef
@@ -173,9 +174,11 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
         roots[role] = root
 
     executable_roles = (
+        "python",
         "java",
         "nextflow",
         "apptainer",
+        "compute_worker",
         "sbatch",
         "squeue",
         "sacct",
@@ -183,7 +186,17 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(mode=0o700)
-    executables = {role: bin_dir / role for role in executable_roles}
+    executable_leaves = {
+        role: (
+            "python3"
+            if role == "python"
+            else "bioexec-compute-preflight"
+            if role == "compute_worker"
+            else role
+        )
+        for role in executable_roles
+    }
+    executables = {role: bin_dir / executable_leaves[role] for role in executable_roles}
     for executable in executables.values():
         _write_executable(executable)
 
@@ -242,17 +255,31 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
     config_path.chmod(0o600)
     config = load_trusted_scheduler_config(config_path)
 
-    worker_dir = roots["state"] / "preflight-1"
-    worker_dir.mkdir(mode=0o700)
+    worker_dir = roots["state"] / "scheduler-preflights-v1" / "preflight-1"
     execution_paths = (str(roots["read"] / "sample_R1.fastq.gz"),)
     manifest_value: dict[str, Any] = {
-        "manifest_version": "1.0",
+        "manifest_version": "1.1",
         "preflight_id": "preflight-1",
         "profile_version": "2.0",
         "profile_id": config.contract.profile_id,
         "profile_hash": config.contract.profile_hash,
         "scheduler_policy_hash": config.scheduler_policy_hash,
         "scheduler_policy": policy,
+        "compute_runtime": {
+            "python_executable": str(executables["python"]),
+            "python_sha256": config.executables["python"].sha256,
+            "java_executable": str(executables["java"]),
+            "java_sha256": config.executables["java"].sha256,
+            "nextflow_executable": str(executables["nextflow"]),
+            "nextflow_sha256": config.executables["nextflow"].sha256,
+            "nextflow_version": config.contract.nextflow_version,
+            "nextflow_jar": str(nextflow_jar),
+            "nextflow_jar_sha256": config.nextflow_jar.sha256,
+            "apptainer_executable": str(executables["apptainer"]),
+            "apptainer_sha256": config.executables["apptainer"].sha256,
+            "command_timeout_seconds": config.contract.limits.command_timeout_seconds,
+            "max_command_output_bytes": config.contract.limits.max_command_output_bytes,
+        },
         "project_hash": _project_hash(),
         "artifact_hashes": _artifact_hashes(),
         "source_host": "source-host",
@@ -290,11 +317,12 @@ def runner_fixture(tmp_path: Path) -> RunnerFixture:
         "minimum_free_bytes": 1024 * 1024,
         "network_disabled": True,
         "resume_run_id": None,
+        "resume_directory_identities": None,
         "preflight_ttl_seconds": 900,
         "worker": {
             "contract_version": "1.0",
-            "executable": str(worker_dir / "bioexec-compute-preflight"),
-            "executable_sha256": "d" * 64,
+            "executable": str(executables["compute_worker"]),
+            "executable_sha256": config.executables["compute_worker"].sha256,
             "manifest_path": str(worker_dir / "manifest.json"),
             "evidence_path": str(worker_dir / "evidence.json"),
         },
@@ -341,9 +369,16 @@ def _fresh_prepared(
     state: SchedulerPreflightState | None = None,
 ) -> SchedulerPreflightState:
     basis = fixture.prepared if state is None else state
+    preflight_id = f"runner-{next(_ATTEMPT_SEQUENCE)}"
+    worker_dir = fixture.state_root / "scheduler-preflights-v1" / preflight_id
     manifest = replace(
         basis.manifest,
-        preflight_id=f"runner-{next(_ATTEMPT_SEQUENCE)}",
+        preflight_id=preflight_id,
+        worker=replace(
+            basis.manifest.worker,
+            manifest_path=str(worker_dir / "manifest.json"),
+            evidence_path=str(worker_dir / "evidence.json"),
+        ),
     )
     return prepare_preflight(manifest)
 
@@ -608,13 +643,32 @@ def test_pre_popen_start_error_is_distinct_from_post_start_unknown(
     assert len(captured.value.invocation_sha256) == 64
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        "sbatch",
+        "python",
+        "java",
+        "nextflow",
+        "nextflow_jar",
+        "apptainer",
+        "compute_worker",
+    ],
+)
 def test_trusted_recheck_failure_is_precondition_not_start_or_unknown(
     runner_fixture: RunnerFixture,
+    role: str,
 ) -> None:
     fixture = runner_fixture
     with _submit_claim(fixture) as (_store, _snapshot, permit):
-        fixture.executables["sbatch"].write_bytes(b"changed after startup")
-        fixture.executables["sbatch"].chmod(0o755)
+        if role == "nextflow_jar":
+            changed = fixture.config.nextflow_jar.path
+            changed.chmod(0o644)
+            changed.write_bytes(b"changed after startup")
+            changed.chmod(0o444)
+        else:
+            fixture.executables[role].write_bytes(b"changed after startup")
+            fixture.executables[role].chmod(0o755)
 
         with pytest.raises(SchedulerRunnerPreconditionError):
             fixture.adapter.submit_held(permit.state, permit=permit)
@@ -784,8 +838,14 @@ def test_manifest_paths_must_bind_componentwise_to_trusted_role_roots(
         manifest.path_mapping[0],
         execution_prefix="/outside/raw",
     )
+    invalid_worker_state = prepare_preflight(replace(manifest, worker=outside_worker))
+    with pytest.raises(SchedulerStateContractError, match="trusted compute installation"):
+        SchedulerPreflightStore(fixture.config).create_or_load(
+            invalid_worker_state,
+            request_sha256=_request_sha256(invalid_worker_state),
+        )
+
     invalid_manifests = (
-        replace(manifest, worker=outside_worker),
         replace(manifest, work_dir="/outside/work/run-1"),
         replace(
             manifest,

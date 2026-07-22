@@ -61,6 +61,9 @@ jobs:
           python remote_executor/build_zipapp.py --output "$zipapp_dir/bioexec-a.pyz"
           python remote_executor/build_zipapp.py --output "$zipapp_dir/bioexec-b.pyz"
           cmp "$zipapp_dir/bioexec-a.pyz" "$zipapp_dir/bioexec-b.pyz"
+          python remote_executor/build_zipapp.py --artifact compute-preflight --output "$zipapp_dir/worker-a"
+          python remote_executor/build_zipapp.py --artifact compute-preflight --output "$zipapp_dir/worker-b"
+          cmp "$zipapp_dir/worker-a" "$zipapp_dir/worker-b"
       - name: Clean wheel and sdist install smoke
         env:
           PYTHONPATH: ""
@@ -115,4 +118,5 @@ jobs:
         run: |
           python -m compileall -q remote_executor/src remote_executor/build_zipapp.py
           python remote_executor/build_zipapp.py
+          python remote_executor/build_zipapp.py --artifact compute-preflight
           python -m pytest remote_executor/tests

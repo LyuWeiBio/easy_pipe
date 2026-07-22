@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a byte-reproducible, dependency-free ``bioexec.pyz`` archive."""
+"""Build byte-reproducible dependency-free executor or compute-worker archives."""
 
 from __future__ import annotations
 
@@ -16,18 +16,30 @@ REPOSITORY_ROOT = PROJECT_DIR.parent
 SOURCE_DIR = PROJECT_DIR / "src" / "bioexec"
 LICENSE_FILE = REPOSITORY_ROOT / "LICENSE"
 DEFAULT_OUTPUT = PROJECT_DIR / "dist" / "bioexec.pyz"
+DEFAULT_WORKER_OUTPUT = PROJECT_DIR / "dist" / "bioexec-compute-preflight"
 DEFAULT_EPOCH = 315_532_800
 SHEBANG = b"#!/usr/bin/env python3\n"
-ARCHIVE_MAIN = b"from bioexec.main import main\nraise SystemExit(main())\n"
+ARCHIVE_MAINS = {
+    "executor": b"from bioexec.main import main\nraise SystemExit(main())\n",
+    "compute-preflight": (b"from bioexec.compute_worker import main\nraise SystemExit(main())\n"),
+}
 
 
-def build(output: Path, source_date_epoch: int) -> Path:
+def build(
+    output: Path,
+    source_date_epoch: int,
+    artifact: str = "executor",
+) -> Path:
     """Build the archive from sorted sources with normalized metadata."""
 
     if not SOURCE_DIR.is_dir():
         raise RuntimeError(f"missing source package: {SOURCE_DIR}")
     if not LICENSE_FILE.is_file():
         raise RuntimeError(f"missing repository license: {LICENSE_FILE}")
+    try:
+        archive_main = ARCHIVE_MAINS[artifact]
+    except KeyError as exc:
+        raise ValueError("artifact must be executor or compute-preflight") from exc
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.tmp")
@@ -37,7 +49,7 @@ def build(output: Path, source_date_epoch: int) -> Path:
         with temporary.open("wb") as raw_output:
             raw_output.write(SHEBANG)
         with zipfile.ZipFile(temporary, mode="a", compression=zipfile.ZIP_STORED) as archive:
-            _write_entry(archive, "__main__.py", ARCHIVE_MAIN, timestamp)
+            _write_entry(archive, "__main__.py", archive_main, timestamp)
             _write_entry(archive, "LICENSE", LICENSE_FILE.read_bytes(), timestamp)
             for source in sources:
                 archive_name = (Path("bioexec") / source.relative_to(SOURCE_DIR)).as_posix()
@@ -74,7 +86,12 @@ def _zip_timestamp(epoch: int) -> tuple[int, int, int, int, int, int]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--artifact",
+        choices=tuple(ARCHIVE_MAINS),
+        default="executor",
+    )
+    parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
@@ -85,7 +102,10 @@ def main() -> int:
         epoch = int(raw_epoch)
     except ValueError as exc:
         raise SystemExit("SOURCE_DATE_EPOCH must be an integer") from exc
-    print(build(args.output, epoch))
+    output = args.output
+    if output is None:
+        output = DEFAULT_OUTPUT if args.artifact == "executor" else DEFAULT_WORKER_OUTPUT
+    print(build(output, epoch, args.artifact))
     return 0
 
 

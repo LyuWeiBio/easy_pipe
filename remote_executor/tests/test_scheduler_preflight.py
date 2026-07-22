@@ -118,13 +118,28 @@ def _manifest_mapping(**updates: object) -> dict[str, Any]:
     policy = SlurmSchedulerPolicy.from_mapping(policy_mapping)
     execution_paths = ("/shared/raw/sample_R1.fastq.gz",)
     value: dict[str, Any] = {
-        "manifest_version": "1.0",
+        "manifest_version": "1.1",
         "preflight_id": "preflight-1",
         "profile_version": "2.0",
         "profile_id": "hpc01-slurm",
         "profile_hash": _PROFILE_HASH,
         "scheduler_policy_hash": scheduler_policy_hash(policy),
         "scheduler_policy": policy_mapping,
+        "compute_runtime": {
+            "python_executable": "/usr/bin/python3",
+            "python_sha256": "9" * 64,
+            "java_executable": "/usr/bin/java",
+            "java_sha256": "a" * 64,
+            "nextflow_executable": "/opt/nextflow/bin/nextflow",
+            "nextflow_sha256": "b" * 64,
+            "nextflow_version": "24.10.0",
+            "nextflow_jar": "/opt/nextflow/lib/nextflow-24.10.0-one.jar",
+            "nextflow_jar_sha256": "c" * 64,
+            "apptainer_executable": "/usr/bin/apptainer",
+            "apptainer_sha256": "e" * 64,
+            "command_timeout_seconds": 30.0,
+            "max_command_output_bytes": 262144,
+        },
         "project_hash": _project_hash(),
         "artifact_hashes": _artifact_hashes(),
         "source_host": "source-host",
@@ -162,6 +177,7 @@ def _manifest_mapping(**updates: object) -> dict[str, Any]:
         "minimum_free_bytes": 1024 * 1024,
         "network_disabled": True,
         "resume_run_id": None,
+        "resume_directory_identities": None,
         "preflight_ttl_seconds": 900,
         "worker": {
             "contract_version": "1.0",
@@ -355,6 +371,13 @@ def test_manifest_rejects_every_caller_scheduler_or_script_surface(forbidden: st
         (("network_disabled",), False),
         (("minimum_free_bytes",), True),
         (("preflight_ttl_seconds",), 0),
+        (("compute_runtime", "python_executable"), "/usr/bin/python"),
+        (("compute_runtime", "python_sha256"), "0" * 64),
+        (("compute_runtime", "java_executable"), "/usr/bin/sh"),
+        (("compute_runtime", "nextflow_version"), "bad version"),
+        (("compute_runtime", "apptainer_executable"), "/usr/bin/apptainer;id"),
+        (("compute_runtime", "command_timeout_seconds"), float("nan")),
+        (("compute_runtime", "max_command_output_bytes"), True),
         (("worker", "contract_version"), "2.0"),
         (("worker", "executable_sha256"), "0" * 64),
         (("worker", "executable"), "/bin/sh"),
@@ -374,6 +397,48 @@ def test_manifest_bindings_and_trusted_worker_fail_closed(
 
     with pytest.raises(SchedulerPreflightError):
         parse_compute_manifest(value)
+
+
+def test_resume_requires_all_exact_private_directory_identities() -> None:
+    identity = {
+        "device": 1,
+        "inode": 2,
+        "owner": os.geteuid(),
+        "group": os.getegid(),
+        "mode": 0o700,
+    }
+    value = _manifest_mapping(
+        resume_run_id="run-previous",
+        resume_directory_identities={
+            "deploy": dict(identity),
+            "work": dict(identity),
+            "output": dict(identity),
+        },
+    )
+    manifest = parse_compute_manifest(value)
+    assert manifest.resume_run_id == "run-previous"
+    assert manifest.resume_directory_identities is not None
+    assert set(manifest.resume_directory_identities) == {"deploy", "work", "output"}
+
+    missing = copy.deepcopy(value)
+    del missing["resume_directory_identities"]["output"]
+    with pytest.raises(SchedulerPreflightError):
+        parse_compute_manifest(missing)
+
+    wrong_mode = copy.deepcopy(value)
+    wrong_mode["resume_directory_identities"]["work"]["mode"] = 0o750
+    with pytest.raises(SchedulerPreflightError):
+        parse_compute_manifest(wrong_mode)
+
+    initial_with_identity = _manifest_mapping(
+        resume_directory_identities=value["resume_directory_identities"]
+    )
+    with pytest.raises(SchedulerPreflightError):
+        parse_compute_manifest(initial_with_identity)
+
+    resume_without_identity = _manifest_mapping(resume_run_id="run-previous")
+    with pytest.raises(SchedulerPreflightError):
+        parse_compute_manifest(resume_without_identity)
 
 
 @pytest.mark.parametrize(
@@ -484,7 +549,7 @@ def test_template_is_fixed_ascii_worker_invocation_and_hash_bound() -> None:
         "#!/bin/sh\n"
         "set -eu\n"
         "umask 077\n"
-        "exec /opt/biopipe/bin/bioexec-compute-preflight \\\n"
+        "exec /usr/bin/python3 -I -S /opt/biopipe/bin/bioexec-compute-preflight \\\n"
         "  --contract-version=1.0 \\\n"
         "  --manifest=/private/preflight-1/manifest.json \\\n"
         f"  --manifest-sha256={manifest_hash(manifest)} \\\n"
@@ -1500,7 +1565,7 @@ def test_public_api_does_not_offer_generic_command_script_or_argv_inputs() -> No
 
 
 def test_module_contract_constants_and_twelve_check_names_are_frozen() -> None:
-    assert scheduler_preflight_module.MANIFEST_VERSION == "1.0"
+    assert scheduler_preflight_module.MANIFEST_VERSION == "1.1"
     assert scheduler_preflight_module.EVIDENCE_VERSION == "1.0"
     assert scheduler_preflight_module.WORKER_CONTRACT_VERSION == "1.0"
     assert tuple(sorted(COMPUTE_CHECK_NAMES)) == COMPUTE_CHECK_NAMES

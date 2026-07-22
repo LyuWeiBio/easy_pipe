@@ -85,8 +85,8 @@
     },
     {
       "archive_name": "bioexec.pyz",
-      "archive_sha256": "123a698ae5b565a25ffb82cc683a4332d8a286158ab85960da88de967913f68b",
-      "archive_size": 488198,
+      "archive_sha256": "747a64968b8f23a763aac4df7f250a60f7238b1d9e25d9fcc7fc76bc7d19f651",
+      "archive_size": 565880,
       "build_count": 2,
       "bytes_equal": true,
       "members": [
@@ -119,6 +119,12 @@
           "name": "bioexec/commands.py",
           "sha256": "654b5ff9b3a518ec6cb3de0f9e4fcb52a7d7c7b609d7f2d89b3dc42bfe790ab0",
           "size": 9022
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/compute_worker.py",
+          "sha256": "a3296f68673f2b4ee80667264f6b104e59276b9f0a0e7442fe2ff51a3bca0794",
+          "size": 53969
         },
         {
           "mode": "0644",
@@ -170,21 +176,27 @@
         },
         {
           "mode": "0644",
+          "name": "bioexec/scheduler_bindings.py",
+          "sha256": "acf39a4c32113554a7c75d19638a8a8b2db718a4d3bfdcc112cfb3a15650c774",
+          "size": 4709
+        },
+        {
+          "mode": "0644",
           "name": "bioexec/scheduler_config.py",
-          "sha256": "76cfc547b692782af71176ba1c0a8eec68427695e56e177dc6528ba0c3656fab",
-          "size": 21710
+          "sha256": "36280f4936feeebe1f51749024a212e79722b2caec483dc04046847c6b043666",
+          "size": 22500
         },
         {
           "mode": "0644",
           "name": "bioexec/scheduler_config_loader.py",
-          "sha256": "b1f5bb06d0cbeacfb182d889fa9efc363be8bf70ff3782c5c7c18cda8bfe8905",
-          "size": 34497
+          "sha256": "79f2ee31f9ac8990f5b6e089da7a64b2f6a1bce5f7c8da024ac28a10358f940d",
+          "size": 34569
         },
         {
           "mode": "0644",
           "name": "bioexec/scheduler_preflight.py",
-          "sha256": "49c3d9e3ea9a7f5ee7d9e09f8e6322090040302711eeef91ff78b2f15b59ae2f",
-          "size": 66241
+          "sha256": "304d66d858338d87169cdbf64c63d516448cff8b26f3393846934fefa01e36dc",
+          "size": 77153
         },
         {
           "mode": "0644",
@@ -195,14 +207,14 @@
         {
           "mode": "0644",
           "name": "bioexec/scheduler_runner.py",
-          "sha256": "5763e91536f222de2655f309327701132ff4c9ea38392b34879c9943bf5d852d",
-          "size": 43719
+          "sha256": "e7ab0e7d9a9639f0b905e64bffda38872065042a2c062a38e16788628b84d10d",
+          "size": 44295
         },
         {
           "mode": "0644",
           "name": "bioexec/scheduler_state.py",
-          "sha256": "96e0e1719e8f1448c67808081d785afc07701a4dab19682c15892eda158b2124",
-          "size": 70840
+          "sha256": "7d7f9e2996001499c048ed22510c1b9f15514d711c989c36b7b0fb4f72e72b2d",
+          "size": 77234
         },
         {
           "mode": "0644",
@@ -218,6 +230,155 @@
         }
       ],
       "role": "bioexec",
+      "version": "0.1.0"
+    },
+    {
+      "archive_name": "bioexec-compute-preflight",
+      "archive_sha256": "b96914481738e5d38aef65ef09b5ca6f49b0459930ba18c1a3442889337b1754",
+      "archive_size": 565890,
+      "build_count": 2,
+      "bytes_equal": true,
+      "members": [
+        {
+          "mode": "0644",
+          "name": "__main__.py",
+          "sha256": "0bef3337558006073ad9c583df02c3b1808e50b8ae5aacedcfe2e7c5097f1ab2",
+          "size": 65
+        },
+        {
+          "mode": "0644",
+          "name": "LICENSE",
+          "sha256": "82c486fd9a885b07ce93eff575f9ba52a30aa7e13b163e26818925df706ada51",
+          "size": 1064
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/__init__.py",
+          "sha256": "5c8d17076b547f0e63e24945c7d4d0c7b0314ee369fd01cabac6cd85a2022216",
+          "size": 194
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/__main__.py",
+          "sha256": "4c306e0696c7d35e1beaddb6c77f0bab8172b83cd66918710c5c04da615d5844",
+          "size": 132
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/commands.py",
+          "sha256": "654b5ff9b3a518ec6cb3de0f9e4fcb52a7d7c7b609d7f2d89b3dc42bfe790ab0",
+          "size": 9022
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/compute_worker.py",
+          "sha256": "a3296f68673f2b4ee80667264f6b104e59276b9f0a0e7442fe2ff51a3bca0794",
+          "size": 53969
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/config.py",
+          "sha256": "5f7e3a1f7cd94a9f0aede0e3dba7feda823e4d803cde2fd9e874be182fbe08d4",
+          "size": 24854
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/deployment.py",
+          "sha256": "6a5f507fa44a5305a28c0c06acb63a61bf634c41ccfa5f20305813c7fe477203",
+          "size": 21685
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/errors.py",
+          "sha256": "c4dd10da79943bf27d01c8b6e4025aa556f543532108f743d8520ceedd409e27",
+          "size": 1172
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/main.py",
+          "sha256": "49411a94750a9a512cccde0f0c2d5a9e00700e5f4c39f3634c6c0d91e26e3681",
+          "size": 4482
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/paths.py",
+          "sha256": "712e91a2ac1b28533093c9da7179844e92cef384596627709cdc22a9943c1400",
+          "size": 18603
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/preflight.py",
+          "sha256": "25f0154501254fce1dcd8bfe164fb8f18b4e0a81b90d8beb85eb68497a7dfa04",
+          "size": 30547
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/protocol.py",
+          "sha256": "d397f7600ce60da721c4ba6449a4a02807fc3b77cc16aef1c5e36b03441309bb",
+          "size": 7916
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/runner.py",
+          "sha256": "24b3ba807318d3381068f8260136569408eeb0b320f7a9135f3addd9fff839e2",
+          "size": 44651
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_bindings.py",
+          "sha256": "acf39a4c32113554a7c75d19638a8a8b2db718a4d3bfdcc112cfb3a15650c774",
+          "size": 4709
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_config.py",
+          "sha256": "36280f4936feeebe1f51749024a212e79722b2caec483dc04046847c6b043666",
+          "size": 22500
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_config_loader.py",
+          "sha256": "79f2ee31f9ac8990f5b6e089da7a64b2f6a1bce5f7c8da024ac28a10358f940d",
+          "size": 34569
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_preflight.py",
+          "sha256": "304d66d858338d87169cdbf64c63d516448cff8b26f3393846934fefa01e36dc",
+          "size": 77153
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_protocol.py",
+          "sha256": "77c28245bf22d1eb4319b4e74e3bde9815c9521b293f006057d450642140fcd6",
+          "size": 32883
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_runner.py",
+          "sha256": "e7ab0e7d9a9639f0b905e64bffda38872065042a2c062a38e16788628b84d10d",
+          "size": 44295
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/scheduler_state.py",
+          "sha256": "7d7f9e2996001499c048ed22510c1b9f15514d711c989c36b7b0fb4f72e72b2d",
+          "size": 77234
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/slurm.py",
+          "sha256": "2aa1a4c3d90b76bd9deaafa3fdfa77e1e28eabb311965b6e5bba0b4fb2924e94",
+          "size": 31097
+        },
+        {
+          "mode": "0644",
+          "name": "bioexec/state.py",
+          "sha256": "a8df9fb52fc0d0fe0a7737b492806afab38fcde3b656598d56ed013cbb5dab65",
+          "size": 20349
+        }
+      ],
+      "role": "bioexec_compute_preflight",
       "version": "0.1.0"
     }
   ],
