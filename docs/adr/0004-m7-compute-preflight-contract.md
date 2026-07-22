@@ -213,8 +213,9 @@ M7.0d-a through M7.0d-d implement the dormant trusted loader, bounded scheduler
 runner, durable scheduler-preflight state, and fixed compute worker described
 by ADRs 0005 through 0008. M7.0d-e connects those pieces through the durable
 single-step driver in ADR 0009 but deliberately stops at the non-authorizing
-`candidate` phase. M7.0d-f must add token-hash-only capability issuance and
-one-use consumption. No version-2 operation may be activated until every
-prerequisite is present, and the completed connection must remain unable to
-start a workflow until deployment and every runtime artifact are revalidated
-from the allocated compute node.
+`candidate` phase. M7.0d-f adds token-hash-only capability issuance and one-use
+consumption in ADR 0010 without connecting it to the driver or a workflow. No
+version-2 operation may be activated until every prerequisite is present, and
+the completed connection must remain unable to start a workflow until a
+create-only run permit exists and deployment plus every runtime artifact are
+revalidated from the allocated compute node.

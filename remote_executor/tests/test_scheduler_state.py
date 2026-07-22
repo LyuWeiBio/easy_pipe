@@ -32,9 +32,13 @@ from bioexec.scheduler_preflight import (
     parse_compute_evidence,
     parse_compute_manifest,
     preflight_overall_timeout_seconds,
+    preflight_result,
     prepare_preflight,
 )
 from bioexec.scheduler_state import (
+    SchedulerCapabilityExpiredError,
+    SchedulerCapabilityUnavailableError,
+    SchedulerClockDiscontinuityError,
     SchedulerMutationPermit,
     SchedulerMutationPermitError,
     SchedulerPreflightStore,
@@ -55,6 +59,8 @@ _PROFILE_HASH = "a" * 64
 _SUBMITTED_AT = "2026-07-19T12:34:56"
 _JOB_ID = "12345"
 _NAMESPACE = "scheduler-preflights-v1"
+_RAW_CAPABILITY = "0123456789abcdef" * 4
+_CONSUMER_BINDING_HASH = "d" * 64
 
 
 class _AdvancingClock:
@@ -282,11 +288,11 @@ def state_fixture(tmp_path: Path) -> StateFixture:
                 "file_sha256": "8" * 64,
             },
         ],
-        "minimum_free_bytes": 1024 * 1024,
+        "minimum_free_bytes": config.contract.limits.minimum_free_bytes,
         "network_disabled": True,
         "resume_run_id": None,
         "resume_directory_identities": None,
-        "preflight_ttl_seconds": 900,
+        "preflight_ttl_seconds": config.contract.limits.preflight_ttl_seconds,
         "worker": {
             "contract_version": "1.0",
             "executable": str(executables["compute_worker"]),
@@ -422,6 +428,19 @@ def _worker_evidence_value(state: SchedulerPreflightState) -> dict[str, Any]:
     }
 
 
+def _candidate_snapshot(
+    fixture: StateFixture,
+    store: SchedulerPreflightStore,
+) -> SchedulerStateSnapshot:
+    awaiting = _awaiting_evidence_snapshot(fixture, store)
+    evidence_path = fixture.attempt / "evidence.json"
+    evidence_path.write_bytes(
+        canonical_evidence_bytes(parse_compute_evidence(_worker_evidence_value(awaiting.state)))
+    )
+    evidence_path.chmod(0o600)
+    return store.ingest_worker_evidence(awaiting, elapsed_seconds=4)
+
+
 def _write_canonical(path: Path, value: dict[str, Any]) -> None:
     path.write_bytes(
         (
@@ -473,6 +492,30 @@ def test_create_or_load_is_idempotent_only_for_the_exact_request(
     assert changed_load.value.reason_code == "SCHEDULER_REQUEST_HASH_CONFLICT"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("preflight_ttl_seconds", 901),
+        ("minimum_free_bytes", 1024 * 1024),
+    ],
+)
+def test_prepared_manifest_limits_must_bind_trusted_config_before_attempt_creation(
+    state_fixture: StateFixture,
+    field: str,
+    value: int,
+) -> None:
+    manifest = state_fixture.prepared.manifest.as_mapping()
+    manifest[field] = value
+    mismatched = prepare_preflight(parse_compute_manifest(manifest))
+
+    with pytest.raises(SchedulerStateContractError, match="trusted compute installation"):
+        _new_store(state_fixture).create_or_load(
+            mismatched,
+            request_sha256=_REQUEST_SHA256,
+        )
+    assert not state_fixture.attempt.exists()
+
+
 def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
     state_fixture: StateFixture,
 ) -> None:
@@ -505,7 +548,7 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert metadata.st_nlink == 1
 
     submit_intent = json.loads(files[-1].read_text(encoding="ascii"))
-    assert submit_intent["schema_version"] == "1.1"
+    assert submit_intent["schema_version"] == "1.2"
     assert isinstance(submit_intent["clock_epoch_id"], str)
     assert type(submit_intent["clock_started_boottime_ns"]) is int
 
@@ -1443,6 +1486,496 @@ def test_live_attempt_flock_is_busy_across_threads_and_processes(
             timeout=10,
         )
         assert child.returncode == 0, child.stderr
+
+
+def test_capability_issue_is_hash_only_replayable_and_never_reissued(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    calls = 0
+
+    def token_hex(length: int) -> str:
+        nonlocal calls
+        calls += 1
+        assert length == 32
+        return _RAW_CAPABILITY
+
+    monkeypatch.setattr(state_module.secrets, "token_hex", token_hex)
+    issued = store.issue_capability(candidate)
+
+    assert calls == 1
+    assert issued.preflight_token == _RAW_CAPABILITY
+    assert _RAW_CAPABILITY not in repr(issued)
+    assert issued.snapshot.state.phase == "passed"
+    assert preflight_result(issued.snapshot.state)["preflight_token"] is None
+    capability = issued.snapshot.state.capability
+    assert capability is not None and not hasattr(capability, "token")
+    assert capability.token_hash == hashlib.sha256(_RAW_CAPABILITY.encode("ascii")).hexdigest()
+    for path in state_fixture.attempt.rglob("*"):
+        if path.is_file():
+            assert _RAW_CAPABILITY.encode("ascii") not in path.read_bytes()
+
+    restarted_store = _new_store(state_fixture)
+    restarted = restarted_store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert restarted.state == issued.snapshot.state
+    with pytest.raises(SchedulerStateConflictError) as captured:
+        restarted_store.issue_capability(restarted)
+    assert captured.value.reason_code == "SCHEDULER_CAPABILITY_ALREADY_ISSUED"
+    assert calls == 1
+
+
+def test_capability_lost_response_burns_grant_without_disclosing_or_regenerating(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    calls = 0
+
+    def token_hex(length: int) -> str:
+        nonlocal calls
+        calls += 1
+        assert length == 32
+        return _RAW_CAPABILITY
+
+    original_append = state_module._append_revision
+
+    def append_then_lose_response(
+        config: TrustedSchedulerConfig,
+        opened: Any,
+        loaded: Any,
+        event: Any,
+    ) -> Any:
+        committed = original_append(config, opened, loaded, event)
+        if event.get("type") == "capability_issued":
+            raise SchedulerStateCommitUnknown(
+                "SCHEDULER_TEST_POST_COMMIT_UNKNOWN",
+                "synthetic lost issuance response",
+            )
+        return committed
+
+    monkeypatch.setattr(state_module.secrets, "token_hex", token_hex)
+    monkeypatch.setattr(state_module, "_append_revision", append_then_lose_response)
+    with pytest.raises(SchedulerStateCommitUnknown):
+        store.issue_capability(candidate)
+    assert calls == 1
+
+    monkeypatch.setattr(state_module, "_append_revision", original_append)
+    restarted_store = _new_store(state_fixture)
+    burned = restarted_store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert burned.state.phase == "passed"
+    assert burned.state.capability is not None
+    assert preflight_result(burned.state)["preflight_token"] is None
+    with pytest.raises(SchedulerStateConflictError) as captured:
+        restarted_store.issue_capability(burned)
+    assert captured.value.reason_code == "SCHEDULER_CAPABILITY_ALREADY_ISSUED"
+    assert calls == 1
+    for path in state_fixture.attempt.rglob("*"):
+        if path.is_file():
+            assert _RAW_CAPABILITY.encode("ascii") not in path.read_bytes()
+
+
+def test_capability_post_commit_clock_failure_burns_without_returning_raw(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    samples = 0
+    original_sample = state_fixture.clock.sample
+
+    def discontinuous_second_sample() -> ClockSample:
+        nonlocal samples
+        samples += 1
+        sample = original_sample()
+        if samples == 2:
+            return ClockSample(epoch_id="next-boot", boottime_ns=sample.boottime_ns)
+        return sample
+
+    monkeypatch.setattr(state_fixture.clock, "sample", discontinuous_second_sample)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    with pytest.raises(SchedulerClockDiscontinuityError) as captured:
+        store.issue_capability(candidate)
+    invalidated = captured.value.snapshot
+    assert invalidated.state.phase == "indeterminate"
+    assert invalidated.state.capability is not None
+    assert preflight_result(invalidated.state)["preflight_token"] is None
+    for path in state_fixture.attempt.rglob("*"):
+        if path.is_file():
+            assert _RAW_CAPABILITY.encode("ascii") not in path.read_bytes()
+
+
+def test_capability_issue_concurrency_generates_and_returns_only_one_token(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    creator = _new_store(state_fixture)
+    _candidate_snapshot(state_fixture, creator)
+    stores = (_new_store(state_fixture), _new_store(state_fixture))
+    snapshots = tuple(
+        store.load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
+        for store in stores
+    )
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def token_hex(length: int) -> str:
+        nonlocal calls
+        assert length == 32
+        with calls_lock:
+            calls += 1
+        return _RAW_CAPABILITY
+
+    def issue(index: int) -> tuple[str, str | None]:
+        try:
+            response = stores[index].issue_capability(snapshots[index])
+        except (SchedulerStateBusyError, SchedulerStateConflictError) as exc:
+            return "rejected", exc.reason_code
+        return "issued", response.preflight_token
+
+    monkeypatch.setattr(state_module.secrets, "token_hex", token_hex)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(issue, range(2)))
+
+    assert sum(status == "issued" for status, _ in results) == 1
+    assert [value for status, value in results if status == "issued"] == [_RAW_CAPABILITY]
+    assert calls == 1
+    current = _new_store(state_fixture).load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert current.state.phase == "passed"
+    assert current.state.capability is not None
+
+
+def test_capability_consumption_is_atomic_bound_and_replayable(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuing_store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, issuing_store)
+    monkeypatch.setattr(
+        state_module.secrets,
+        "token_hex",
+        lambda length: _RAW_CAPABILITY if length == 32 else "",
+    )
+    issued = issuing_store.issue_capability(candidate)
+    stores = (_new_store(state_fixture), _new_store(state_fixture))
+    snapshots = tuple(
+        store.load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
+        for store in stores
+    )
+
+    def consume(index: int) -> tuple[str, str | None]:
+        try:
+            consumed = stores[index].consume_capability(
+                snapshots[index],
+                token=_RAW_CAPABILITY,
+                consumed_by="run-1",
+                consumer_binding_hash=_CONSUMER_BINDING_HASH,
+            )
+        except (SchedulerStateBusyError, SchedulerStateConflictError) as exc:
+            return "rejected", exc.reason_code
+        assert consumed.state.capability is not None
+        return "consumed", consumed.state.capability.binding_hash
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(consume, range(2)))
+    assert sum(status == "consumed" for status, _ in results) == 1
+
+    restarted_store = _new_store(state_fixture)
+    restarted = restarted_store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    capability = restarted.state.capability
+    assert capability is not None and capability.consumed
+    assert capability.consumed_by == "run-1"
+    assert capability.consumer_binding_hash == _CONSUMER_BINDING_HASH
+    assert restarted.revision == issued.snapshot.revision + 1
+    with pytest.raises(SchedulerStateConflictError) as captured:
+        restarted_store.consume_capability(
+            restarted,
+            token=_RAW_CAPABILITY,
+            consumed_by="run-2",
+            consumer_binding_hash="f" * 64,
+        )
+    assert captured.value.reason_code == "SCHEDULER_CAPABILITY_ALREADY_CONSUMED"
+
+
+def test_wrong_capability_token_never_writes_a_revision(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+
+    with pytest.raises(SchedulerStatePreconditionError) as captured:
+        store.consume_capability(
+            issued.snapshot,
+            token="f" * 64,
+            consumed_by="run-1",
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        )
+    assert captured.value.reason_code == "SCHEDULER_CAPABILITY_INVALID"
+    unchanged = store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert unchanged.revision == issued.snapshot.revision
+    assert unchanged.state.capability is not None
+    assert not unchanged.state.capability.consumed
+
+
+def test_capability_exact_expiry_is_irreversible_and_uses_trusted_clock(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+    capability = issued.snapshot.state.capability
+    assert capability is not None
+    intent = json.loads((state_fixture.attempt / "submit.intent.json").read_text("ascii"))
+    state_fixture.clock.step_ns = 0
+    state_fixture.clock.boottime_ns = (
+        intent["clock_started_boottime_ns"] + capability.expires_at * 1_000_000_000
+    )
+
+    with pytest.raises(SchedulerCapabilityExpiredError) as captured:
+        store.consume_capability(
+            issued.snapshot,
+            token=_RAW_CAPABILITY,
+            consumed_by="run-1",
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        )
+    expired = captured.value.snapshot
+    assert expired.state.phase == "timed_out"
+    assert expired.state.reason_code == "COMPUTE_PREFLIGHT_CAPABILITY_EXPIRED"
+    assert expired.state.capability is not None and expired.state.capability.expired
+    assert expired.state.capability.expired_at == capability.expires_at
+    restarted = _new_store(state_fixture).load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert restarted.state == expired.state
+
+
+def test_capability_issue_capacity_failure_happens_before_rng(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+
+    def forbidden_rng(length: int) -> str:
+        raise AssertionError(f"RNG called before preconditions: {length}")
+
+    monkeypatch.setattr(state_module.secrets, "token_hex", forbidden_rng)
+    monkeypatch.setattr(state_module, "_MAX_REVISIONS", candidate.revision + 1)
+    with pytest.raises(SchedulerCapabilityUnavailableError):
+        store.issue_capability(candidate)
+    terminal = store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert terminal.state.phase == "indeterminate"
+    assert terminal.state.reason_code == "SCHEDULER_REVISION_BUDGET_EXHAUSTED"
+
+
+def test_capability_issue_deadline_failure_happens_before_rng(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    intent = json.loads((state_fixture.attempt / "submit.intent.json").read_text("ascii"))
+    overall = preflight_overall_timeout_seconds(candidate.state)
+    state_fixture.clock.step_ns = 0
+    state_fixture.clock.boottime_ns = intent["clock_started_boottime_ns"] + overall * 1_000_000_000
+
+    def forbidden_rng(length: int) -> str:
+        raise AssertionError(f"RNG called after deadline: {length}")
+
+    monkeypatch.setattr(state_module.secrets, "token_hex", forbidden_rng)
+    with pytest.raises(SchedulerCapabilityUnavailableError) as captured:
+        store.issue_capability(candidate)
+    assert captured.value.snapshot.state.phase == "timed_out"
+    assert captured.value.snapshot.state.capability is None
+
+
+def test_capability_post_commit_exact_overall_deadline_burns_without_response(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    intent = json.loads((state_fixture.attempt / "submit.intent.json").read_text("ascii"))
+    overall = preflight_overall_timeout_seconds(candidate.state)
+    state_fixture.clock.step_ns = 1_000_000_000
+    state_fixture.clock.boottime_ns = (
+        intent["clock_started_boottime_ns"] + (overall - 1) * 1_000_000_000
+    )
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+
+    with pytest.raises(SchedulerCapabilityUnavailableError) as captured:
+        store.issue_capability(candidate)
+    timed_out = captured.value.snapshot
+    assert timed_out.state.phase == "timed_out"
+    assert timed_out.state.reason_code == "SLURM_PREFLIGHT_OVERALL_TIMEOUT"
+    assert timed_out.state.capability is not None
+    assert not timed_out.state.capability.consumed
+    assert preflight_result(timed_out.state)["preflight_token"] is None
+    last_event = json.loads(
+        (state_fixture.attempt / "revisions" / f"{timed_out.revision:020d}.json").read_text("ascii")
+    )["event"]
+    assert last_event == {"type": "driver_timeout", "elapsed_seconds": overall}
+    for path in state_fixture.attempt.rglob("*"):
+        if path.is_file():
+            assert _RAW_CAPABILITY.encode("ascii") not in path.read_bytes()
+
+
+def test_disclosed_capability_uses_its_ttl_after_overall_preflight_deadline(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    intent = json.loads((state_fixture.attempt / "submit.intent.json").read_text("ascii"))
+    overall = preflight_overall_timeout_seconds(candidate.state)
+    started_ns = intent["clock_started_boottime_ns"]
+    state_fixture.clock.step_ns = 1_000_000_000
+    state_fixture.clock.boottime_ns = started_ns + (overall - 2) * 1_000_000_000
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+    capability = issued.snapshot.state.capability
+    assert capability is not None and capability.expires_at > overall
+
+    state_fixture.clock.step_ns = 0
+    state_fixture.clock.boottime_ns = started_ns + overall * 1_000_000_000
+    consumed = store.consume_capability(
+        issued.snapshot,
+        token=_RAW_CAPABILITY,
+        consumed_by="run-1",
+        consumer_binding_hash=_CONSUMER_BINDING_HASH,
+    )
+    assert consumed.state.capability is not None
+    assert consumed.state.capability.consumed
+    assert consumed.state.capability.consumed_at == overall
+
+
+def test_capability_clock_epoch_change_invalidates_before_consumption(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+    state_fixture.clock.epoch_id = "next-boot"
+
+    with pytest.raises(SchedulerClockDiscontinuityError) as captured:
+        store.consume_capability(
+            issued.snapshot,
+            token=_RAW_CAPABILITY,
+            consumed_by="run-1",
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        )
+    invalidated = captured.value.snapshot
+    assert invalidated.state.phase == "indeterminate"
+    assert invalidated.state.reason_code == "SCHEDULER_CLOCK_DISCONTINUITY"
+    assert invalidated.state.capability is not None
+    assert not invalidated.state.capability.consumed
+
+
+def test_capability_consume_commit_unknown_never_returns_success_and_cannot_replay(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+    original_append = state_module._append_revision
+
+    def append_then_lose_response(
+        config: TrustedSchedulerConfig,
+        opened: Any,
+        loaded: Any,
+        event: Any,
+    ) -> Any:
+        committed = original_append(config, opened, loaded, event)
+        if event.get("type") == "capability_consumed":
+            raise SchedulerStateCommitUnknown(
+                "SCHEDULER_TEST_CONSUME_POST_COMMIT_UNKNOWN",
+                "synthetic lost consumption response",
+            )
+        return committed
+
+    monkeypatch.setattr(state_module, "_append_revision", append_then_lose_response)
+    with pytest.raises(SchedulerStateCommitUnknown):
+        store.consume_capability(
+            issued.snapshot,
+            token=_RAW_CAPABILITY,
+            consumed_by="run-1",
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        )
+
+    monkeypatch.setattr(state_module, "_append_revision", original_append)
+    restarted_store = _new_store(state_fixture)
+    consumed = restarted_store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    assert consumed.state.capability is not None and consumed.state.capability.consumed
+    with pytest.raises(SchedulerStateConflictError) as captured:
+        restarted_store.consume_capability(
+            consumed,
+            token=_RAW_CAPABILITY,
+            consumed_by="run-1",
+            consumer_binding_hash=_CONSUMER_BINDING_HASH,
+        )
+    assert captured.value.reason_code == "SCHEDULER_CAPABILITY_ALREADY_CONSUMED"
+
+
+@pytest.mark.parametrize("field", ["token_hash", "expires_at", "grant_binding_hash"])
+def test_capability_issuance_event_tampering_fails_replay(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    store = _new_store(state_fixture)
+    candidate = _candidate_snapshot(state_fixture, store)
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: _RAW_CAPABILITY)
+    issued = store.issue_capability(candidate)
+    revision_path = state_fixture.attempt / "revisions" / f"{issued.snapshot.revision:020d}.json"
+    revision = json.loads(revision_path.read_text(encoding="ascii"))
+    revision["event"][field] = revision["event"][field] + 1 if field == "expires_at" else "f" * 64
+    _write_canonical(revision_path, revision)
+
+    with pytest.raises(SchedulerStateInvalidError) as captured:
+        _new_store(state_fixture).load(
+            state_fixture.prepared.manifest.preflight_id,
+            request_sha256=_REQUEST_SHA256,
+        )
+    assert captured.value.reason_code == "SCHEDULER_STATE_REPLAY_INVALID"
 
 
 def test_python39_v1_import_graph_does_not_load_scheduler_state() -> None:

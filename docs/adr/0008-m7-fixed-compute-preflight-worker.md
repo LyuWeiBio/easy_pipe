@@ -210,14 +210,14 @@ proven terminated; site cgroup/runtime controls remain required.
   projections and root-managed runtime installation.
 - Shared-filesystem `O_EXCL`, `flock`, stable identity, and directory `fsync`
   behavior still require a real Slurm-cluster acceptance run.
-- Durable capability issue/consume semantics, post-deployment compute rechecks,
-  active dispatch, and real workflow execution remain unimplemented.
+- Capability-to-run intent, post-deployment compute rechecks, active dispatch,
+  and real workflow execution remain unimplemented.
 
 ## Next step
 
 M7.0d-e adds the durable driver-to-candidate connection and trusted boot clock
-described by ADR 0009. M7.0d-f must add the separate token-hash-only capability
-lifecycle. A later deployment/bootstrap slice must re-open and re-hash the
+described by ADR 0009. M7.0d-f adds the separate token-hash-only capability
+lifecycle in ADR 0010. A later deployment/bootstrap slice must re-open and re-hash the
 deployed bundle and all runtime artifacts on the allocated compute node
 immediately before Nextflow. No version-2 operation may be activated until
 those pieces and real cluster acceptance are complete.

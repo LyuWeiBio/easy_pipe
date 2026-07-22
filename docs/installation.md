@@ -113,8 +113,9 @@ artifacts contain only project modules and rely on the remote Python standard
 library, plus the repository MIT `LICENSE`; they do not bundle Python itself or
 third-party Python packages. `bioexec-compute-preflight` is not imported by the
 installed version-1 service and is not evidence that Slurm is active. The
-archives also contain the dormant M7.0d-e driver source, but expose no driver
-entry point or protocol-version-2 dispatch path.
+archives also contain the dormant M7.0d-e driver and M7.0d-f hash-only
+capability lifecycle sources, but expose no scheduler entry point,
+protocol-version-2 dispatch path, or workflow-start permission.
 
 Continue with [remote deployment](remote-deployment.md). Copying a zipapp to a
 server without configuring allowlists, permissions, and a fixed SSH command is

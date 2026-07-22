@@ -42,12 +42,19 @@ capability.
   resume identities, and descriptor-safe manifest/evidence files. A dormant
   start-or-one-poll driver now binds a trusted boot-relative clock, prevents
   submit/release replay, and journals complete compute evidence only through
-  the non-authorizing `candidate` phase. The
+  the non-authorizing `candidate` phase. A separate schema-1.2 capability
+  lifecycle can durably issue one token-hash-only grant, burn a lost issuance
+  response, and atomically consume or expire it with trusted time, actor, and
+  consumer bindings. Generic state and driver results never disclose the raw
+  token. The
   installed version-1 CLI, config loader, protocol dispatcher, preflight, and
   execution runner do not import or activate any of this, and synthetic tests
   are not cluster acceptance evidence.
-- There is still no scheduler capability persistence, deployment-to-compute
-  recheck, active version-2 dispatch path, or real-cluster acceptance evidence.
+- There is still no capability-to-run intent, deployment-to-compute recheck,
+  active version-2 dispatch path, or real-cluster acceptance evidence.
+  Capability consumption does not start or permit a workflow; future activation
+  must derive its actor and consumer binding from verified approval and commit
+  a separate create-only run permit before process startup.
   The dormant driver's retry hint is not a rate limiter; active dispatch must
   enforce durable per-attempt poll cadence before exposing scheduler queries.
   The clock contract is implemented for Linux and Darwin but still needs real

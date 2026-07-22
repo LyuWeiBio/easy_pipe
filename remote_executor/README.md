@@ -58,10 +58,20 @@ loader, fixed Slurm runner, append-only store, and worker evidence only as far
 as `candidate`. The submit intent now anchors a double-checked boot-relative
 clock; clock discontinuity and reached deadlines become irreversible journal
 events, and complete parsed worker evidence is committed into the hash chain.
-The result always carries `preflight_token: null`: capability persistence is a
-separate M7.0d-f boundary. Version 1 still does not import this driver and no
-version-2 dispatcher calls it. See
+The result always carries `preflight_token: null`. Version 1 still does not
+import this driver and no version-2 dispatcher calls it. See
 [ADR 0009](../docs/adr/0009-m7-durable-preflight-driver.md).
+
+M7.0d-f adds a separate dormant capability lifecycle to the same private state
+store. Schema 1.2 journals only token hashes and evidence-derived bindings; the
+raw token is generated under the attempt lock and returned only after the issue
+revision is fsynced and replayed. A lost response burns the grant without
+reissuance. Consumption is lock/CAS serialized, constant-time verified, bound
+to trusted boot-relative time plus an actor and consumer digest, and made
+irreversible before returning. Exact expiry and clock discontinuity are also
+durable. The generic result and driver still always return
+`preflight_token: null`, and no workflow is started. See
+[ADR 0010](../docs/adr/0010-m7-durable-capability-lifecycle.md).
 
 ## Build and install
 

@@ -263,6 +263,38 @@ def test_driver_reaches_candidate_in_four_bounded_calls_and_replays_without_evid
     assert (runner.submit_calls, runner.release_calls) == (1, 1)
 
 
+def test_driver_treats_separately_issued_passed_state_as_nonretryable_and_tokenless(
+    state_fixture: StateFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _MutableClock(boottime_ns=1_000_000_000)
+    runner = _FakeRunner(state_fixture)
+    driver = _driver(state_fixture, clock, runner)
+    _advance(driver, state_fixture)
+    clock.boottime_ns = 2_000_000_000
+    _advance(driver, state_fixture)
+    clock.boottime_ns = 3_000_000_000
+    _advance(driver, state_fixture)
+    _write_evidence(state_fixture, _worker_evidence_value(awaiting_state(driver, state_fixture)))
+    clock.boottime_ns = 4_000_000_000
+    assert _advance(driver, state_fixture).status == "candidate"
+    snapshot = driver._store.load(
+        state_fixture.prepared.manifest.preflight_id,
+        request_sha256=_REQUEST_SHA256,
+    )
+    monkeypatch.setattr(state_module.secrets, "token_hex", lambda length: "a1" * length)
+    clock.boottime_ns = 5_000_000_000
+    issuance = driver._store.issue_capability(snapshot)
+    assert issuance.preflight_token == "a1" * 32
+
+    result = _advance(driver, state_fixture)
+    assert (result.status, result.retry_after_seconds, result.preflight_token) == (
+        "passed",
+        None,
+        None,
+    )
+
+
 def awaiting_state(
     driver: SchedulerPreflightDriver,
     fixture: StateFixture,

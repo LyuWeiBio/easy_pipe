@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import secrets
 import stat
 import threading
 import time
@@ -46,6 +48,8 @@ from .scheduler_preflight import (
     parse_compute_manifest,
     preflight_overall_timeout_seconds,
     prepare_preflight,
+    record_capability_consumed,
+    record_capability_expired,
     record_clock_discontinuity,
     record_compute_evidence,
     record_driver_timeout,
@@ -58,11 +62,17 @@ from .scheduler_preflight import (
     record_submit_unknown,
     validate_compute_evidence_binding,
 )
+from .scheduler_preflight import (
+    consume_capability as verify_capability_consumption,
+)
+from .scheduler_preflight import (
+    issue_capability as record_capability_issuance,
+)
 from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservation
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
-SCHEDULER_STATE_SCHEMA_VERSION = "1.1"
+SCHEDULER_STATE_SCHEMA_VERSION = "1.2"
 _NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
@@ -96,6 +106,7 @@ _CREATE_FILE_FLAGS = (
 )
 
 _SNAPSHOT_AUTHORITY = object()
+_ISSUANCE_AUTHORITY = object()
 _PERMIT_AUTHORITY = object()
 
 _IDENTITY_FIELDS = frozenset(
@@ -222,6 +233,28 @@ class SchedulerClockDiscontinuityError(SchedulerStateError):
         )
 
 
+class SchedulerCapabilityUnavailableError(SchedulerStateError):
+    """A candidate became terminal before a capability could be disclosed."""
+
+    def __init__(self, snapshot: SchedulerStateSnapshot) -> None:
+        self.snapshot = snapshot
+        super().__init__(
+            "SCHEDULER_CAPABILITY_UNAVAILABLE",
+            "the durable preflight cannot issue a capability",
+        )
+
+
+class SchedulerCapabilityExpiredError(SchedulerStateError):
+    """A capability reached its trusted elapsed deadline before consumption."""
+
+    def __init__(self, snapshot: SchedulerStateSnapshot) -> None:
+        self.snapshot = snapshot
+        super().__init__(
+            "SCHEDULER_CAPABILITY_EXPIRED",
+            "the durable preflight capability has expired",
+        )
+
+
 @dataclass(frozen=True)
 class SchedulerStateSnapshot:
     """Opaque immutable view of one replayed durable attempt."""
@@ -246,6 +279,36 @@ class SchedulerStateSnapshot:
         for value in (self.submit_intent_sha256, self.release_intent_sha256):
             if value is not None:
                 _digest(value, "intent_sha256")
+
+
+@dataclass(frozen=True)
+class SchedulerCapabilityIssuance:
+    """One non-replayable raw response produced only after a durable grant commit."""
+
+    _authority: InitVar[object]
+    snapshot: SchedulerStateSnapshot
+    preflight_token: str = field(repr=False, compare=False)
+
+    def __post_init__(self, _authority: object) -> None:
+        if _authority is not _ISSUANCE_AUTHORITY:
+            raise SchedulerStateContractError("capability issuance responses are store-owned")
+        if not isinstance(self.snapshot, SchedulerStateSnapshot):
+            raise SchedulerStateContractError("capability issuance snapshot is invalid")
+        _raw_capability_token(self.preflight_token)
+        capability = self.snapshot.state.capability
+        if (
+            self.snapshot.state.phase != "passed"
+            or capability is None
+            or capability.consumed
+            or capability.expired
+            or not hmac.compare_digest(
+                capability.token_hash,
+                hashlib.sha256(self.preflight_token.encode("ascii")).hexdigest(),
+            )
+        ):
+            raise SchedulerStateContractError(
+                "capability issuance response does not bind the committed grant"
+            )
 
 
 @dataclass
@@ -433,6 +496,10 @@ class SchedulerPreflightStore:
             )
             if current is not loaded:
                 return self._snapshot(current)
+            if current.revision > _MAX_REVISIONS - 3:
+                return self._snapshot(
+                    _append_revision_budget_exhausted(self.config, opened, current)
+                )
             try:
                 advanced = record_compute_evidence(
                     current.state,
@@ -454,6 +521,217 @@ class SchedulerPreflightStore:
             raise SchedulerStateCommitUnknown(
                 "SCHEDULER_EVIDENCE_POST_COMMIT_UNKNOWN",
                 "durable worker evidence did not replay to the expected state",
+            )
+        return self._snapshot(current)
+
+    def issue_capability(
+        self,
+        snapshot: SchedulerStateSnapshot,
+    ) -> SchedulerCapabilityIssuance:
+        """Commit one hash-only grant before disclosing its raw token exactly once."""
+
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            if loaded.state.phase == "passed" and loaded.state.capability is not None:
+                raise _conflict("SCHEDULER_CAPABILITY_ALREADY_ISSUED")
+            if loaded.state.phase != "candidate":
+                raise _conflict("SCHEDULER_CAPABILITY_PHASE_CONFLICT")
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=0,
+            )
+            if authoritative is None:
+                raise SchedulerClockDiscontinuityError(self._snapshot(current))
+            current = _append_timeout_if_due(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
+            )
+            if current is not loaded:
+                raise SchedulerCapabilityUnavailableError(self._snapshot(current))
+            if current.revision > _MAX_REVISIONS - 2:
+                exhausted = _append_revision_budget_exhausted(self.config, opened, current)
+                raise SchedulerCapabilityUnavailableError(self._snapshot(exhausted))
+
+            raw_token = _raw_capability_token(secrets.token_hex(32))
+            token_hash = hashlib.sha256(raw_token.encode("ascii")).hexdigest()
+            try:
+                advanced = record_capability_issuance(
+                    current.state,
+                    token_hash=token_hash,
+                    elapsed_seconds=authoritative,
+                )
+            except SchedulerPreflightError as exc:
+                raise SchedulerStateContractError(
+                    "durable capability issuance transition is invalid"
+                ) from exc
+            capability = advanced.capability
+            if capability is None or advanced.phase != "passed":
+                raise SchedulerStateContractError(
+                    "durable capability issuance did not create a live grant"
+                )
+            event = {
+                "type": "capability_issued",
+                "token_hash": token_hash,
+                "issued_at": capability.issued_at,
+                "expires_at": capability.expires_at,
+                "grant_binding_hash": capability.binding_hash,
+            }
+            current = _append_revision(self.config, opened, current, event)
+            if current.state != advanced:
+                raise SchedulerStateCommitUnknown(
+                    "SCHEDULER_CAPABILITY_ISSUE_POST_COMMIT_UNKNOWN",
+                    "durable capability issuance did not replay to the expected state",
+                )
+
+            post_commit, post_commit_elapsed = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                current,
+                minimum_elapsed=authoritative,
+            )
+            if post_commit_elapsed is None:
+                raise SchedulerClockDiscontinuityError(self._snapshot(post_commit))
+            post_commit_timed = _append_timeout_if_due(
+                self.config,
+                opened,
+                post_commit,
+                elapsed_seconds=post_commit_elapsed,
+            )
+            if post_commit_timed is not post_commit:
+                raise SchedulerCapabilityUnavailableError(self._snapshot(post_commit_timed))
+            if post_commit_elapsed >= capability.expires_at:
+                expired = _append_capability_expiration(
+                    self.config,
+                    opened,
+                    post_commit,
+                    elapsed_seconds=post_commit_elapsed,
+                )
+                raise SchedulerCapabilityExpiredError(self._snapshot(expired))
+            issued = SchedulerCapabilityIssuance(
+                _authority=_ISSUANCE_AUTHORITY,
+                snapshot=self._snapshot(post_commit),
+                preflight_token=raw_token,
+            )
+        return issued
+
+    def consume_capability(
+        self,
+        snapshot: SchedulerStateSnapshot,
+        *,
+        token: str,
+        consumed_by: str,
+        consumer_binding_hash: str,
+    ) -> SchedulerStateSnapshot:
+        """Atomically consume one live grant using trusted elapsed time and CAS."""
+
+        supplied = _raw_capability_token(token)
+        actor = _identifier(consumed_by)
+        consumer_binding = _digest(consumer_binding_hash, "consumer_binding_hash")
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            capability = loaded.state.capability
+            if capability is not None and capability.expired:
+                raise SchedulerCapabilityExpiredError(self._snapshot(loaded))
+            if loaded.state.phase != "passed" or capability is None:
+                raise _conflict("SCHEDULER_CAPABILITY_PHASE_CONFLICT")
+            if capability.consumed:
+                raise _conflict("SCHEDULER_CAPABILITY_ALREADY_CONSUMED")
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=capability.issued_at,
+            )
+            if authoritative is None:
+                raise SchedulerClockDiscontinuityError(self._snapshot(current))
+            if authoritative >= capability.expires_at:
+                expired = _append_capability_expiration(
+                    self.config,
+                    opened,
+                    current,
+                    elapsed_seconds=authoritative,
+                )
+                raise SchedulerCapabilityExpiredError(self._snapshot(expired))
+            if current.revision >= _MAX_REVISIONS:
+                raise SchedulerStatePreconditionError(
+                    "SCHEDULER_CAPABILITY_REVISION_LIMIT_REACHED",
+                    "no durable revision remains for capability consumption",
+                )
+            try:
+                advanced = verify_capability_consumption(
+                    current.state,
+                    token=supplied,
+                    consumed_by=actor,
+                    consumer_binding_hash=consumer_binding,
+                    elapsed_seconds=authoritative,
+                )
+            except SchedulerPreflightError as exc:
+                raise SchedulerStatePreconditionError(
+                    "SCHEDULER_CAPABILITY_INVALID",
+                    "the supplied capability cannot authorize this consumer",
+                ) from exc
+            consumed_capability = advanced.capability
+            if consumed_capability is None:
+                raise SchedulerStateContractError("capability consumption lost the durable grant")
+            event = {
+                "type": "capability_consumed",
+                "token_hash": capability.token_hash,
+                "grant_binding_hash": capability.binding_hash,
+                "consumed_by": actor,
+                "consumer_binding_hash": consumer_binding,
+                "consumed_at": authoritative,
+                "consumed_grant_binding_hash": consumed_capability.binding_hash,
+            }
+            current = _append_revision(self.config, opened, current, event)
+        if current.state != advanced:
+            raise SchedulerStateCommitUnknown(
+                "SCHEDULER_CAPABILITY_CONSUME_POST_COMMIT_UNKNOWN",
+                "durable capability consumption did not replay to the expected state",
+            )
+        return self._snapshot(current)
+
+    def expire_capability_if_due(
+        self,
+        snapshot: SchedulerStateSnapshot,
+    ) -> SchedulerStateSnapshot:
+        """Durably record expiry when the trusted capability deadline is reached."""
+
+        selected = self._bound_snapshot(snapshot)
+        with self._locked_attempt(selected.state.manifest.preflight_id) as opened:
+            loaded = _load_attempt(self.config, opened, selected.state.manifest.preflight_id)
+            _require_snapshot_cas(loaded, selected)
+            capability = loaded.state.capability
+            if capability is not None and (capability.consumed or capability.expired):
+                return selected
+            if loaded.state.phase != "passed" or capability is None:
+                raise _conflict("SCHEDULER_CAPABILITY_PHASE_CONFLICT")
+            current, authoritative = _authoritative_elapsed_or_invalidate(
+                self.config,
+                self.clock,
+                opened,
+                loaded,
+                minimum_elapsed=capability.issued_at,
+            )
+            if authoritative is None:
+                return self._snapshot(current)
+            if authoritative < capability.expires_at:
+                return selected
+            current = _append_capability_expiration(
+                self.config,
+                opened,
+                current,
+                elapsed_seconds=authoritative,
             )
         return self._snapshot(current)
 
@@ -849,19 +1127,8 @@ class SchedulerPreflightStore:
                 raise SchedulerStateContractError("scheduler poll evidence is invalid") from exc
             if not _poll_transition_changed(current.state, advanced):
                 return selected
-            if current.revision >= _MAX_REVISIONS - 1:
-                exhausted = record_revision_budget_exhausted(current.state)
-                current = _append_revision(
-                    self.config,
-                    opened,
-                    current,
-                    {"type": "revision_budget_exhausted"},
-                )
-                if current.state != exhausted:
-                    raise SchedulerStateCommitUnknown(
-                        "SCHEDULER_REVISION_BUDGET_POST_COMMIT_UNKNOWN",
-                        "revision-budget exhaustion did not replay safely",
-                    )
+            if current.revision >= _MAX_REVISIONS - 3:
+                current = _append_revision_budget_exhausted(self.config, opened, current)
                 return self._snapshot(current)
             event = {
                 "type": "scheduler_poll",
@@ -1807,6 +2074,111 @@ def _replay(
                 )
                 if state.evidence_sha256 != expected_digest:
                     raise SchedulerPreflightError("compute evidence revision hash conflicts")
+            elif event_type == "capability_issued":
+                _exact_fields(
+                    event,
+                    {
+                        "type",
+                        "token_hash",
+                        "issued_at",
+                        "expires_at",
+                        "grant_binding_hash",
+                    },
+                    "capability issuance revision",
+                )
+                if state.phase != "candidate":
+                    raise SchedulerPreflightError("capability issuance revision is out of order")
+                issued_at = _strict_int(event["issued_at"], "issued_at", 0, 2**63 - 1)
+                state = record_capability_issuance(
+                    state,
+                    token_hash=_digest(event["token_hash"], "token_hash"),
+                    elapsed_seconds=issued_at,
+                )
+                capability = state.capability
+                if (
+                    capability is None
+                    or capability.issued_at != issued_at
+                    or capability.expires_at
+                    != _strict_int(event["expires_at"], "expires_at", 1, 2**63 - 1)
+                    or capability.binding_hash
+                    != _digest(event["grant_binding_hash"], "grant_binding_hash")
+                ):
+                    raise SchedulerPreflightError("capability issuance revision conflicts")
+            elif event_type == "capability_consumed":
+                _exact_fields(
+                    event,
+                    {
+                        "type",
+                        "token_hash",
+                        "grant_binding_hash",
+                        "consumed_by",
+                        "consumer_binding_hash",
+                        "consumed_at",
+                        "consumed_grant_binding_hash",
+                    },
+                    "capability consumption revision",
+                )
+                capability = state.capability
+                if state.phase != "passed" or capability is None:
+                    raise SchedulerPreflightError("capability consumption revision is out of order")
+                state = record_capability_consumed(
+                    state,
+                    token_hash=_digest(event["token_hash"], "token_hash"),
+                    capability_binding_hash=_digest(
+                        event["grant_binding_hash"],
+                        "grant_binding_hash",
+                    ),
+                    consumed_by=_identifier(event["consumed_by"]),
+                    consumer_binding_hash=_digest(
+                        event["consumer_binding_hash"],
+                        "consumer_binding_hash",
+                    ),
+                    elapsed_seconds=_strict_int(
+                        event["consumed_at"],
+                        "consumed_at",
+                        capability.issued_at,
+                        2**63 - 1,
+                    ),
+                )
+                if state.capability is None or state.capability.binding_hash != _digest(
+                    event["consumed_grant_binding_hash"],
+                    "consumed_grant_binding_hash",
+                ):
+                    raise SchedulerPreflightError("capability consumption revision conflicts")
+            elif event_type == "capability_expired":
+                _exact_fields(
+                    event,
+                    {
+                        "type",
+                        "token_hash",
+                        "grant_binding_hash",
+                        "expired_at",
+                        "expired_grant_binding_hash",
+                    },
+                    "capability expiration revision",
+                )
+                capability = state.capability
+                if state.phase != "passed" or capability is None:
+                    raise SchedulerPreflightError("capability expiration revision is out of order")
+                state = record_capability_expired(
+                    state,
+                    token_hash=_digest(event["token_hash"], "token_hash"),
+                    capability_binding_hash=_digest(
+                        event["grant_binding_hash"],
+                        "grant_binding_hash",
+                    ),
+                    elapsed_seconds=_strict_int(
+                        event["expired_at"],
+                        "expired_at",
+                        capability.expires_at,
+                        2**63 - 1,
+                    ),
+                )
+                if state.capability is None or state.capability.binding_hash != _digest(
+                    event["expired_grant_binding_hash"],
+                    "expired_grant_binding_hash",
+                ):
+                    raise SchedulerPreflightError("capability expiration revision conflicts")
             elif event_type == "clock_discontinuity":
                 _exact_fields(event, {"type"}, "clock discontinuity revision")
                 state = record_clock_discontinuity(state)
@@ -2065,6 +2437,65 @@ def _append_timeout_if_due(
         raise SchedulerStateCommitUnknown(
             "SCHEDULER_TIMEOUT_POST_COMMIT_UNKNOWN",
             "durable driver timeout did not replay to the expected state",
+        )
+    return current
+
+
+def _append_revision_budget_exhausted(
+    config: TrustedSchedulerConfig,
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+) -> _LoadedAttempt:
+    expected = record_revision_budget_exhausted(loaded.state)
+    current = _append_revision(
+        config,
+        opened,
+        loaded,
+        {"type": "revision_budget_exhausted"},
+    )
+    if current.state != expected:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_REVISION_BUDGET_POST_COMMIT_UNKNOWN",
+            "revision-budget exhaustion did not replay safely",
+        )
+    return current
+
+
+def _append_capability_expiration(
+    config: TrustedSchedulerConfig,
+    opened: _OpenAttempt,
+    loaded: _LoadedAttempt,
+    *,
+    elapsed_seconds: int,
+) -> _LoadedAttempt:
+    capability = loaded.state.capability
+    if loaded.state.phase != "passed" or capability is None:
+        raise SchedulerStateContractError("capability expiration requires a passed grant")
+    expected = record_capability_expired(
+        loaded.state,
+        token_hash=capability.token_hash,
+        capability_binding_hash=capability.binding_hash,
+        elapsed_seconds=elapsed_seconds,
+    )
+    expired_capability = expected.capability
+    if expired_capability is None:
+        raise SchedulerStateContractError("capability expiration lost the durable grant")
+    current = _append_revision(
+        config,
+        opened,
+        loaded,
+        {
+            "type": "capability_expired",
+            "token_hash": capability.token_hash,
+            "grant_binding_hash": capability.binding_hash,
+            "expired_at": elapsed_seconds,
+            "expired_grant_binding_hash": expired_capability.binding_hash,
+        },
+    )
+    if current.state != expected:
+        raise SchedulerStateCommitUnknown(
+            "SCHEDULER_CAPABILITY_EXPIRE_POST_COMMIT_UNKNOWN",
+            "durable capability expiration did not replay to the expected state",
         )
     return current
 
@@ -2455,6 +2886,14 @@ def _identifier(value: Any) -> str:
     return value
 
 
+def _raw_capability_token(value: Any) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value) or value == "0" * 64:
+        raise SchedulerStateContractError(
+            "preflight capability must be one non-placeholder 32-byte hex value"
+        )
+    return value
+
+
 def _digest(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise SchedulerStateContractError(f"{label} must be a lowercase SHA-256")
@@ -2562,6 +3001,9 @@ def _invalid(reason_code: str) -> SchedulerStateInvalidError:
 
 __all__ = [
     "SCHEDULER_STATE_SCHEMA_VERSION",
+    "SchedulerCapabilityExpiredError",
+    "SchedulerCapabilityIssuance",
+    "SchedulerCapabilityUnavailableError",
     "SchedulerMutationPermit",
     "SchedulerMutationPermitError",
     "SchedulerPreflightStore",

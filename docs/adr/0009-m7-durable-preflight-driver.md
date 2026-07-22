@@ -130,11 +130,11 @@ import remains a testing and review surface, not an activated service path.
   authorization, but cannot undo a late scheduler mutation. Active dispatch
   therefore requires a sleep-inclusive recheck adjacent to process creation.
 
-## Next step
+## Follow-up
 
-M7.0d-f must add a separately reviewed durable capability lifecycle. Disk may
-store only the exact token hash and evidence binding. A lost issuance response
-must burn the grant without returning or generating another raw token, and
-consumption must be an atomic, actor/time-bound, one-use transition. Protocol
-version 2 remains inactive after that slice until deployment bootstrap,
-compute-node rechecks, and real-cluster acceptance are complete.
+M7.0d-f implements the separately reviewed durable capability lifecycle in
+ADR 0010. Disk stores only the exact token hash and evidence binding, a lost
+issuance response burns the grant without reissuance, and consumption is an
+atomic actor/time/consumer-bound one-use transition. Protocol version 2 remains
+inactive until deployment bootstrap, a create-only run permit, compute-node
+rechecks, and real-cluster acceptance are complete.
