@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
+from biopipe._pathutil import paths_overlap
 from biopipe.compiler import NextflowCompiler
 from biopipe.errors import BioPipeError
 from biopipe.io import read_model
@@ -900,7 +901,7 @@ def _validate_limits(timeout_seconds: float, output_limit_bytes: int) -> None:
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
-    return first == second or first in second.parents or second in first.parents
+    return paths_overlap(str(first), str(second))
 
 
 def _check_from_result(

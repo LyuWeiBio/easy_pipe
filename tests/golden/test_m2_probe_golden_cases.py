@@ -84,6 +84,7 @@ def test_real_probe_golden_case(case_dir: Path, tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
     probe_envelopes: list[dict[str, Any]] = []
 
     def local_probe_runner(

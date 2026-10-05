@@ -43,6 +43,7 @@ def test_controller_round_trips_real_probe_without_network(tmp_path: Path) -> No
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
 
     def local_probe_runner(
         args: Sequence[str],

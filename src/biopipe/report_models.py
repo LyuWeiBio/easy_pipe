@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import model_validator
@@ -123,7 +124,7 @@ class TestCommandReport(StrictModel):
             ):
                 raise ValueError("missing synthetic runs requires PROJECT_INVALID")
             return self
-        expected_status = _aggregate_status(tuple(self.runs.values()))
+        expected_status = aggregate_status(tuple(self.runs.values()))
         selected = next(report for report in self.runs.values() if report.status == expected_status)
         if self.status != expected_status or self.code.value != selected.code.value:
             raise ValueError("synthetic run evidence does not match the outer report")
@@ -145,7 +146,8 @@ class TestCommandReport(StrictModel):
         return self
 
 
-def _aggregate_status(reports: tuple[WorkflowTestReport, ...]) -> WorkflowTestStatus:
+def aggregate_status(reports: Sequence[WorkflowTestReport]) -> WorkflowTestStatus:
+    """Aggregate per-run statuses; worst status wins (FAILED > BLOCKED > DEGRADED > PASSED)."""
     statuses = {report.status for report in reports}
     for candidate in (
         WorkflowTestStatus.FAILED,
@@ -158,4 +160,4 @@ def _aggregate_status(reports: tuple[WorkflowTestReport, ...]) -> WorkflowTestSt
     return WorkflowTestStatus.FAILED
 
 
-__all__ = ["ReportCode", "TestCommandReport", "ValidationCommandReport"]
+__all__ = ["ReportCode", "TestCommandReport", "ValidationCommandReport", "aggregate_status"]
