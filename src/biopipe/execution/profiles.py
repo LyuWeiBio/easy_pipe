@@ -11,7 +11,14 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
+    unique_object as _unique_object,
+)
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution._fsutil import read_bounded as _read_bounded
 from biopipe.execution.models import ExecutionProfile
 
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -164,34 +171,6 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         if written < 1:
             raise OSError("execution profile write made no progress")
         remaining = remaining[written:]
-
-
-def _read_bounded(descriptor: int, limit: int) -> bytes:
-    chunks: list[bytes] = []
-    remaining = limit + 1
-    while remaining:
-        chunk = os.read(descriptor, min(64 * 1024, remaining))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    payload = b"".join(chunks)
-    if len(payload) > limit:
-        raise OSError("execution profile exceeds its size limit")
-    return payload
-
-
-def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> object:
-    raise ValueError(f"non-finite JSON number is forbidden: {value}")
 
 
 def _profile_error(operation: str, profile_id: str | None) -> BioPipeError:

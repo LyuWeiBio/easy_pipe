@@ -16,12 +16,19 @@ from uuid import uuid4
 import yaml
 from pydantic import ValidationError
 
+from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
+    unique_object as _unique_object,
+)
 from biopipe.cli.reports import (
     read_project_private_state,
     write_project_private_state_atomic,
     write_project_report_atomic,
 )
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution._fsutil import below_any as _below_any
 from biopipe.execution.client import ExecutionOperation, OpenSSHExecutionClient
 from biopipe.execution.deploy import DeploymentBundle, build_deployment_bundle
 from biopipe.execution.models import (
@@ -592,24 +599,6 @@ def _read_bounded_regular(path: Path, maximum: int) -> bytes:
 
 def _sha256_regular(path: Path) -> str:
     return hashlib.sha256(_read_bounded_regular(path, 16 * 1024 * 1024)).hexdigest()
-
-
-def _below_any(value: str, roots: tuple[str, ...]) -> bool:
-    path = PurePosixPath(value)
-    return any(PurePosixPath(root) in path.parents for root in roots)
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> Any:
-    raise ValueError(f"non-finite JSON number is forbidden: {value}")
 
 
 def _profile_error(message: str) -> BioPipeError:
