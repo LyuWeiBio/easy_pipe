@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 
+from biopipe._pathutil import paths_overlap as _paths_overlap
 from biopipe.execution.models import (
     AllowedExecutionRoots,
     ApprovalSigner,
@@ -45,16 +46,6 @@ def _scheduler_name(value: Any, label: str) -> str | None:
     if value is not None and (not isinstance(value, str) or not _SCHEDULER_NAME.fullmatch(value)):
         raise ValueError(f"{label} must be a bounded scheduler identifier")
     return value
-
-
-def _paths_overlap(first: str, second: str) -> bool:
-    first_path = PurePosixPath(first)
-    second_path = PurePosixPath(second)
-    return (
-        first_path == second_path
-        or first_path in second_path.parents
-        or second_path in first_path.parents
-    )
 
 
 class SlurmRuntimeV2(StrictModel):
