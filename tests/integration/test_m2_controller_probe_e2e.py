@@ -57,6 +57,7 @@ def test_m2_builds_manifest_without_exporting_or_modifying_reads(tmp_path: Path)
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
 
     def local_probe_runner(
         args: Sequence[str],
@@ -171,6 +172,7 @@ def test_controller_splits_real_probe_request_level_record_budget(tmp_path: Path
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
     operation_calls: dict[str, int] = {}
 
     def local_probe_runner(
