@@ -25,6 +25,26 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from ._validation import (
+    MAX_JSON_NESTING,
+    has_exact_fields,
+    is_safe_identifier,
+    is_sha256_digest,
+    is_strict_int,
+    shell_quote,
+)
+from ._validation import (
+    canonical_json_bytes as _shared_canonical_json_bytes,
+)
+from ._validation import (
+    reject_constant as _shared_reject_constant,
+)
+from ._validation import (
+    reject_excessive_nesting as _reject_excessive_nesting,
+)
+from ._validation import (
+    unique_object as _shared_unique_object,
+)
 from .slurm import (
     SlurmContractError,
     SlurmHeldJob,
@@ -177,7 +197,7 @@ _MAX_PATH_BYTES = 4096
 _MAX_ARRAY_ITEMS = 100_000
 _MAX_CONTAINERS = 64
 _MAX_EVIDENCE_BYTES = 256 * 1024
-_MAX_JSON_NESTING = 128
+_MAX_JSON_NESTING = MAX_JSON_NESTING
 _MAX_TEMPLATE_BYTES = 16 * 1024
 _RETRYABLE_POLL_CODES = frozenset(
     {
@@ -1002,16 +1022,23 @@ def render_compute_template(manifest: ComputePreflightManifest) -> bytes:
     worker = validated.worker
     runtime = validated.compute_runtime
     digest = manifest_hash(validated)
+    try:
+        python = shell_quote(runtime.python_executable)
+        executable = shell_quote(worker.executable)
+        manifest_path = shell_quote(worker.manifest_path)
+        evidence_path = shell_quote(worker.evidence_path)
+    except ValueError as exc:
+        raise SchedulerPreflightError(f"compute template value is not shell-safe: {exc}") from exc
     script = (
         "#!/bin/sh\n"
         "set -eu\n"
         "umask 077\n"
-        f"exec {runtime.python_executable} -I -S {worker.executable} \\\n"
+        f"exec {python} -I -S {executable} \\\n"
         f"  --contract-version={WORKER_CONTRACT_VERSION} \\\n"
-        f"  --manifest={worker.manifest_path} \\\n"
+        f"  --manifest={manifest_path} \\\n"
         f"  --manifest-sha256={digest} \\\n"
         f"  --worker-sha256={worker.executable_sha256} \\\n"
-        f"  --evidence={worker.evidence_path}\n"
+        f"  --evidence={evidence_path}\n"
     ).encode("ascii")
     if len(script) > _MAX_TEMPLATE_BYTES:
         raise SchedulerPreflightError("compute template exceeds its fixed byte budget")
@@ -2059,14 +2086,8 @@ def _project_hash(hashes: Mapping[str, str]) -> str:
 
 def _canonical_json_bytes(value: Any) -> bytes:
     try:
-        return json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("ascii")
-    except (TypeError, ValueError) as exc:
+        return _shared_canonical_json_bytes(value)
+    except ValueError as exc:
         raise SchedulerPreflightError("value cannot be canonically serialized") from exc
 
 
@@ -2077,18 +2098,18 @@ def _object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _exact_fields(value: dict[str, Any], fields: frozenset[str], label: str) -> None:
-    if set(value) != fields:
+    if not has_exact_fields(value, fields):
         raise SchedulerPreflightError(f"{label} fields do not match the exact contract")
 
 
 def _identifier(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+    if not is_safe_identifier(value):
         raise SchedulerPreflightError(f"{label} must be one safe identifier")
     return value
 
 
 def _digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _SHA256.fullmatch(value) or value == "0" * 64:
+    if not is_sha256_digest(value, reject_zero=True):
         raise SchedulerPreflightError(f"{label} must be a non-placeholder lowercase SHA-256")
     return value
 
@@ -2183,7 +2204,7 @@ def _path_array(value: Any, label: str) -> tuple[str, ...]:
 
 
 def _strict_int(value: Any, label: str, minimum: int, maximum: int) -> int:
-    if type(value) is not int or not minimum <= value <= maximum:
+    if not is_strict_int(value, minimum, maximum):
         raise SchedulerPreflightError(f"{label} is outside its strict integer range")
     return value
 
@@ -2198,43 +2219,13 @@ def _bounded_number(value: Any, label: str, minimum: float, maximum: float) -> f
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON key")
-        result[key] = value
-    return result
+    return _shared_unique_object(pairs, duplicate_message="duplicate JSON key")
 
 
 def _reject_constant(value: str) -> Any:
-    raise ValueError(f"non-finite JSON number is forbidden: {value}")
+    return _shared_reject_constant(value)
 
 
-def _reject_excessive_nesting(text: str) -> None:
-    depth = 0
-    in_string = False
-    escaped = False
-    for character in text:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == '"':
-                in_string = False
-            continue
-        if character == '"':
-            in_string = True
-        elif character in "[{":
-            depth += 1
-            if depth > _MAX_JSON_NESTING:
-                raise ValueError("JSON nesting exceeds the supported limit")
-        elif character in "]}":
-            depth -= 1
-            if depth < 0:
-                raise ValueError("JSON delimiters are unbalanced")
-    if depth != 0 or in_string:
-        raise ValueError("JSON structure is incomplete")
 
 
 __all__ = [
