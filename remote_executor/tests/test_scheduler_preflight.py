@@ -552,12 +552,12 @@ def test_template_is_fixed_ascii_worker_invocation_and_hash_bound() -> None:
         "#!/bin/sh\n"
         "set -eu\n"
         "umask 077\n"
-        "exec /usr/bin/python3 -I -S /opt/biopipe/bin/bioexec-compute-preflight \\\n"
+        "exec '/usr/bin/python3' -I -S '/opt/biopipe/bin/bioexec-compute-preflight' \\\n"
         "  --contract-version=1.0 \\\n"
-        "  --manifest=/private/preflight-1/manifest.json \\\n"
+        "  --manifest='/private/preflight-1/manifest.json' \\\n"
         f"  --manifest-sha256={manifest_hash(manifest)} \\\n"
         f"  --worker-sha256={_WORKER_HASH} \\\n"
-        "  --evidence=/private/preflight-1/evidence.json\n"
+        "  --evidence='/private/preflight-1/evidence.json'\n"
     ).encode("ascii")
     assert rendered == expected
     assert template_hash(manifest) == hashlib.sha256(rendered).hexdigest()

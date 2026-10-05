@@ -20,11 +20,14 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
 
+from ._validation import shell_quote
 from .scheduler_config_loader import TrustedSchedulerConfig
 from .scheduler_preflight import SchedulerPreflightState
 from .scheduler_run import (
     SCHEDULER_RUN_NAMESPACE,
     SchedulerRunSnapshot,
+    compute_node_config_path,
+    scheduler_config_binding_matches,
 )
 from .scheduler_state import SchedulerStateSnapshot
 from .slurm import (
@@ -145,13 +148,17 @@ def prepare_scheduler_workload(
     if bootstrap.sha256 is None:
         raise SchedulerWorkloadError("compute bootstrap lacks a trusted full hash")
 
+    # The batch must never name the key-bearing service-node config file.  It
+    # references the deterministic staged compute-node projection instead; the
+    # activation adapter stages those exact bytes before submitting.
+    compute_config = compute_node_config_path(str(config.state_root.path), run.run_id)
     bootstrap_argv = (
         runtime.python_executable,
         "-I",
         "-S",
         str(bootstrap.path),
         "--contract-version=1.0",
-        f"--config={config.config_file.path}",
+        f"--config={compute_config}",
         f"--run-id={run.run_id}",
         f"--identity-sha256={run.identity_sha256}",
         f"--bootstrap-sha256={bootstrap.sha256}",
@@ -437,8 +444,7 @@ def _validate_inputs(
         or capability.consumer_binding_hash != run.consumer_binding_hash
         or preflight.request_sha256 != run.preflight_request_sha256
         or manifest.preflight_id != run.preflight_id
-        or identity["config_sha256"] != config.config_sha256
-        or identity["contract_sha256"] != config.contract_sha256
+        or not scheduler_config_binding_matches(identity, config)
         or identity["profile_id"] != manifest.profile_id
         or identity["profile_hash"] != manifest.profile_hash
         or identity["scheduler_policy_hash"] != manifest.scheduler_policy_hash
@@ -592,15 +598,10 @@ def _canonical_manifest_hash(value: Mapping[str, Any]) -> str:
 
 
 def _shell_quote(value: str) -> str:
-    if not isinstance(value, str) or not value or "\x00" in value:
-        raise SchedulerWorkloadError("workload argv contains an unsafe value")
-    if any(ord(character) < 32 or ord(character) == 127 for character in value):
-        raise SchedulerWorkloadError("workload argv contains control text")
     try:
-        value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise SchedulerWorkloadError("workload batch argv must be shell-inert ASCII") from exc
-    return "'" + value.replace("'", "'\"'\"'") + "'"
+        return shell_quote(value)
+    except ValueError as exc:
+        raise SchedulerWorkloadError(f"workload argv is not shell-safe: {exc}") from exc
 
 
 def _canonical_absolute_path(value: str, *, leaf: str | None = None) -> bool:
