@@ -8,6 +8,7 @@ the trusted-path and filesystem-identity checks at the mutation boundary.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass
@@ -15,6 +16,14 @@ from dataclasses import field as dataclass_field
 from pathlib import PurePosixPath
 from typing import Any
 
+from ._validation import (
+    canonical_json_bytes as _shared_canonical_json_bytes,
+)
+from ._validation import (
+    is_safe_identifier,
+    is_sha256_digest,
+    is_strict_int,
+)
 from .slurm import SlurmContractError, SlurmSchedulerPolicy
 from .slurm import scheduler_policy_hash as _scheduler_policy_hash
 
@@ -43,6 +52,14 @@ _TOP_LEVEL_FIELDS = frozenset(
         "approval_hmac_key",
         "limits",
     }
+)
+# The compute-node projection of config-v2.  A staged compute-node config must
+# carry every trusted path and executable binding the bootstrap needs, but must
+# never carry control-plane secrets.  Today the only such secret is the
+# approval HMAC key; approval_key_id is a non-secret identifier and is kept so
+# audit evidence still names the approving key.
+_TOP_LEVEL_FIELDS_COMPUTE_NODE = frozenset(
+    field for field in _TOP_LEVEL_FIELDS if field != "approval_hmac_key"
 )
 _RUNTIME_FIELDS = frozenset(
     {
@@ -374,7 +391,10 @@ class SchedulerAgentConfig:
     nextflow_jar: str
     nextflow_jar_sha256: str
     approval_key_id: str
-    approval_hmac_key: bytes = dataclass_field(repr=False)
+    # None only for a staged compute-node projection: the approval HMAC key is
+    # a control-plane-only secret and must never reach a compute node.  The
+    # service-node (full) contract always carries exactly one 32-byte key.
+    approval_hmac_key: bytes | None = dataclass_field(default=None, repr=False)
     limits: SchedulerLimits = dataclass_field(default_factory=SchedulerLimits)
 
     def __post_init__(self) -> None:
@@ -396,7 +416,7 @@ class SchedulerAgentConfig:
         _absolute_path(self.nextflow_jar, "nextflow_jar")
         _digest(self.nextflow_jar_sha256, "nextflow_jar_sha256", reject_zero=True)
         _identifier(self.approval_key_id, "approval_key_id")
-        if (
+        if self.approval_hmac_key is not None and (
             not isinstance(self.approval_hmac_key, bytes)
             or len(self.approval_hmac_key) != 32
             or self.approval_hmac_key == bytes(32)
@@ -415,10 +435,20 @@ class SchedulerAgentConfig:
         _validate_role_separation(roles, self.state_root)
 
     @classmethod
-    def from_mapping(cls, value: Any) -> SchedulerAgentConfig:
-        """Parse one exact decoded JSON object without touching external state."""
+    def from_mapping(
+        cls, value: Any, *, allow_missing_approval_key: bool = False
+    ) -> SchedulerAgentConfig:
+        """Parse one exact decoded JSON object without touching external state.
 
-        mapping = _exact_mapping(value, _TOP_LEVEL_FIELDS, "configuration")
+        With ``allow_missing_approval_key`` the mapping must be the exact
+        compute-node projection (every field except ``approval_hmac_key``);
+        otherwise the mapping must be the exact full config-v2 object.
+        """
+
+        fields = (
+            _TOP_LEVEL_FIELDS_COMPUTE_NODE if allow_missing_approval_key else _TOP_LEVEL_FIELDS
+        )
+        mapping = _exact_mapping(value, fields, "configuration")
         scheduler_value = mapping["scheduler"]
         try:
             scheduler = SlurmSchedulerPolicy.from_mapping(scheduler_value)
@@ -460,15 +490,23 @@ class SchedulerAgentConfig:
                 reject_zero=True,
             ),
             approval_key_id=_identifier(mapping["approval_key_id"], "approval_key_id"),
-            approval_hmac_key=_approval_key(mapping["approval_hmac_key"]),
+            approval_hmac_key=(
+                None
+                if allow_missing_approval_key
+                else _approval_key(mapping["approval_hmac_key"])
+            ),
             limits=SchedulerLimits.from_mapping(mapping["limits"]),
         )
 
 
-def parse_scheduler_config(value: Any) -> SchedulerAgentConfig:
+def parse_scheduler_config(
+    value: Any, *, allow_missing_approval_key: bool = False
+) -> SchedulerAgentConfig:
     """Parse a decoded scheduler configuration mapping without performing I/O."""
 
-    return SchedulerAgentConfig.from_mapping(value)
+    return SchedulerAgentConfig.from_mapping(
+        value, allow_missing_approval_key=allow_missing_approval_key
+    )
 
 
 def canonical_scheduler_policy_hash(policy: SlurmSchedulerPolicy) -> str:
@@ -477,6 +515,91 @@ def canonical_scheduler_policy_hash(policy: SlurmSchedulerPolicy) -> str:
     if not isinstance(policy, SlurmSchedulerPolicy):
         raise SchedulerConfigError("policy must be a validated SlurmSchedulerPolicy")
     return _scheduler_policy_hash(policy)
+
+
+def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    return _shared_canonical_json_bytes(value)
+
+
+def _canonical_config_mapping(
+    config: SchedulerAgentConfig, *, include_approval_key: bool
+) -> dict[str, Any]:
+    limits = config.limits
+    value: dict[str, Any] = {
+        "schema_version": config.schema_version,
+        "profile_version": config.profile_version,
+        "profile_id": config.profile_id,
+        "profile_hash": config.profile_hash,
+        "runtime": config.runtime.as_mapping(),
+        "scheduler": config.scheduler.as_mapping(),
+        "read_roots": list(config.read_roots),
+        "deploy_roots": list(config.deploy_roots),
+        "work_roots": list(config.work_roots),
+        "output_roots": list(config.output_roots),
+        "cache_roots": list(config.cache_roots),
+        "state_root": config.state_root,
+        "executables": config.executables.as_mapping(),
+        "nextflow_version": config.nextflow_version,
+        "nextflow_jar": config.nextflow_jar,
+        "nextflow_jar_sha256": config.nextflow_jar_sha256,
+        "approval_key_id": config.approval_key_id,
+        "limits": {
+            "max_request_bytes": limits.max_request_bytes,
+            "max_response_bytes": limits.max_response_bytes,
+            "max_deployment_files": limits.max_deployment_files,
+            "max_file_bytes": limits.max_file_bytes,
+            "max_deployment_bytes": limits.max_deployment_bytes,
+            "max_raw_paths": limits.max_raw_paths,
+            "max_command_output_bytes": limits.max_command_output_bytes,
+            "command_timeout_seconds": limits.command_timeout_seconds,
+            "run_timeout_seconds": limits.run_timeout_seconds,
+            "preflight_ttl_seconds": limits.preflight_ttl_seconds,
+            "minimum_free_bytes": limits.minimum_free_bytes,
+        },
+    }
+    if include_approval_key:
+        key = config.approval_hmac_key
+        if key is None:
+            raise SchedulerConfigError("approval_hmac_key is required for the full contract hash")
+        value["approval_hmac_key"] = key.hex()
+    return value
+
+
+def canonical_contract_sha256(config: SchedulerAgentConfig) -> str:
+    """Hash the exact canonical contract mapping used by run-identity binding.
+
+    The approval HMAC key is included exactly when the contract carries one,
+    so a full (service-node) contract hashes exactly as before this change and
+    a staged compute-node contract hashes its key-less projection.
+    """
+
+    if not isinstance(config, SchedulerAgentConfig):
+        raise SchedulerConfigError("a validated scheduler contract is required")
+    return hashlib.sha256(
+        _canonical_json_bytes(
+            _canonical_config_mapping(
+                config,
+                include_approval_key=config.approval_hmac_key is not None,
+            )
+        )
+    ).hexdigest()
+
+
+def render_compute_node_config(contract: SchedulerAgentConfig) -> bytes:
+    """Render the canonical compute-node config-v2 projection.
+
+    The returned bytes are the exact config file content to stage for a
+    compute node: every trusted path, executable binding, root, limit, and
+    policy field is preserved, but control-plane secrets (the approval HMAC
+    key) are stripped.  Rendering an already-stripped contract yields the
+    identical bytes, so the projection is idempotent: the service node (from
+    the full contract) and the compute node (from the staged contract) derive
+    the same digest for run-identity binding.
+    """
+
+    if not isinstance(contract, SchedulerAgentConfig):
+        raise SchedulerConfigError("a validated scheduler contract is required")
+    return _canonical_json_bytes(_canonical_config_mapping(contract, include_approval_key=False))
 
 
 def _exact_mapping(value: Any, fields: frozenset[str], label: str) -> dict[str, Any]:
@@ -492,17 +615,13 @@ def _string(value: Any, field: str) -> str:
 
 
 def _identifier(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+    if not is_safe_identifier(value):
         raise SchedulerConfigError(f"{field} must be a bounded safe identifier")
     return value
 
 
 def _digest(value: Any, field: str, *, reject_zero: bool) -> str:
-    if (
-        not isinstance(value, str)
-        or not _SHA256.fullmatch(value)
-        or (reject_zero and value == "0" * 64)
-    ):
+    if not is_sha256_digest(value, reject_zero=reject_zero):
         raise SchedulerConfigError(f"{field} must be one non-placeholder lowercase SHA-256")
     return value
 
@@ -593,7 +712,7 @@ def _paths_overlap(first: str, second: str) -> bool:
 
 
 def _strict_int(value: Any, field: str, minimum: int, maximum: int) -> int:
-    if type(value) is not int or not minimum <= value <= maximum:
+    if not is_strict_int(value, minimum, maximum):
         raise SchedulerConfigError(f"{field} is outside its supported integer range")
     return value
 
@@ -635,6 +754,8 @@ __all__ = [
     "SchedulerExecutables",
     "SchedulerLimits",
     "SchedulerRuntime",
+    "canonical_contract_sha256",
     "canonical_scheduler_policy_hash",
     "parse_scheduler_config",
+    "render_compute_node_config",
 ]

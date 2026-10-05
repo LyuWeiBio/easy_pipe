@@ -12,6 +12,16 @@ from dataclasses import field as dataclass_field
 from pathlib import Path, PurePath
 from typing import Any, cast
 
+from ._validation import (
+    is_safe_identifier,
+    is_sha256_digest,
+)
+from ._validation import (
+    reject_constant as _shared_reject_constant,
+)
+from ._validation import (
+    unique_object as _shared_unique_object,
+)
 from .errors import AgentFailure, ReturnCode
 
 CONFIG_ENV = "BIOEXEC_CONFIG"
@@ -617,17 +627,13 @@ def _absolute_path(value: str, field: str) -> Path:
 
 
 def _identifier(value: Any, field: str) -> str:
-    import re
-
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value):
+    if not is_safe_identifier(value):
         raise _config_error(f"{field} must be a safe identifier")
     return value
 
 
 def _digest(value: Any, field: str) -> str:
-    import re
-
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+    if not is_sha256_digest(value):
         raise _config_error(f"{field} must be a lowercase SHA-256 digest")
     return value
 
@@ -681,16 +687,11 @@ def _unsafe_text(value: str) -> bool:
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
+    return _shared_unique_object(pairs)
 
 
 def _reject_constant(value: str) -> Any:
-    raise ValueError(f"non-finite number is forbidden: {value}")
+    return _shared_reject_constant(value, message="non-finite number is forbidden")
 
 
 def _config_error(message: str) -> AgentFailure:

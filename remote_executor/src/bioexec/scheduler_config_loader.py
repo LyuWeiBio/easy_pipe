@@ -23,8 +23,10 @@ from typing import Any, Literal, cast
 from .scheduler_config import (
     SchedulerAgentConfig,
     SchedulerConfigError,
+    canonical_contract_sha256,
     canonical_scheduler_policy_hash,
     parse_scheduler_config,
+    render_compute_node_config,
 )
 
 MAX_SCHEDULER_CONFIG_BYTES = 1_048_576
@@ -170,8 +172,18 @@ class TrustedSchedulerConfig:
         _validate_trusted_scheduler_config(self)
 
 
-def load_trusted_scheduler_config(path: Path) -> TrustedSchedulerConfig:
-    """Load one explicit config-v2 file and bind every trusted filesystem object."""
+def load_trusted_scheduler_config(
+    path: Path, *, require_approval_key: bool = True
+) -> TrustedSchedulerConfig:
+    """Load one explicit config-v2 file and bind every trusted filesystem object.
+
+    With ``require_approval_key`` (the default) the file must be the full
+    service-node config-v2 carrying the approval HMAC key; a key-less file is
+    rejected.  With ``require_approval_key=False`` the file must be the staged
+    compute-node projection: it must carry every trusted binding but must not
+    carry ``approval_hmac_key`` — a key-bearing file is hard-rejected so a
+    control-plane secret can never reach a compute node through this path.
+    """
 
     selected = _absolute_loader_path(path)
     descriptor = -1
@@ -193,10 +205,20 @@ def load_trusted_scheduler_config(path: Path) -> TrustedSchedulerConfig:
     if len(payload) > MAX_SCHEDULER_CONFIG_BYTES:
         raise SchedulerConfigLoadError("scheduler configuration exceeds its byte budget")
     mapping = _decode_config(payload)
+    if not require_approval_key and "approval_hmac_key" in mapping:
+        raise SchedulerConfigLoadError(
+            "compute-node scheduler configuration must not carry approval_hmac_key"
+        )
     try:
-        contract = parse_scheduler_config(mapping)
+        contract = parse_scheduler_config(
+            mapping, allow_missing_approval_key=not require_approval_key
+        )
     except (SchedulerConfigError, UnicodeError) as exc:
         raise SchedulerConfigLoadError("scheduler configuration violates config-v2") from exc
+    if require_approval_key and contract.approval_hmac_key is None:
+        raise SchedulerConfigLoadError(
+            "scheduler configuration must carry an approval HMAC key"
+        )
 
     config_binding = _file_binding(
         "scheduler_config",
@@ -245,6 +267,28 @@ def load_trusted_scheduler_config(path: Path) -> TrustedSchedulerConfig:
         executables=MappingProxyType(executables),
         nextflow_jar=nextflow_jar,
     )
+
+
+def scheduler_config_binding_matches(
+    identity: Mapping[str, Any], config: TrustedSchedulerConfig
+) -> bool:
+    """Check that a loaded trusted config is the exact config a record was bound under.
+
+    A full service-node config must reproduce the recorded config-file and
+    contract digests.  A staged compute-node config (which carries no approval
+    HMAC key by loader construction) must reproduce the recorded compute-node
+    projection digest derived from the reserved full contract.
+    """
+
+    if not isinstance(config, TrustedSchedulerConfig) or not isinstance(identity, Mapping):
+        return False
+    if config.contract.approval_hmac_key is not None:
+        return (
+            identity.get("config_sha256") == config.config_sha256
+            and identity.get("contract_sha256") == config.contract_sha256
+        )
+    expected = hashlib.sha256(render_compute_node_config(config.contract)).hexdigest()
+    return identity.get("compute_config_sha256") == expected
 
 
 def verify_scheduler_config_file(config: TrustedSchedulerConfig) -> None:
@@ -523,48 +567,7 @@ def _validate_trusted_scheduler_config(config: TrustedSchedulerConfig) -> None:
 
 
 def _scheduler_contract_sha256(config: SchedulerAgentConfig) -> str:
-    limits = config.limits
-    value = {
-        "schema_version": config.schema_version,
-        "profile_version": config.profile_version,
-        "profile_id": config.profile_id,
-        "profile_hash": config.profile_hash,
-        "runtime": config.runtime.as_mapping(),
-        "scheduler": config.scheduler.as_mapping(),
-        "read_roots": list(config.read_roots),
-        "deploy_roots": list(config.deploy_roots),
-        "work_roots": list(config.work_roots),
-        "output_roots": list(config.output_roots),
-        "cache_roots": list(config.cache_roots),
-        "state_root": config.state_root,
-        "executables": config.executables.as_mapping(),
-        "nextflow_version": config.nextflow_version,
-        "nextflow_jar": config.nextflow_jar,
-        "nextflow_jar_sha256": config.nextflow_jar_sha256,
-        "approval_key_id": config.approval_key_id,
-        "approval_hmac_key": config.approval_hmac_key.hex(),
-        "limits": {
-            "max_request_bytes": limits.max_request_bytes,
-            "max_response_bytes": limits.max_response_bytes,
-            "max_deployment_files": limits.max_deployment_files,
-            "max_file_bytes": limits.max_file_bytes,
-            "max_deployment_bytes": limits.max_deployment_bytes,
-            "max_raw_paths": limits.max_raw_paths,
-            "max_command_output_bytes": limits.max_command_output_bytes,
-            "command_timeout_seconds": limits.command_timeout_seconds,
-            "run_timeout_seconds": limits.run_timeout_seconds,
-            "preflight_ttl_seconds": limits.preflight_ttl_seconds,
-            "minimum_free_bytes": limits.minimum_free_bytes,
-        },
-    }
-    payload = json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("ascii")
-    return hashlib.sha256(payload).hexdigest()
+    return canonical_contract_sha256(config)
 
 
 def _decode_config(payload: bytes) -> dict[str, Any]:
@@ -948,6 +951,7 @@ __all__ = [
     "TrustedFileBinding",
     "TrustedSchedulerConfig",
     "load_trusted_scheduler_config",
+    "scheduler_config_binding_matches",
     "verify_scheduler_config_file",
     "verify_scheduler_executable",
     "verify_scheduler_nextflow_jar",
