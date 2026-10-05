@@ -9,7 +9,6 @@ and publishes an explicitly unreviewed create-only bundle.
 from __future__ import annotations
 
 import errno
-import hashlib
 import json
 import os
 import stat
@@ -21,6 +20,7 @@ from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from biopipe.artifacts import sha256_bytes as _sha256
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution import CoreArtifactHashes, compute_project_hash
 from biopipe.release_evidence.acceptance import verify_release_acceptance_evidence
@@ -1659,10 +1659,6 @@ def _render_json(value: dict[str, Any]) -> bytes:
     return (
         json.dumps(value, allow_nan=False, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
     ).encode("ascii")
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _assert_sanitized(payloads: dict[str, bytes], *, private_paths: tuple[Path, ...]) -> None:
