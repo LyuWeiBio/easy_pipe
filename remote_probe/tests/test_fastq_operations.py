@@ -57,6 +57,7 @@ def _config(
         ),
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
     return load_config(config_path)
 
 

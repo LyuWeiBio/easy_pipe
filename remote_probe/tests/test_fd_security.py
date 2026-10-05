@@ -31,6 +31,7 @@ def _config(tmp_path: Path, root: Path, *, max_response_bytes: int = 4096) -> Pa
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
     return config
 
 
@@ -111,6 +112,32 @@ def test_config_file_symlink_is_never_followed(tmp_path: Path) -> None:
         load_config(linked_config)
 
     assert captured.value.code == "CONFIG_INVALID"
+
+
+@pytest.mark.parametrize("mode", [0o664, 0o666, 0o646, 0o606])
+def test_group_or_world_writable_config_is_rejected(tmp_path: Path, mode: int) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    config_path = _config(tmp_path, root)
+    config_path.chmod(mode)
+
+    with pytest.raises(ProbeFailure) as captured:
+        load_config(config_path)
+
+    assert captured.value.code == "CONFIG_INVALID"
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644, 0o400])
+def test_owner_only_readable_config_is_accepted(tmp_path: Path, mode: int) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    config_path = _config(tmp_path, root)
+    config_path.chmod(mode)
+
+    config = load_config(config_path)
+
+    assert config.source == "explicit"
+    assert len(config.allowed_roots) == 1
 
 
 def test_scandir_child_swap_to_symlink_is_rejected(
