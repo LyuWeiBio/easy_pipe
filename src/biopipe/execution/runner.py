@@ -11,7 +11,7 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4, uuid5
 
@@ -24,6 +24,7 @@ from biopipe.cli.reports import (
     write_project_report_create_only_atomic,
 )
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution._fsutil import below_any as _below_any
 from biopipe.execution.client import ExecutionOperation, OpenSSHExecutionClient
 from biopipe.execution.deploy import DeploymentBundle
 from biopipe.execution.gate import ApprovalGate, LocalGateEvidence
@@ -1584,11 +1585,6 @@ def _deterministic_deployment_id(
         sort_keys=True,
     )
     return f"deployment-{uuid5(_DEPLOYMENT_NAMESPACE, material).hex}"
-
-
-def _below_any(value: str, roots: tuple[str, ...]) -> bool:
-    candidate = PurePosixPath(value)
-    return any(PurePosixPath(root) in candidate.parents for root in roots)
 
 
 def _protocol_error(operation: str) -> BioPipeError:

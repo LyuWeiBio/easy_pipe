@@ -10,6 +10,12 @@ from pathlib import PurePosixPath
 from typing import Any, Final, Literal, Protocol
 from uuid import uuid4
 
+from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
+    unique_object as _unique_object,
+)
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.models import SourceProfile
 from biopipe.probe.bounded import run_bounded
@@ -349,19 +355,6 @@ def _protocol_error(operation: str) -> BioPipeError:
         context={"operation": operation},
         remediation=["Install the reviewed bioexec.pyz version and retry."],
     )
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> Any:
-    raise ValueError(f"non-finite JSON number is forbidden: {value}")
 
 
 def _captured_text(value: str | bytes | None) -> str:

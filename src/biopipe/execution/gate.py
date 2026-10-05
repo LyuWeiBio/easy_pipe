@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -16,7 +14,22 @@ from typing import Any, TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from biopipe._jsonutil import (
+    UniqueSafeLoader as _UniqueSafeLoader,
+)
+from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
+    unique_object as _unique_object,
+)
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution._fsutil import (
+    below_any as _below_any,
+)
+from biopipe.execution._fsutil import (
+    read_bounded_regular_file,
+)
 from biopipe.execution.models import (
     ApprovalArtifactPaths,
     ApprovalRequest,
@@ -73,45 +86,6 @@ _REQUIRED_PREFLIGHT_CHECKS = frozenset(
 )
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
-
-
-class _UniqueSafeLoader(yaml.SafeLoader):
-    """Safe YAML loader that also rejects duplicate mapping keys."""
-
-
-def _construct_unique_mapping(
-    loader: _UniqueSafeLoader,
-    node: yaml.MappingNode,
-    deep: bool = False,
-) -> dict[object, object]:
-    loader.flatten_mapping(node)
-    result: dict[object, object] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in result
-        except TypeError as exc:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                "found an unhashable mapping key",
-                key_node.start_mark,
-            ) from exc
-        if duplicate:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                "found a duplicate mapping key",
-                key_node.start_mark,
-            )
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_mapping,
-)
 
 
 class _Artifact:
@@ -502,59 +476,10 @@ def assert_resume_compatible(
 
 
 def _read_bounded(path: Path, limit: int, label: str) -> bytes:
-    descriptor: int | None = None
     try:
-        descriptor = _open_without_symlinks(path)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= limit:
-            raise OSError("artifact is not a bounded regular file")
-        chunks: list[bytes] = []
-        remaining = limit + 1
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        payload = b"".join(chunks)
-        if not 0 < len(payload) <= limit:
-            raise OSError("artifact exceeds its read limit")
-        return payload
+        return read_bounded_regular_file(path, limit)
     except OSError as exc:
         raise _gate_error(ErrorCode.APPROVAL_ARTIFACT_MISMATCH, f"{label}_unreadable") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _open_without_symlinks(path: Path) -> int:
-    absolute = path.expanduser().absolute()
-    parts = absolute.parts
-    if not absolute.is_absolute() or len(parts) < 2:
-        raise OSError("artifact path is invalid")
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    directory_descriptor = os.open(parts[0], directory_flags)
-    try:
-        for component in parts[1:-1]:
-            next_descriptor = os.open(
-                component,
-                directory_flags,
-                dir_fd=directory_descriptor,
-            )
-            os.close(directory_descriptor)
-            directory_descriptor = next_descriptor
-        return os.open(
-            parts[-1],
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory_descriptor,
-        )
-    finally:
-        os.close(directory_descriptor)
 
 
 def _parse_json_model(payload: bytes, model_type: type[ModelT]) -> ModelT:
@@ -651,17 +576,6 @@ def _map_path(value: str, plan: ExecutionPlan) -> str:
     return str(mapped)
 
 
-def _below_any(path: str, roots: tuple[str, ...]) -> bool:
-    candidate = PurePosixPath(path)
-    for root in roots:
-        try:
-            candidate.relative_to(PurePosixPath(root))
-        except ValueError:
-            continue
-        return True
-    return False
-
-
 def _compatibility_hash(core_hashes: CoreArtifactHashes, bundle_hash: str) -> str:
     payload = {
         "bundle_hash": bundle_hash,
@@ -709,19 +623,6 @@ def _utc_now(value: datetime | None) -> datetime:
     if selected.tzinfo is None or selected.utcoffset() is None:
         raise ValueError("approval gate time must include a timezone")
     return selected.astimezone(timezone.utc)  # noqa: UP017
-
-
-def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> object:
-    raise ValueError(f"non-finite JSON number is forbidden: {value}")
 
 
 def _gate_error(code: ErrorCode, reason: str) -> BioPipeError:

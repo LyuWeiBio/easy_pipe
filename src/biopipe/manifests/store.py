@@ -15,6 +15,9 @@ from typing import Final, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from biopipe._jsonutil import (
+    unique_object as _unique_object,
+)
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.models import DatasetManifest, ManifestOverrides
 
@@ -204,15 +207,6 @@ class ManifestArtifactStore:
             context=context,
             remediation=["Check the artifact name, directory permissions, and existing files."],
         )
-
-
-def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
 
 
 __all__ = ["ManifestArtifactStore"]

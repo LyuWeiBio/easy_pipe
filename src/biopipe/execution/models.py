@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from biopipe._pathutil import paths_overlap as _paths_overlap
 from biopipe.models import StrictModel
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -45,16 +46,6 @@ def _aware_utc(value: datetime, label: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{label} must include a timezone")
     return value.astimezone(timezone.utc)  # noqa: UP017 - bioinfo supports Python 3.10.
-
-
-def _paths_overlap(first: str, second: str) -> bool:
-    first_path = PurePosixPath(first)
-    second_path = PurePosixPath(second)
-    return (
-        first_path == second_path
-        or first_path in second_path.parents
-        or second_path in first_path.parents
-    )
 
 
 class ExecutionPathMapping(StrictModel):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -15,6 +14,12 @@ from typing import Any, TypeVar, cast
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from biopipe._jsonutil import (
+    UniqueSafeLoader as _UniqueSafeLoader,
+)
+from biopipe._pathutil import paths_overlap as _paths_overlap
+from biopipe.artifacts import sha256_bytes as _sha256
+from biopipe.compiler.compiler import LATEST_TOKEN as _LATEST_TOKEN
 from biopipe.compiler.compiler import NextflowCompiler, _generation_fingerprint
 from biopipe.errors import BioPipeError
 from biopipe.manifests.integrity import verify_manifest
@@ -78,7 +83,6 @@ _MAX_PROJECT_ENTRIES = 512
 _MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _MAX_PROJECT_BYTES = 64 * 1024 * 1024
 _READ_CHUNK_BYTES = 1024 * 1024
-_LATEST_TOKEN = re.compile(r"(?i)(?:^|[^A-Za-z0-9_.-])latest(?:$|[^A-Za-z0-9_.-])")
 _CONTAINER_ASSIGNMENT = re.compile(
     r"(?m)^\s*container\s*=\s*(['\"])(?P<reference>[^'\"\r\n]+)\1\s*$"
 )
@@ -176,45 +180,6 @@ _FINDING_TEXT: Mapping[FindingCode, tuple[str, tuple[str, ...]]] = {
         ("Restore the installed easy-pipe package and its reviewed registry resource.",),
     ),
 }
-
-
-class _UniqueSafeLoader(yaml.SafeLoader):
-    """YAML loader that rejects duplicate mapping keys."""
-
-
-def _construct_unique_mapping(
-    loader: _UniqueSafeLoader,
-    node: yaml.MappingNode,
-    deep: bool = False,
-) -> dict[object, object]:
-    loader.flatten_mapping(node)
-    result: dict[object, object] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in result
-        except TypeError as exc:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                "found an unhashable mapping key",
-                key_node.start_mark,
-            ) from exc
-        if duplicate:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                "found a duplicate mapping key",
-                key_node.start_mark,
-            )
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_mapping,
-)
 
 
 class _FindingCollector:
@@ -852,8 +817,6 @@ class StaticProjectValidator:
                 continue
             if artifact == "assets/samplesheet.csv":
                 code = FindingCode.SAMPLESHEET_MISMATCH
-            elif artifact == _AUDIT_ARTIFACT:
-                code = FindingCode.AUDIT_RECORD_INVALID
             elif artifact.endswith((".nf", ".config")) or artifact == "README.md":
                 code = FindingCode.GENERATED_CONTENT_MISMATCH
             else:
@@ -1001,16 +964,6 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _paths_overlap(first: str, second: str) -> bool:
-    first_path = PurePosixPath(first)
-    second_path = PurePosixPath(second)
-    return (
-        first_path == second_path
-        or first_path in second_path.parents
-        or second_path in first_path.parents
-    )
-
-
 def _parent_directories(files: set[str]) -> set[str]:
     directories: set[str] = set()
     for artifact in files:
@@ -1019,10 +972,6 @@ def _parent_directories(files: set[str]) -> set[str]:
             directories.add(parent.as_posix())
             parent = parent.parent
     return directories
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _json_model_bytes(model: BaseModel) -> bytes:

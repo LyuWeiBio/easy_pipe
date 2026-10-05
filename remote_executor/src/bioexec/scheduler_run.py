@@ -21,13 +21,16 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from ._validation import is_safe_identifier, is_sha256_digest, is_strict_int
 from .scheduler_clock import SchedulerClock, SystemSchedulerClock
+from .scheduler_config import render_compute_node_config
 from .scheduler_config_loader import (
     TrustedSchedulerConfig,
+    scheduler_config_binding_matches,
     verify_scheduler_config_file,
     verify_scheduler_root,
 )
@@ -57,8 +60,191 @@ from .scheduler_state import (
 if TYPE_CHECKING:
     from .scheduler_workload import SchedulerWorkloadPlan
 
-SCHEDULER_RUN_SCHEMA_VERSION = "1.1"
+SCHEDULER_RUN_SCHEMA_VERSION = "1.2"
 SCHEDULER_RUN_NAMESPACE = "scheduler-runs-v1"
+
+# Staged compute-node config layout beneath one reserved run directory:
+#   <state_root>/scheduler-runs-v1/<run_id>/compute-config-v1/scheduler.json
+# The staged file carries every trusted binding the compute bootstrap needs but
+# never the approval HMAC key.  The workload batch references exactly this
+# path, so the key-bearing service-node config file is never named to a
+# compute node.
+COMPUTE_NODE_CONFIG_DIRNAME = "compute-config-v1"
+COMPUTE_NODE_CONFIG_FILENAME = "scheduler.json"
+
+_MAX_STAGED_CONFIG_BYTES = 2 * 1024 * 1024
+
+
+def compute_node_config_path(state_root: str, run_id: str) -> str:
+    """Derive the deterministic staged compute-node config path (pure).
+
+    Both the service node (staging plus batch construction) and the compute
+    node (batch re-derivation inside the bootstrap) compute this path from the
+    trusted state root and the reserved run identifier, so the workload binding
+    never names the key-bearing service-node config file.
+    """
+
+    _identifier(run_id, "run_id")
+    root = PurePosixPath(state_root)
+    if (
+        not isinstance(state_root, str)
+        or not root.is_absolute()
+        or ".." in root.parts
+        or str(root) != state_root
+    ):
+        raise SchedulerRunContractError("state root must be one canonical absolute path")
+    return str(
+        root
+        / SCHEDULER_RUN_NAMESPACE
+        / run_id
+        / COMPUTE_NODE_CONFIG_DIRNAME
+        / COMPUTE_NODE_CONFIG_FILENAME
+    )
+
+
+def stage_compute_node_config(config: TrustedSchedulerConfig, run_id: str) -> Path:
+    """Write the key-less compute-node config projection for one reserved run.
+
+    The service node calls this once per reserved run before the workload batch
+    is submitted.  It renders the canonical compute-node projection and writes
+    it to the deterministic run-private path with create-only,
+    symlink-rejecting, owner-only semantics.  Re-staging is idempotent only
+    when the existing bytes are identical; divergent content is a hard error.
+    """
+
+    if not isinstance(config, TrustedSchedulerConfig):
+        raise SchedulerRunContractError("trusted scheduler config-v2 is required")
+    if config.contract.approval_hmac_key is None:
+        raise SchedulerRunContractError(
+            "compute-node staging requires the full service-node config"
+        )
+    destination = compute_node_config_path(str(config.state_root.path), run_id)
+    payload = render_compute_node_config(config.contract)
+    root = namespace = run_directory = staging_directory = -1
+    try:
+        verify_scheduler_config_file(config)
+        verify_scheduler_root(config, "state")
+        root = _open_state_root(config)
+        namespace = _open_private_directory(root, SCHEDULER_RUN_NAMESPACE)
+        run_directory = _open_private_directory(namespace, run_id)
+        try:
+            os.mkdir(COMPUTE_NODE_CONFIG_DIRNAME, 0o700, dir_fd=run_directory)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise SchedulerRunPreconditionError(
+                "SCHEDULER_RUN_STAGING_UNAVAILABLE",
+                "the compute-node config staging directory cannot be created safely",
+            ) from exc
+        try:
+            staging_directory = _open_created_private_directory(
+                run_directory, COMPUTE_NODE_CONFIG_DIRNAME
+            )
+        except SchedulerStateError as exc:
+            raise SchedulerRunPreconditionError(
+                "SCHEDULER_RUN_STAGING_UNAVAILABLE",
+                "the compute-node config staging directory is unavailable",
+            ) from exc
+        try:
+            descriptor = os.open(
+                COMPUTE_NODE_CONFIG_FILENAME,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=staging_directory,
+            )
+        except FileExistsError:
+            if _read_staged_config_bytes(staging_directory) != payload:
+                raise SchedulerRunContractError(
+                    "staged compute-node config conflicts with the reserved contract"
+                ) from None
+            return Path(destination)
+        except OSError as exc:
+            raise SchedulerRunPreconditionError(
+                "SCHEDULER_RUN_STAGING_UNAVAILABLE",
+                "the compute-node config file cannot be created safely",
+            ) from exc
+        try:
+            _write_staged_config_bytes(descriptor, payload)
+        finally:
+            os.close(descriptor)
+        return Path(destination)
+    finally:
+        for descriptor in (staging_directory, run_directory, namespace, root):
+            if descriptor >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+
+
+def _read_staged_config_bytes(staging_directory: int) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            COMPUTE_NODE_CONFIG_FILENAME,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=staging_directory,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise SchedulerRunContractError(
+                "staged compute-node config has unsafe filesystem identity"
+            )
+        chunks: list[bytes] = []
+        remaining = _MAX_STAGED_CONFIG_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > _MAX_STAGED_CONFIG_BYTES:
+            raise SchedulerRunContractError("staged compute-node config exceeds its byte budget")
+        return payload
+    except SchedulerRunContractError:
+        raise
+    except OSError as exc:
+        raise SchedulerRunPreconditionError(
+            "SCHEDULER_RUN_STAGING_UNAVAILABLE",
+            "the staged compute-node config cannot be read safely",
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+
+def _write_staged_config_bytes(descriptor: int, payload: bytes) -> None:
+    try:
+        os.fchmod(descriptor, 0o600)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise SchedulerRunContractError(
+                "staged compute-node config has unsafe filesystem identity"
+            )
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fsync(descriptor)
+    except SchedulerRunContractError:
+        raise
+    except OSError as exc:
+        raise SchedulerRunPreconditionError(
+            "SCHEDULER_RUN_STAGING_UNAVAILABLE",
+            "the compute-node config file cannot be written safely",
+        ) from exc
 
 _CREATE_LOCK = ".create.lock"
 _RUN_LOCK = "lease.lock"
@@ -224,6 +410,11 @@ class VerifiedSchedulerRunRequest:
     resume_run_id: str | None
     config_sha256: str
     contract_sha256: str
+    # sha256 of render_compute_node_config(contract): the exact staged
+    # compute-node projection the reserved run's config must project to.  A
+    # compute node loads the key-less projection and binds the run through
+    # this digest instead of the full-config digests above.
+    compute_config_sha256: str
     _preflight_token: str = field(repr=False, compare=False)
     _config_token: object = field(repr=False, compare=False)
 
@@ -253,6 +444,7 @@ class VerifiedSchedulerRunRequest:
             (self.consumer_binding_hash, "consumer_binding_hash"),
             (self.config_sha256, "config_sha256"),
             (self.contract_sha256, "contract_sha256"),
+            (self.compute_config_sha256, "compute_config_sha256"),
         ):
             _digest(value, label)
         _strict_int(self.capability_issued_at, "capability issued_at", 0, 2**63 - 1)
@@ -313,6 +505,7 @@ class VerifiedSchedulerRunRequest:
             "resume_run_id": self.resume_run_id,
             "config_sha256": self.config_sha256,
             "contract_sha256": self.contract_sha256,
+            "compute_config_sha256": self.compute_config_sha256,
         }
 
 
@@ -417,11 +610,16 @@ def verify_scheduler_run_request(
         raise SchedulerRunContractError("scheduler run request is not valid protocol-v2") from exc
     if validated.operation not in {"submit", "resume"}:
         raise SchedulerRunContractError("only submit and resume can reserve a scheduler run")
+    approval_key = config.contract.approval_hmac_key
+    if approval_key is None:
+        raise SchedulerRunContractError(
+            "scheduler run approval requires the control-plane approval key"
+        )
     payload = cast(dict[str, Any], _thaw(validated.payload))
     approval = cast(dict[str, Any], payload["approval"])
     signature = approval["signature"]
     expected_signature = hmac.new(
-        config.contract.approval_hmac_key,
+        approval_key,
         signed_bytes,
         hashlib.sha256,
     ).hexdigest()
@@ -531,6 +729,9 @@ def verify_scheduler_run_request(
         resume_run_id=resume_run_id,
         config_sha256=config.config_sha256,
         contract_sha256=config.contract_sha256,
+        compute_config_sha256=hashlib.sha256(
+            render_compute_node_config(config.contract)
+        ).hexdigest(),
         _preflight_token=token,
         _config_token=config,
     )
@@ -926,8 +1127,7 @@ class SchedulerRunStore:
             value = _decode_canonical_object(raw)
             _parse_identity(value)
             if (
-                value["config_sha256"] != self.config.config_sha256
-                or value["contract_sha256"] != self.config.contract_sha256
+                not scheduler_config_binding_matches(value, self.config)
                 or value["profile_id"] != self.config.contract.profile_id
                 or value["profile_hash"] != self.config.contract.profile_hash
                 or value["scheduler_policy_hash"] != self.config.scheduler_policy_hash
@@ -1155,6 +1355,7 @@ def _parse_identity(value: Mapping[str, Any]) -> None:
         "resume_run_id",
         "config_sha256",
         "contract_sha256",
+        "compute_config_sha256",
     }
     if set(value) != expected or value.get("schema_version") != SCHEDULER_RUN_SCHEMA_VERSION:
         raise SchedulerRunContractError("scheduler run identity fields are invalid")
@@ -1175,6 +1376,7 @@ def _parse_identity(value: Mapping[str, Any]) -> None:
         "consumer_binding_hash",
         "config_sha256",
         "contract_sha256",
+        "compute_config_sha256",
     ):
         _digest(value[field_name], field_name)
     issued = _strict_int(value["capability_issued_at"], "issued_at", 0, 2**63 - 1)
@@ -1343,7 +1545,7 @@ def _thaw(value: Any) -> Any:
 
 
 def _identifier(value: Any, label: str) -> str:
-    if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+    if not is_safe_identifier(value):
         raise SchedulerRunContractError(f"{label} must be one safe identifier")
     return value
 
@@ -1382,13 +1584,13 @@ def _raw_token(value: Any) -> str:
 
 
 def _digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or _SHA256.fullmatch(value) is None or value == "0" * 64:
+    if not is_sha256_digest(value, reject_zero=True):
         raise SchedulerRunContractError(f"{label} must be a non-placeholder SHA-256")
     return value
 
 
 def _strict_int(value: Any, label: str, minimum: int, maximum: int) -> int:
-    if type(value) is not int or not minimum <= value <= maximum:
+    if not is_strict_int(value, minimum, maximum):
         raise SchedulerRunContractError(f"{label} is outside the supported range")
     return value
 
@@ -1431,6 +1633,8 @@ def _safe_text(value: Any, label: str, *, maximum: int) -> str:
 
 
 __all__ = [
+    "COMPUTE_NODE_CONFIG_DIRNAME",
+    "COMPUTE_NODE_CONFIG_FILENAME",
     "SCHEDULER_RUN_NAMESPACE",
     "SCHEDULER_RUN_SCHEMA_VERSION",
     "SchedulerDeploymentBinding",
@@ -1447,6 +1651,9 @@ __all__ = [
     "SchedulerStartPermit",
     "SchedulerStartPermitError",
     "VerifiedSchedulerRunRequest",
+    "compute_node_config_path",
     "consume_start_permit",
+    "scheduler_config_binding_matches",
+    "stage_compute_node_config",
     "verify_scheduler_run_request",
 ]

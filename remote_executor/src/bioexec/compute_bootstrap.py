@@ -175,7 +175,12 @@ def _run_fixed_bootstrap(
     from .scheduler_run import SchedulerRunStore, consume_start_permit
     from .scheduler_workload import prepare_scheduler_workload
 
-    config = load_trusted_scheduler_config(Path(invocation.config_path))
+    # The compute node must never see the control-plane approval HMAC key: it
+    # loads the staged compute-node config projection, and the loader
+    # hard-rejects any config file that still carries the key.
+    config = load_trusted_scheduler_config(
+        Path(invocation.config_path), require_approval_key=False
+    )
     binding = config.executables["compute_bootstrap"]
     if binding.sha256 != invocation.bootstrap_sha256:
         raise ComputeBootstrapError("bootstrap invocation hash does not match config-v2")

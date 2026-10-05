@@ -552,7 +552,7 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert metadata.st_nlink == 1
 
     submit_intent = json.loads(files[-1].read_text(encoding="ascii"))
-    assert submit_intent["schema_version"] == SCHEDULER_STATE_SCHEMA_VERSION == "1.3"
+    assert submit_intent["schema_version"] == SCHEDULER_STATE_SCHEMA_VERSION == "1.4"
     assert isinstance(submit_intent["clock_epoch_id"], str)
     assert type(submit_intent["clock_started_boottime_ns"]) is int
 

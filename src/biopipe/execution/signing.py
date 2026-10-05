@@ -8,10 +8,11 @@ import json
 import os
 import re
 import stat
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any, Literal
 
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution._fsutil import open_without_symlinks as _open_without_symlinks
 from biopipe.execution.models import ExecutionProfile
 
 _HEX_KEY = re.compile(rb"[0-9a-f]{64}\n?")
@@ -105,34 +106,6 @@ def _read_key(path: Path, key_id: str) -> bytes:
     finally:
         if descriptor is not None:
             os.close(descriptor)
-
-
-def _open_without_symlinks(path: Path) -> int:
-    absolute = path.expanduser().absolute()
-    pure = PurePath(absolute)
-    if not pure.is_absolute() or ".." in pure.parts or len(pure.parts) < 2:
-        raise OSError("approval key path is invalid")
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    if not getattr(os, "O_NOFOLLOW", 0):
-        raise OSError("platform cannot safely open approval keys")
-    directory = os.open(os.path.sep, directory_flags)
-    try:
-        for component in pure.parts[1:-1]:
-            next_directory = os.open(component, directory_flags, dir_fd=directory)
-            os.close(directory)
-            directory = next_directory
-        return os.open(
-            pure.parts[-1],
-            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            dir_fd=directory,
-        )
-    finally:
-        os.close(directory)
 
 
 def _signing_error(key_id: str) -> BioPipeError:

@@ -32,6 +32,7 @@ def _write_config(tmp_path: Path, allowed_root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
     return config
 
 

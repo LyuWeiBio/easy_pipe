@@ -16,6 +16,8 @@ from uuid import NAMESPACE_URL, uuid5
 import yaml
 from pydantic import BaseModel
 
+from biopipe._pathutil import paths_overlap as _paths_overlap
+from biopipe.artifacts import sha256_bytes as _sha256
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.manifests.integrity import require_valid_manifest
 from biopipe.models import (
@@ -41,7 +43,7 @@ from .store import ProjectBundleStore
 from .templates import StrictTemplateRenderer
 
 _RESOLVED_MANIFEST = "dataset.manifest.resolved.json"
-_LATEST_TOKEN = re.compile(r"(?i)(?:^|[^A-Za-z0-9_.-])latest(?:$|[^A-Za-z0-9_.-])")
+LATEST_TOKEN = re.compile(r"(?i)(?:^|[^A-Za-z0-9_.-])latest(?:$|[^A-Za-z0-9_.-])")
 _COMPONENT_METADATA: Mapping[str, tuple[str, str]] = {
     "fastqc_raw_v1": ("fastqc", "templates/components/fastqc/main.nf.j2"),
     "fastp_single_v1": ("fastp_single", "templates/components/fastp_single/main.nf.j2"),
@@ -513,7 +515,7 @@ class NextflowCompiler:
                 raise NextflowCompiler._validation_error(
                     "Generated artifacts must be valid UTF-8 text."
                 ) from exc
-            if _LATEST_TOKEN.search(text):
+            if LATEST_TOKEN.search(text):
                 raise NextflowCompiler._validation_error(
                     f"Generated artifact {name!r} contains a forbidden floating version token."
                 )
@@ -673,20 +675,6 @@ def _yaml_model(model: BaseModel) -> bytes:
         allow_unicode=True,
         sort_keys=True,
     ).encode("utf-8")
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _paths_overlap(first: str, second: str) -> bool:
-    first_path = PurePosixPath(first)
-    second_path = PurePosixPath(second)
-    return (
-        first_path == second_path
-        or first_path in second_path.parents
-        or second_path in first_path.parents
-    )
 
 
 def _generation_fingerprint(

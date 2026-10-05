@@ -44,6 +44,7 @@ def probe_config(tmp_path: Path, allowed_root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    path.chmod(0o600)
     return path
 
 

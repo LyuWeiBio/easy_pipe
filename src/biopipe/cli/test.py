@@ -16,6 +16,7 @@ from biopipe.cli.validate import (
 )
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.report_models import ReportCode, TestCommandReport
+from biopipe.report_models import aggregate_status as _aggregate_status
 from biopipe.validation import ValidationReport, validate_generated_project
 from biopipe.workflow_test import (
     WorkflowTestCode,
@@ -187,19 +188,6 @@ def _test_result(
         runs={report.mode: report for report in runs},
         remediation=tuple(remediation),
     )
-
-
-def _aggregate_status(runs: list[WorkflowTestReport]) -> WorkflowTestStatus:
-    statuses = {report.status for report in runs}
-    for candidate in (
-        WorkflowTestStatus.FAILED,
-        WorkflowTestStatus.BLOCKED,
-        WorkflowTestStatus.DEGRADED,
-        WorkflowTestStatus.PASSED,
-    ):
-        if candidate in statuses:
-            return candidate
-    return WorkflowTestStatus.FAILED
 
 
 def _persist_if_possible(

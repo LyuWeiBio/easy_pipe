@@ -15,6 +15,7 @@ from typing import Any, Final, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
+from biopipe.artifacts import sha256_bytes as _sha256
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution import (
     ExecutionProfile,
@@ -737,10 +738,6 @@ def _aware_utc(value: datetime, *, role: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise _validation_error(role)
     return value.astimezone(UTC)
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _assert_sanitized(

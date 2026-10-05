@@ -113,6 +113,14 @@ def load_config(path: Path | None = None) -> ProbeConfig:
         file_stat = os.fstat(config_fd)
         if not stat.S_ISREG(file_stat.st_mode):
             raise _config_error("probe config must be a regular non-symlink file")
+        # The config defines the entire trust boundary (allowed_roots).  A
+        # group- or world-writable file, or one owned by an unrelated user,
+        # would let any local user redirect the probe at arbitrary paths, so
+        # refuse to start instead of running with a mutable trust root.
+        if file_stat.st_uid not in {0, os.geteuid()} or (
+            stat.S_IMODE(file_stat.st_mode) & 0o022
+        ):
+            raise _config_error("probe config has unsafe ownership or permissions")
         if file_stat.st_size > MAX_CONFIG_BYTES:
             raise _config_error("probe config exceeds the size limit")
         raw = _read_bounded(config_fd, MAX_CONFIG_BYTES + 1)

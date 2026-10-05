@@ -53,6 +53,7 @@ def test_zipapp_build_is_reproducible_and_runs_health(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    config.chmod(0o600)
     environment = os.environ.copy()
     environment["BIOPROBE_CONFIG"] = str(config)
     request = {

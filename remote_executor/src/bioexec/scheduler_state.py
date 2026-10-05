@@ -25,15 +25,32 @@ from dataclasses import InitVar, dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from ._validation import (
+    canonical_json_bytes as _shared_canonical_json_bytes,
+)
+from ._validation import (
+    has_exact_fields,
+    is_safe_identifier,
+    is_sha256_digest,
+    is_strict_int,
+)
+from ._validation import (
+    reject_constant as _shared_reject_constant,
+)
+from ._validation import (
+    unique_object as _shared_unique_object,
+)
 from .scheduler_bindings import (
     SCHEDULER_PREFLIGHT_NAMESPACE,
     SchedulerBindingError,
     validate_compute_bindings,
 )
 from .scheduler_clock import ClockSample, SchedulerClock, SchedulerClockError, SystemSchedulerClock
+from .scheduler_config import render_compute_node_config
 from .scheduler_config_loader import (
     SchedulerConfigLoadError,
     TrustedSchedulerConfig,
+    scheduler_config_binding_matches,
     verify_scheduler_config_file,
     verify_scheduler_root,
 )
@@ -72,7 +89,7 @@ from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservati
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
-SCHEDULER_STATE_SCHEMA_VERSION = "1.3"
+SCHEDULER_STATE_SCHEMA_VERSION = "1.4"
 _NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
@@ -116,6 +133,7 @@ _IDENTITY_FIELDS = frozenset(
         "request_sha256",
         "config_sha256",
         "contract_sha256",
+        "compute_config_sha256",
         "scheduler_policy_sha256",
         "profile_id",
         "profile_hash",
@@ -2291,6 +2309,9 @@ def _identity_mapping(
         "request_sha256": request_sha256,
         "config_sha256": config.config_sha256,
         "contract_sha256": config.contract_sha256,
+        "compute_config_sha256": hashlib.sha256(
+            render_compute_node_config(config.contract)
+        ).hexdigest(),
         "scheduler_policy_sha256": config.scheduler_policy_hash,
         "profile_id": config.contract.profile_id,
         "profile_hash": config.contract.profile_hash,
@@ -2591,15 +2612,13 @@ def _validate_identity(
         request_sha256 = _digest(identity["request_sha256"], "request_sha256")
         if not request_sha256:
             raise ValueError("request")
-        expected_config = {
-            "config_sha256": config.config_sha256,
-            "contract_sha256": config.contract_sha256,
-            "scheduler_policy_sha256": config.scheduler_policy_hash,
-            "profile_id": config.contract.profile_id,
-            "profile_hash": config.contract.profile_hash,
-        }
-        observed_config = {key: identity[key] for key in expected_config}
-        if observed_config != expected_config:
+        if not scheduler_config_binding_matches(identity, config):
+            raise ValueError("config")
+        if (
+            identity["scheduler_policy_sha256"] != config.scheduler_policy_hash
+            or identity["profile_id"] != config.contract.profile_id
+            or identity["profile_hash"] != config.contract.profile_hash
+        ):
             raise ValueError("config")
         manifest = parse_compute_manifest(identity["manifest"])
         prepared = prepare_preflight(manifest)
@@ -2881,7 +2900,7 @@ def _require_live_deadline(deadline: float) -> None:
 
 
 def _identifier(value: Any) -> str:
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+    if not is_safe_identifier(value):
         raise SchedulerStateContractError("scheduler preflight identifier is invalid")
     return value
 
@@ -2913,7 +2932,7 @@ def _raw_capability_token(value: Any) -> str:
 
 
 def _digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+    if not is_sha256_digest(value):
         raise SchedulerStateContractError(f"{label} must be a lowercase SHA-256")
     return value
 
@@ -2923,7 +2942,7 @@ def _optional_digest(value: Any) -> str | None:
 
 
 def _strict_int(value: Any, label: str, minimum: int, maximum: int) -> int:
-    if type(value) is not int or not minimum <= value <= maximum:
+    if not is_strict_int(value, minimum, maximum):
         raise SchedulerStateContractError(f"{label} is outside the supported range")
     return value
 
@@ -2935,23 +2954,14 @@ def _object(value: Any, label: str) -> dict[str, Any]:
 
 
 def _exact_fields(value: Mapping[str, Any], fields: set[str] | frozenset[str], label: str) -> None:
-    if set(value) != set(fields):
+    if not has_exact_fields(value, fields):
         raise SchedulerStateContractError(f"{label} fields do not match the fixed schema")
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     try:
-        return (
-            json.dumps(
-                dict(value),
-                allow_nan=False,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            + "\n"
-        ).encode("ascii")
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        return _shared_canonical_json_bytes(value, trailing_newline=True)
+    except ValueError as exc:
         raise SchedulerStateContractError("durable scheduler record is not canonical JSON") from exc
 
 
@@ -2970,16 +2980,13 @@ def _decode_canonical_object(raw: bytes) -> dict[str, Any]:
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate durable scheduler record key")
-        result[key] = value
-    return result
+    return _shared_unique_object(pairs, duplicate_message="duplicate durable scheduler record key")
 
 
 def _reject_constant(value: str) -> Any:
-    raise ValueError(f"non-finite durable scheduler number is forbidden: {value}")
+    return _shared_reject_constant(
+        value, message="non-finite durable scheduler number is forbidden"
+    )
 
 
 def _write_all(descriptor: int, payload: bytes) -> None:

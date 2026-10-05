@@ -225,7 +225,7 @@ def test_start_intent_and_live_permit_bind_exact_workload_hashes(
         consume_start_permit(permit, snapshot, plan)
 
     intent = json.loads((fixture.run_directory / "start.intent.json").read_text("ascii"))
-    assert intent["schema_version"] == "1.1"
+    assert intent["schema_version"] == "1.2"
     assert intent["workload_binding_sha256"] == plan.binding_sha256
     assert intent["workload_batch_sha256"] == plan.batch_sha256
 

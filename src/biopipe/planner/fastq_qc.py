@@ -8,6 +8,7 @@ from typing import Literal, cast
 
 from pydantic import Field, field_validator, model_validator
 
+from biopipe._pathutil import paths_overlap as _paths_overlap
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.manifests.integrity import require_valid_manifest
 from biopipe.models import (
@@ -50,16 +51,6 @@ def _absolute_path(value: str, field_name: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{field_name} must not contain control characters")
     return str(path)
-
-
-def _paths_overlap(first: str, second: str) -> bool:
-    first_path = PurePosixPath(first)
-    second_path = PurePosixPath(second)
-    return (
-        first_path == second_path
-        or first_path in second_path.parents
-        or second_path in first_path.parents
-    )
 
 
 class PlanningOptions(StrictModel):

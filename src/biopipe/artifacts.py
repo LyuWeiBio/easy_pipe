@@ -28,4 +28,9 @@ def sha256_file(path: str | Path) -> str:
         ) from exc
 
 
-__all__ = ["sha256_file"]
+def sha256_bytes(payload: bytes) -> str:
+    """Return the hexadecimal SHA-256 digest of an in-memory payload."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+__all__ = ["sha256_bytes", "sha256_file"]
