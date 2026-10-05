@@ -34,6 +34,7 @@ from bioexec.scheduler_run import (
     SchedulerStartPermitError,
     VerifiedSchedulerRunRequest,
     consume_start_permit,
+    stage_compute_node_config,
     verify_scheduler_run_request,
 )
 from bioexec.scheduler_state import (
@@ -413,12 +414,16 @@ def test_fixed_compute_bootstrap_burns_one_intent_and_never_replays(
 ) -> None:
     snapshot = run_fixture.run_store.reserve_and_consume(run_fixture.verified)
     config = run_fixture.state.config
+    # The activation adapter stages the key-less compute-node projection before
+    # the batch is submitted; the bootstrap must never receive the full
+    # key-bearing service-node config.
+    staged_config = stage_compute_node_config(config, snapshot.run_id)
     bootstrap = config.executables["compute_bootstrap"]
     assert bootstrap.sha256 is not None
     invocation = bootstrap_module.parse_bootstrap_argv(
         [
             "--contract-version=1.0",
-            f"--config={run_fixture.state.config_path}",
+            f"--config={staged_config}",
             f"--run-id={snapshot.run_id}",
             f"--identity-sha256={snapshot.identity_sha256}",
             f"--bootstrap-sha256={bootstrap.sha256}",
@@ -436,7 +441,7 @@ def test_fixed_compute_bootstrap_burns_one_intent_and_never_replays(
     assert intent.is_file()
     assert _RAW_CAPABILITY.encode("ascii") not in intent.read_bytes()
     intent_value = json.loads(intent.read_text(encoding="ascii"))
-    assert intent_value["schema_version"] == "1.1"
+    assert intent_value["schema_version"] == "1.2"
     assert len(intent_value["workload_binding_sha256"]) == 64
     assert len(intent_value["workload_batch_sha256"]) == 64
     with pytest.raises(SchedulerRunConflictError) as captured:
