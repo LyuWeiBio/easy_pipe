@@ -69,7 +69,8 @@ def apply_overrides(
     """Apply reviewed changes to a copy while preserving original scan facts."""
 
     require_valid_manifest(original)
-    if len(overrides.exclude_files) != len(set(overrides.exclude_files)):
+    normalized_excludes = [_normalize_path(path) for path in overrides.exclude_files]
+    if len(normalized_excludes) != len(set(normalized_excludes)):
         raise _conflict("exclude_files contains duplicates")
     if not (overrides.rename_samples or overrides.exclude_files or overrides.manual_pairs):
         return _build_application(
@@ -114,12 +115,12 @@ def apply_overrides(
     if len(final_ids) != len(set(final_ids)):
         raise _conflict("rename_samples creates duplicate sample identifiers")
 
-    excluded = set(overrides.exclude_files)
+    excluded = set(normalized_excludes)
     root = PurePosixPath(original.source.root)
     for path in excluded:
         _require_below_root(path, root, "exclude_files")
     assigned_paths = {
-        path
+        _normalize_path(path)
         for sample in samples
         for lane in sample.lanes
         for path in (lane.read1, lane.read2)
@@ -133,7 +134,9 @@ def apply_overrides(
     manual_pair_path_sets: set[frozenset[str]] = set()
     for pair in overrides.manual_pairs:
         _validate_manual_pair(pair, original.source.root)
-        pair_paths = {pair.read1} | ({pair.read2} if pair.read2 is not None else set())
+        pair_paths = {_normalize_path(pair.read1)} | (
+            {_normalize_path(pair.read2)} if pair.read2 is not None else set()
+        )
         if pair_paths & manual_paths:
             raise _conflict("manual_pairs reuse a path")
         if not pair_paths <= known_paths:
@@ -147,8 +150,8 @@ def apply_overrides(
     for sample in samples:
         lanes: list[LaneFiles] = []
         for lane in sample.lanes:
-            read1_excluded = lane.read1 in excluded
-            read2_excluded = lane.read2 is not None and lane.read2 in excluded
+            read1_excluded = _normalize_path(lane.read1) in excluded
+            read2_excluded = lane.read2 is not None and _normalize_path(lane.read2) in excluded
             if lane.read2 is not None and read1_excluded != read2_excluded:
                 raise _conflict("paired lane exclusions must remove both mates")
             if read1_excluded:
@@ -168,7 +171,9 @@ def apply_overrides(
     for sample in samples:
         reassigned_lanes: list[LaneFiles] = []
         for lane in sample.lanes:
-            lane_paths = {lane.read1} | ({lane.read2} if lane.read2 is not None else set())
+            lane_paths = {_normalize_path(lane.read1)} | (
+                {_normalize_path(lane.read2)} if lane.read2 is not None else set()
+            )
             overlap = lane_paths & manual_paths
             if overlap:
                 if lane.read2 is not None and (
@@ -294,6 +299,11 @@ def _require_below_root(value: str, root: PurePosixPath, field: str) -> None:
         raise _conflict(f"{field} contains a path outside the scan root")
 
 
+def _normalize_path(value: str) -> str:
+    """Collapse redundant separators and dot segments so equal paths compare equal."""
+    return str(PurePosixPath(value))
+
+
 def _manifest_issue_paths(manifest: DatasetManifest) -> set[str]:
     root = PurePosixPath(manifest.source.root)
     paths: set[str] = set()
@@ -311,10 +321,11 @@ def _manifest_issue_paths(manifest: DatasetManifest) -> set[str]:
             path = PurePosixPath(value)
             try:
                 relative = path.relative_to(root)
-            except ValueError:
+            except ValueError as exc:
+                raise _conflict("manifest issue references a path outside the scan root") from exc
+            if relative == PurePosixPath("."):
                 continue
-            if path.is_absolute() and relative != PurePosixPath(".") and str(path) == value:
-                paths.add(value)
+            paths.add(_normalize_path(value))
     return paths
 
 
@@ -325,7 +336,7 @@ def _issue_paths(issue: ManifestIssue) -> set[str]:
     raw_paths = issue.context.get("paths")
     if isinstance(raw_paths, list):
         values.extend(raw_paths)
-    return {value for value in values if isinstance(value, str)}
+    return {_normalize_path(value) for value in values if isinstance(value, str)}
 
 
 def _retain_issue(
@@ -339,12 +350,16 @@ def _retain_issue(
         paired_states = {lane.read2 is not None for sample in samples for lane in sample.lanes}
         return paired_states == {False, True}
     paths = _issue_paths(issue)
-    if paths and paths <= excluded:
+    # Normalize on both sides of every comparison: issue contexts, override
+    # inputs, and manifest lane paths may spell the same file differently.
+    normalized_excluded = {_normalize_path(path) for path in excluded}
+    if paths and paths <= normalized_excluded:
         return False
     if issue.code not in _PAIRING_ISSUES:
         return True
     if paths:
-        return not paths <= addressed
+        normalized_addressed = {_normalize_path(path) for path in addressed}
+        return not paths <= normalized_addressed
     sample_key = issue.context.get("sample_key")
     if not isinstance(sample_key, str):
         return True

@@ -40,6 +40,7 @@ from .test_scheduler_state import (
     _held_job,
     _held_snapshot,
     _new_store,
+    _reseal_journal_macs,
 )
 from .test_scheduler_state import (
     state_fixture as state_fixture,
@@ -251,6 +252,9 @@ def test_journal_rejects_tampered_non_terminal_event(
         value["event"]["held_job"]["job"]["job_id"] = "99999"
 
     _rewrite_revision(state_fixture.attempt, _REVISION_1, tamper)
+    # Reseal the MAC chain so the tamper reaches the hash-chain layer: the
+    # MAC layer must not mask the chain-link breakage under test.
+    _reseal_journal_macs(state_fixture)
     with pytest.raises(SchedulerStateInvalidError) as captured:
         store.load(
             state_fixture.prepared.manifest.preflight_id,
@@ -338,7 +342,38 @@ def _fuzz_corpus() -> list[bytes]:
         f"12345|2026-01-01T00:00:00|{_MARKER}|PD|".encode("ascii") + b"\n"
     )
     good_sbatch = b"12345\n"
-    for base in (good_squeue, good_sbatch):
+    # P3 #23: targeted mutations for the hold, sacct, and discovery parsers.
+    good_hold = (
+        f"12345|2026-01-01T00:00:00|{_MARKER}|PD|JobHeldUser|".encode("ascii")
+        + b"\n"
+    )
+    good_sacct = (
+        f"12345|2026-01-01T00:00:00|{_MARKER}|COMPLETED|0:0|".encode("ascii")
+        + b"\n"
+    )
+    good_discovery = (
+        f"12345|2026-01-01T00:00:00|{_MARKER}|PD|".encode("ascii") + b"\n"
+    )
+    # Adversarial seeds aimed at each parser's distinctive fields.
+    targeted_seeds = [
+        # hold: wrong field counts, bad reason, non-PD states.
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|PD|\n",
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|PD|JobHeldUser|x|\n",
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|R|JobHeldUser|\n",
+        # sacct: cancelled-with-uid suffix, step/array job ids, bad exit codes.
+        b"12345|2026-01-01T00:00:00|"
+        + _MARKER.encode()
+        + b"|CANCELLED by 123|1:0|\n",
+        b"12345.0|2026-01-01T00:00:00|" + _MARKER.encode() + b"|COMPLETED|0:0|\n",
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|FAILED|999:999|\n",
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|COMPLETED||\n",
+        # discovery: 4 fields (no reason/exit); extra fields, uid suffix.
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|PD|extra|\n",
+        b"12345|2026-01-01T00:00:00|" + _MARKER.encode() + b"|CANCELLED by 7|\n",
+        b"99999|2026-01-01T00:00:00|" + _MARKER.encode() + b"|PD|\n",
+    ]
+    corpus.extend(targeted_seeds)
+    for base in (good_squeue, good_sbatch, good_hold, good_sacct, good_discovery):
         for _ in range(100):
             mutated = bytearray(base)
             for _ in range(rng.randint(1, 4)):

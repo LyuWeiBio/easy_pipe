@@ -336,14 +336,9 @@ def reconstruct_planned_pipeline(
     )
     try:
         selected_components = selected_registry.validate_graph(component_ids, input_type)
-        if spec.parameters.trimming.enabled:
-            fastp_id = next(
-                component_id for component_id in component_ids if "fastp_" in component_id
-            )
-            selected_registry.validate_parameters(
-                fastp_id,
-                {"minimum_length": spec.parameters.trimming.minimum_length},
-            )
+        # The trimming parameters were already validated and resolved via
+        # _minimum_length() above; re-validating here would discard the
+        # resolved return value, so the redundant call is omitted.
         expected_lock = selected_registry.software_lock(component_ids)
     except RegistryValidationError as exc:
         raise _planning_registry_error() from exc

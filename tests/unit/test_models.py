@@ -382,3 +382,50 @@ def test_execution_approval_requires_attribution_and_artifact_hashes() -> None:
     approved_plan = ExecutionPlan.model_validate(payload)
 
     assert approved_plan.approval.approved is True
+
+
+def test_manifest_issue_rejects_control_characters() -> None:
+    """P3 #31: terminal escape injection via issue message/remediation."""
+    from biopipe.models import ManifestIssue
+
+    with pytest.raises(ValidationError):
+        ManifestIssue(
+            code="bad_news",
+            severity="warning",
+            message="harmless\x1b[2Jcleared",
+            remediation=["ok"],
+        )
+    with pytest.raises(ValidationError):
+        ManifestIssue(
+            code="bad_news",
+            severity="warning",
+            message="ok",
+            remediation=["fix it\x07now"],
+        )
+    # Control characters are rejected even when the rest is valid.
+    with pytest.raises(ValidationError):
+        ManifestIssue(
+            code="bad_news",
+            severity="warning",
+            message="line1\nline2",
+            remediation=["ok"],
+        )
+
+
+def test_detection_evidence_detail_rejects_control_characters() -> None:
+    """P3 #31: terminal escape injection via evidence detail."""
+    from biopipe.models import DetectionEvidence
+
+    with pytest.raises(ValidationError):
+        DetectionEvidence(rule="valid_fastq_structure", score=0.5, detail="x\x1b[31mred")
+    # None stays allowed; plain text stays allowed.
+    assert (
+        DetectionEvidence(rule="valid_fastq_structure", score=0.5, detail=None).detail
+        is None
+    )
+    assert (
+        DetectionEvidence(
+            rule="valid_fastq_structure", score=0.5, detail="plain detail"
+        ).detail
+        == "plain detail"
+    )
