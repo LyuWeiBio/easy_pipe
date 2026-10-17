@@ -18,6 +18,22 @@ from typing import IO, Protocol
 _CHUNK = 64 * 1024
 _POLL = 0.05
 _GRACE = 0.5
+# Bound on the final wait() after SIGKILL. A process that cannot be reaped
+# after SIGKILL is stuck in uninterruptible sleep (D-state, e.g. wedged
+# kernel I/O); waiting forever would pin the supervisor — and its job-lease
+# descriptor — indefinitely, so the wait is bounded and the stuck condition
+# is reported loudly instead of blocking.
+_TERMINATE_KILL_WAIT_SECONDS = 5.0
+
+
+class ProcessStuckError(Exception):
+    """A process survived SIGKILL and could not be reaped.
+
+    The child is still alive (typically stuck in D-state) and still holds
+    every resource it inherited, including job-lease descriptors. Callers
+    must treat this as fatal: mark the condition explicitly and release
+    their own descriptors instead of waiting any longer.
+    """
 
 
 @dataclass(frozen=True)
@@ -182,6 +198,9 @@ def run_to_logs(
         process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
+        # Raises ProcessStuckError when the job cannot be reaped after
+        # SIGKILL; the supervisor must then mark the run stuck and release
+        # its lease descriptor instead of blocking here forever.
         _terminate(process)
     assert process.returncode is not None
     return CommandResult(
@@ -266,6 +285,13 @@ def _drain(pipe: IO[bytes], capture: _Capture) -> None:
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
+    """Terminate the process group, escalating to SIGKILL on the group.
+
+    Raises ProcessStuckError when the process survives SIGKILL and cannot be
+    reaped within _TERMINATE_KILL_WAIT_SECONDS: it is stuck (for example in
+    uninterruptible D-state sleep) and waiting longer would pin the caller —
+    in the supervisor path, the job-lease descriptor — forever.
+    """
     if process.poll() is not None:
         return
     if os.name == "posix":
@@ -281,7 +307,13 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
                 os.killpg(process.pid, signal.SIGKILL)
         else:
             process.kill()
-        process.wait()
+        try:
+            process.wait(timeout=_TERMINATE_KILL_WAIT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise ProcessStuckError(
+                "the process survived SIGKILL and could not be reaped; "
+                "it is stuck (for example in uninterruptible D-state sleep)"
+            ) from exc
 
 
 def _close(pipe: IO[bytes]) -> None:
@@ -293,6 +325,7 @@ __all__ = [
     "BoundedCommandRunner",
     "CommandResult",
     "CommandRunner",
+    "ProcessStuckError",
     "minimal_environment",
     "run_to_logs",
 ]

@@ -79,7 +79,7 @@ def run_command(
             raise BioPipeError(
                 ErrorCode.VALIDATION_FAILED,
                 "A run mode received an invalid run ID.",
-                remediation=["Use the exact locally recorded run-NNN identifier."],
+                remediation=["Use the exact locally recorded run-<32 lowercase hex> identifier."],
             )
         if actor is not None and not _ACTOR.fullmatch(actor):
             raise BioPipeError(

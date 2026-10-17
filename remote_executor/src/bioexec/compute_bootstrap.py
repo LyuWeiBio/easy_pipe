@@ -109,7 +109,12 @@ def verify_compute_artifacts(
     bootstrap_path: str,
     python_path: str,
 ) -> None:
-    """Reopen and fully rehash the deployment, runtimes, JAR, and every SIF."""
+    """Reopen and verify the deployment, runtimes, and JAR.
+
+    SIF container files get a lightweight safety/identity gate here; their
+    full content hash is verified once by the compute worker right before
+    use, against the file_sha256 bound in the preflight manifest.
+    """
 
     if not isinstance(config, TrustedSchedulerConfig):
         raise ComputeBootstrapError("trusted scheduler configuration is required")
@@ -269,20 +274,25 @@ def _verify_deployment(
 
 
 def _verify_sif_artifacts(state: SchedulerPreflightState) -> None:
+    # Lightweight safety gate only: the authoritative full content hash is
+    # verified once by the compute worker right before use
+    # (_check_sif_artifacts). Re-hashing multi-GB SIFs here as well would
+    # double the per-run hashing cost for no additional security: the files
+    # are pinned, trusted-owner, and not group/world-writable, and
+    # _observe_regular still verifies file identity stability during the
+    # check.
     for container in state.manifest.containers:
         try:
-            observed = _observe_regular(
+            _observe_regular(
                 container.local_path,
                 maximum_bytes=_MAX_ARTIFACT_BYTES,
-                hash_contents=True,
+                hash_contents=False,
                 trusted_owner=True,
                 require_executable=False,
                 require_no_group_world_write=True,
             )
         except BaseException as exc:
             raise ComputeBootstrapError("a pinned SIF cannot be opened safely") from exc
-        if observed.get("sha256") != container.file_sha256:
-            raise ComputeBootstrapError("a pinned SIF hash changed before workflow start")
 
 
 def _canonical_hash(value: Any) -> str:

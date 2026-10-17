@@ -153,9 +153,23 @@ class SourceRegistry:
     def _ensure_directory(self) -> None:
         try:
             self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self._require_regular_directory(self._directory.lstat())
+            # mkdir(mode=...) only applies at creation time: a pre-existing
+            # directory keeps whatever permissions it already had. Tighten
+            # explicitly via the open directory descriptor (no path-based
+            # TOCTOU between the stat and the chmod).
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(self._directory, flags)
         except OSError as exc:
             raise self._storage_error("initialize", None, exc) from exc
+        try:
+            directory_stat = os.fstat(descriptor)
+            self._require_regular_directory(directory_stat)
+            if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+                os.fchmod(descriptor, 0o700)
+        except OSError as exc:
+            raise self._storage_error("initialize", None, exc) from exc
+        finally:
+            os.close(descriptor)
 
     def _profile_path(self, source_id: str) -> Path:
         if not _SOURCE_ID_PATTERN.fullmatch(source_id):

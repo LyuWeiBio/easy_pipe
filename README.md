@@ -207,6 +207,7 @@ remote account access to data.
 
 - [Installation and uninstall](docs/installation.md)
 - [Remote Probe and Remote Executor deployment](docs/remote-deployment.md)
+- [Deployment hardening (UID/ptrace, state cleanup, key rotation)](docs/deployment.md)
 - [Operator-only real-host release acceptance](docs/real-host-acceptance.md)
 - [Operations guide](docs/operations.md)
 - [Non-sensitive internal pilot runbook](docs/internal-pilot-runbook.md)
@@ -225,6 +226,7 @@ remote account access to data.
 - [Known limitations](docs/known-limitations.md)
 - [Release evidence workflow and trust boundary](docs/release-evidence.md)
 - [Release checklist](docs/release-checklist.md)
+- [Merge checklist](docs/merge-checklist.md)
 - [Platform locks and supply-chain inventories](environments/locks/README.md)
 - [Probe protocol](docs/probe-protocol.md)
 - [Architecture decision record](docs/adr/0001-architecture.md)
