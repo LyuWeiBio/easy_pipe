@@ -591,6 +591,22 @@ def _expected_canonical_suffix(
 
 
 def _has_canonical_suffix(path: PurePosixPath, suffix: tuple[str, ...]) -> bool:
+    """Check that ``path`` ends with the expected canonical suffix.
+
+    Trust trade-off (deliberate): suffix matching is **not** path-identity
+    authentication.  A hostile probe could return a different absolute path
+    that happens to share the suffix (e.g. ``/evil/data/x.fastq`` for an
+    expected ``/data/x.fastq``) and this check would accept it.  The check
+    only guarantees the returned path is *related to* the request -- it
+    catches confused or buggy probes, not a malicious one.
+
+    Full path identity is not asserted here because the probe legitimately
+    resolves its own roots (symlinks, mount points, and case differences can
+    change the absolute prefix while the dataset-relative suffix stays
+    stable).  Callers that need identity must compare against the
+    probe-independent inventory instead of relying on this predicate.
+    """
+
     if not suffix:
         return path == PurePosixPath("/")
     if suffix[0] in {"/", "//"}:

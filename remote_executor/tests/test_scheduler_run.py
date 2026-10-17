@@ -458,25 +458,26 @@ def test_compute_bootstrap_checks_every_sif_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     consumed = _consume_capability(run_fixture)
-    expected = {
-        container.local_path: container.file_sha256
-        for container in consumed.state.manifest.containers
-    }
     observed: list[str] = []
+    hash_flags: list[bool] = []
 
-    def observe(path: str, **_kwargs: Any) -> dict[str, str]:
+    def observe(path: str, **kwargs: Any) -> dict[str, str]:
         observed.append(path)
-        return {"sha256": expected[path]}
+        hash_flags.append(bool(kwargs.get("hash_contents")))
+        return {}
 
     monkeypatch.setattr(bootstrap_module, "_observe_regular", observe)
     bootstrap_module._verify_sif_artifacts(consumed.state)
     assert observed == [container.local_path for container in consumed.state.manifest.containers]
+    # P3 #12: the bootstrap gate must not re-hash SIF contents; the full
+    # content hash is verified once by the compute worker before use.
+    assert hash_flags and not any(hash_flags)
 
-    def mismatch(path: str, **_kwargs: Any) -> dict[str, str]:
-        return {"sha256": "f" * 64 if path == observed[-1] else expected[path]}
+    def unsafe(path: str, **_kwargs: Any) -> dict[str, str]:
+        raise RuntimeError("simulated unsafe SIF")
 
-    monkeypatch.setattr(bootstrap_module, "_observe_regular", mismatch)
-    with pytest.raises(bootstrap_module.ComputeBootstrapError, match="SIF hash"):
+    monkeypatch.setattr(bootstrap_module, "_observe_regular", unsafe)
+    with pytest.raises(bootstrap_module.ComputeBootstrapError, match="cannot be opened safely"):
         bootstrap_module._verify_sif_artifacts(consumed.state)
 
 
@@ -700,3 +701,34 @@ def test_concurrent_start_claim_has_exactly_one_permit(run_fixture: RunFixture) 
     assert results.count("started") == 1
     assert results.count("rejected") == 1
     assert (run_fixture.run_directory / "start.intent.json").is_file()
+
+
+def test_claim_start_verifier_runs_before_lock_acquisition(
+    run_fixture: RunFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 #12: the expensive bootstrap verifier must not run inside the lock."""
+    import bioexec.scheduler_run as run_module
+
+    snapshot = run_fixture.run_store.reserve(run_fixture.verified)
+    consumed = _consume_capability(run_fixture)
+    workload = prepare_scheduler_workload(run_fixture.state.config, snapshot, consumed)
+    order: list[str] = []
+
+    def recording_verifier() -> None:
+        order.append("verifier")
+
+    real_flock = run_module._nonblocking_flock
+
+    def recording_flock(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        order.append("flock")
+        return real_flock(*args, **kwargs)
+
+    monkeypatch.setattr(run_module, "_nonblocking_flock", recording_flock)
+    with run_fixture.run_store.claim_start(
+        snapshot,
+        consumed,
+        recording_verifier,
+        workload=workload,
+    ):
+        pass
+    assert order == ["verifier", "flock"]

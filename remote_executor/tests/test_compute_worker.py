@@ -514,6 +514,35 @@ def test_read_only_input_traversal_allows_a_non_service_data_owner(
     assert observation["size"] == len(b"synthetic reads\n")
 
 
+def test_hardlinked_input_is_observed_not_rejected(
+    tmp_path: Path,
+) -> None:
+    """P3 #11: hard-link-deduplicated datasets must not be rejected.
+
+    The nlink == 1 requirement was a false positive for deduped datasets;
+    tampering through another link is caught by the _file_identity
+    before/after comparison. The link count is now an observation.
+    """
+    input_path = tmp_path / "deduped.fastq.gz"
+    input_path.write_bytes(b"synthetic reads\n")
+    alias = tmp_path / "alias.fastq.gz"
+    os.link(input_path, alias)
+    assert input_path.stat().st_nlink == 2
+
+    observation = worker_module._observe_regular(
+        str(input_path),
+        maximum_bytes=1024,
+        hash_contents=True,
+        trusted_owner=False,
+        require_executable=False,
+        require_no_group_world_write=False,
+    )
+
+    assert observation["nlink"] == 2
+    assert observation["sha256"] == hashlib.sha256(b"synthetic reads\n").hexdigest()
+    assert observation["size"] == len(b"synthetic reads\n")
+
+
 def test_wrong_cwd_fails_before_worker_side_effects(
     worker_fixture: WorkerFixture,
     monkeypatch: pytest.MonkeyPatch,
