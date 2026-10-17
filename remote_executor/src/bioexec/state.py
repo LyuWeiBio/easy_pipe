@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import secrets
@@ -16,6 +17,10 @@ from .errors import AgentFailure, ReturnCode
 
 _KINDS = frozenset({"preflights", "deployments", "runs"})
 _MAX_RECORD_BYTES = 4 * 1024 * 1024
+# Bounded acquisition for the supervisor lease: a blocking flock() could wait
+# forever on a wedged holder, so LOCK_NB is retried only up to this deadline.
+_LEASE_ACQUIRE_TIMEOUT_SECONDS = 30.0
+_LEASE_ACQUIRE_RETRY_SECONDS = 0.1
 _ISOLATION_DIRECTORIES = (
     "client-home",
     "docker-config",
@@ -316,14 +321,36 @@ class StateStore:
         Callers must only close their own descriptor copy.  They must never
         explicitly unlock it because forked supervisor and job processes share
         the same open-file-description.
+
+        The lock is acquired with LOCK_NB and bounded retries: a blocking
+        flock() here could wait forever on a wedged holder.  On timeout an
+        AgentFailure with ReturnCode.TIMEOUT is raised instead.
         """
 
         import fcntl
+        import time
 
         descriptor = self._open_supervisor_lease_fd(identifier)
+        deadline = time.monotonic() + _LEASE_ACQUIRE_TIMEOUT_SECONDS
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            return descriptor
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return descriptor
+                except OSError as exc:
+                    if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise AgentFailure(
+                            ReturnCode.TIMEOUT,
+                            "SUPERVISOR_LEASE_TIMEOUT",
+                            "the run supervisor lease is held by another process",
+                            remediation=[
+                                "Check for a wedged supervisor holding the lease, "
+                                "then retry the operation."
+                            ],
+                        ) from exc
+                    time.sleep(_LEASE_ACQUIRE_RETRY_SECONDS)
         except BaseException:
             os.close(descriptor)
             raise

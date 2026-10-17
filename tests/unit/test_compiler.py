@@ -505,3 +505,90 @@ def test_registry_template_resources_exist_and_match_review_copies() -> None:
 def test_strict_templates_reject_missing_context() -> None:
     with pytest.raises(BioPipeError):
         StrictTemplateRenderer().render("project/nextflow.config.j2", {})
+
+
+def test_latest_token_only_matches_version_selection_context() -> None:
+    from biopipe.compiler.compiler import LATEST_TOKEN
+
+    for text in (
+        "container 'tool:latest'",
+        'image: "tool:latest"',
+        "version=latest",
+        "conda @latest",
+        '"latest"',
+        " latest",
+        "latest",
+    ):
+        assert LATEST_TOKEN.search(text) is not None, text
+    for text in (
+        "/data/latest/data",
+        "/data/latest_batch/raw",
+        "mylatest",
+        "xlatest1",
+        "image: latestfoo",
+    ):
+        assert LATEST_TOKEN.search(text) is None, text
+
+
+def test_reject_latest_tokens_still_catches_floating_container_pin() -> None:
+    with pytest.raises(BioPipeError) as captured:
+        NextflowCompiler._reject_latest_tokens(
+            {"main.nf": b"process X {\n  container 'tool:latest'\n}\n"}
+        )
+    assert captured.value.code is ErrorCode.VALIDATION_FAILED
+
+
+def test_reject_latest_tokens_exempts_path_data_artifacts() -> None:
+    # A space before "latest" is a version-selection context for the regex,
+    # but these artifacts only carry user-supplied filesystem paths.
+    NextflowCompiler._reject_latest_tokens(
+        {
+            "dataset.manifest.resolved.json": b'{"source": {"root": "/srv/my latest/data"}}',
+            "assets/samplesheet.csv": (
+                b"sample_id,lane,chunk,read1,read2\ns1,L001,001,/srv/my latest/s1_R1.fastq.gz,\n"
+            ),
+        }
+    )
+    # ... while a slash-joined path segment is not a version context anywhere.
+    NextflowCompiler._reject_latest_tokens({"main.nf": b"params.root = '/data/latest/data'\n"})
+
+
+def test_compile_accepts_dataset_paths_containing_latest(tmp_path: Path) -> None:
+    manifest = _manifest(root="/srv/latest_batch/raw")
+    planned = _planned(manifest, trimming=True)
+
+    NextflowCompiler().compile_planned(
+        tmp_path / "latest-path",
+        manifest=manifest,
+        planned=planned,
+        registry=load_default_registry(),
+    )
+
+    manifest_json = (tmp_path / "latest-path/dataset.manifest.resolved.json").read_text()
+    assert "/srv/latest_batch/raw" in manifest_json
+
+
+def test_compiler_rejects_unknown_dataset_type(tmp_path: Path) -> None:
+    manifest = _manifest()
+    planned = _planned(manifest, trimming=True)
+    unknown = finalize_manifest(
+        manifest.model_copy(
+            update={
+                "classification": manifest.classification.model_copy(
+                    update={"dataset_type": "unknown"}
+                )
+            }
+        )
+    )
+
+    with pytest.raises(BioPipeError) as captured:
+        NextflowCompiler().compile_planned(
+            tmp_path / "unknown-type",
+            manifest=unknown,
+            planned=planned,
+            registry=load_default_registry(),
+        )
+
+    assert captured.value.code is ErrorCode.VALIDATION_FAILED
+    assert "classified FASTQ" in captured.value.message
+    assert not (tmp_path / "unknown-type").exists()

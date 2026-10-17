@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -29,6 +27,7 @@ from biopipe.cli.reports import (
 )
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution._fsutil import below_any as _below_any
+from biopipe.execution._fsutil import read_bounded_regular_file as _read_bounded_regular_file
 from biopipe.execution.client import ExecutionOperation, OpenSSHExecutionClient
 from biopipe.execution.deploy import DeploymentBundle, build_deployment_bundle
 from biopipe.execution.models import (
@@ -555,7 +554,7 @@ def _connection_profile(profile: ExecutionProfile) -> SourceProfile:
 
 def _load_profile(path: Path) -> tuple[ExecutionProfile, bytes]:
     try:
-        payload = _read_bounded_regular(path, _MAX_PROFILE_BYTES)
+        payload = _read_bounded_regular_file(path, _MAX_PROFILE_BYTES)
         value = json.loads(
             payload.decode("utf-8"),
             object_pairs_hook=_unique_object,
@@ -566,39 +565,8 @@ def _load_profile(path: Path) -> tuple[ExecutionProfile, bytes]:
         raise _profile_error("The execution profile file is missing, unsafe, or invalid.") from exc
 
 
-def _read_bounded_regular(path: Path, maximum: int) -> bytes:
-    descriptor = os.open(
-        path,
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-    )
-    try:
-        metadata = os.fstat(descriptor)
-        current = path.lstat()
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or stat.S_ISLNK(current.st_mode)
-            or (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino)
-            or not 0 < metadata.st_size <= maximum
-        ):
-            raise OSError("input is not a bounded stable regular file")
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(64 * 1024, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        payload = b"".join(chunks)
-        if len(payload) > maximum:
-            raise OSError("input exceeds its size limit")
-        return payload
-    finally:
-        os.close(descriptor)
-
-
 def _sha256_regular(path: Path) -> str:
-    return hashlib.sha256(_read_bounded_regular(path, 16 * 1024 * 1024)).hexdigest()
+    return hashlib.sha256(_read_bounded_regular_file(path, 16 * 1024 * 1024)).hexdigest()
 
 
 def _profile_error(message: str) -> BioPipeError:
