@@ -7,7 +7,7 @@ import hashlib
 import io
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -43,7 +43,16 @@ from .store import ProjectBundleStore
 from .templates import StrictTemplateRenderer
 
 _RESOLVED_MANIFEST = "dataset.manifest.resolved.json"
-LATEST_TOKEN = re.compile(r"(?i)(?:^|[^A-Za-z0-9_.-])latest(?:$|[^A-Za-z0-9_.-])")
+# "latest" is only a floating version token in a version-selection context:
+# preceded by a separator from image/tag/pin syntax, a quote, whitespace,
+# or the start of the payload. A "/" before "latest" (a filesystem path)
+# must not match.
+LATEST_TOKEN = re.compile(r"(?i)(?:^|[:=@\"'\s])latest(?:$|[^A-Za-z0-9_.-])")
+# Artifacts whose bytes are user-supplied path data rather than generated
+# code or configuration. A floating version token cannot be expressed here,
+# while directory and file names may legitimately contain "latest"; the
+# token check skips them to avoid false positives on real dataset paths.
+PATH_DATA_ARTIFACTS = frozenset({_RESOLVED_MANIFEST, "assets/samplesheet.csv"})
 _COMPONENT_METADATA: Mapping[str, tuple[str, str]] = {
     "fastqc_raw_v1": ("fastqc", "templates/components/fastqc/main.nf.j2"),
     "fastp_single_v1": ("fastp_single", "templates/components/fastp_single/main.nf.j2"),
@@ -171,84 +180,104 @@ class NextflowCompiler:
         component_ids: Sequence[str],
     ) -> tuple[ComponentDefinition, ...]:
         require_valid_manifest(manifest)
-        if manifest.privacy.artifact_scope != "full":
-            raise self._validation_error(
-                "Project generation requires the full resolved manifest, not a sanitized artifact."
-            )
-        if manifest.errors or not manifest.samples or manifest.classification.layout == "unknown":
-            raise self._validation_error(
-                "Project generation requires a non-empty manifest without blocking errors."
-            )
-        if spec.input.manifest != _RESOLVED_MANIFEST:
-            raise self._validation_error(
-                f"PipelineSpec input.manifest must be {_RESOLVED_MANIFEST!r}."
-            )
-        if manifest.classification.layout != spec.input.layout:
-            raise self._validation_error("The manifest and PipelineSpec layouts differ.")
-        if execution_plan.executor != spec.execution.executor:
-            raise self._validation_error("The PipelineSpec and execution plan executors differ.")
-        if execution_plan.paths.source_root != manifest.source.root:
-            raise self._validation_error(
-                "The execution plan source root differs from the manifest."
-            )
-        if (
-            execution_plan.paths.work_dir != spec.paths.work_dir
-            or execution_plan.paths.output_dir != spec.paths.output_dir
-            or execution_plan.paths.container_cache != spec.paths.container_cache
-        ):
-            raise self._validation_error("PipelineSpec and execution plan paths differ.")
-        if spec.policy.overwrite_existing_outputs:
-            raise self._validation_error(
-                "Generated projects must keep output replacement disabled."
-            )
-        if spec.policy != PipelinePolicy() or execution_plan.approval != ExecutionApproval():
-            raise self._validation_error(
-                "Project generation requires the default-deny execution policy."
-            )
-        if execution_plan.preflight != PreflightRequirements():
-            raise self._validation_error(
-                "Project generation requires the complete execution preflight contract."
-            )
+        # Shared values for the predicate table below.
         expected_stages = (
             ["raw_fastqc", "optional_trimming", "post_trim_fastqc", "multiqc"]
             if spec.parameters.trimming.enabled
             else ["raw_fastqc", "multiqc"]
         )
-        if spec.analysis.stages != expected_stages:
-            raise self._validation_error("PipelineSpec stages do not match the fixed FASTQ-QC DAG.")
         immutable_roots = (manifest.source.root, execution_plan.paths.execution_root)
         writable_paths = (
             spec.paths.work_dir,
             spec.paths.output_dir,
             spec.paths.container_cache,
         )
-        if any(
-            _paths_overlap(writable, immutable)
-            for writable in writable_paths
-            for immutable in immutable_roots
-        ) or any(
-            _paths_overlap(first, second)
-            for index, first in enumerate(writable_paths)
-            for second in writable_paths[index + 1 :]
-        ):
-            raise self._validation_error(
-                "Input, work, output, and container-cache paths must not overlap."
-            )
-
-        expected = _expected_component_ids(
+        expected_ids = _expected_component_ids(
             layout=spec.input.layout,
             trimming_enabled=spec.parameters.trimming.enabled,
         )
         selected_ids = tuple(component_ids)
-        if selected_ids != expected:
-            raise self._validation_error(
-                "The selected component graph is not the fixed FASTQ-QC graph."
-            )
         reviewed_registry = load_default_registry()
-        if registry.document != reviewed_registry.document:
-            raise self._validation_error(
-                "The component registry is not the reviewed default registry."
-            )
+        # Table-driven input checks: (predicate, verbatim error message),
+        # evaluated in order. Messages are pinned by
+        # tests/unit/test_compiler_validate_inputs.py and must not change.
+        checks: list[tuple[Callable[[], bool], str]] = [
+            (
+                lambda: manifest.privacy.artifact_scope != "full",
+                "Project generation requires the full resolved manifest, not a sanitized artifact.",
+            ),
+            (
+                lambda: bool(manifest.errors)
+                or not manifest.samples
+                or manifest.classification.layout == "unknown"
+                or manifest.classification.dataset_type == "unknown",
+                "Project generation requires a classified FASTQ dataset without blocking errors.",
+            ),
+            (
+                lambda: spec.input.manifest != _RESOLVED_MANIFEST,
+                f"PipelineSpec input.manifest must be {_RESOLVED_MANIFEST!r}.",
+            ),
+            (
+                lambda: manifest.classification.layout != spec.input.layout,
+                "The manifest and PipelineSpec layouts differ.",
+            ),
+            (
+                lambda: execution_plan.executor != spec.execution.executor,
+                "The PipelineSpec and execution plan executors differ.",
+            ),
+            (
+                lambda: execution_plan.paths.source_root != manifest.source.root,
+                "The execution plan source root differs from the manifest.",
+            ),
+            (
+                lambda: execution_plan.paths.work_dir != spec.paths.work_dir
+                or execution_plan.paths.output_dir != spec.paths.output_dir
+                or execution_plan.paths.container_cache != spec.paths.container_cache,
+                "PipelineSpec and execution plan paths differ.",
+            ),
+            (
+                lambda: spec.policy.overwrite_existing_outputs,
+                "Generated projects must keep output replacement disabled.",
+            ),
+            (
+                lambda: spec.policy != PipelinePolicy()
+                or execution_plan.approval != ExecutionApproval(),
+                "Project generation requires the default-deny execution policy.",
+            ),
+            (
+                lambda: execution_plan.preflight != PreflightRequirements(),
+                "Project generation requires the complete execution preflight contract.",
+            ),
+            (
+                lambda: spec.analysis.stages != expected_stages,
+                "PipelineSpec stages do not match the fixed FASTQ-QC DAG.",
+            ),
+            (
+                lambda: any(
+                    _paths_overlap(writable, immutable)
+                    for writable in writable_paths
+                    for immutable in immutable_roots
+                )
+                or any(
+                    _paths_overlap(first, second)
+                    for index, first in enumerate(writable_paths)
+                    for second in writable_paths[index + 1 :]
+                ),
+                "Input, work, output, and container-cache paths must not overlap.",
+            ),
+            (
+                lambda: selected_ids != expected_ids,
+                "The selected component graph is not the fixed FASTQ-QC graph.",
+            ),
+            (
+                lambda: registry.document != reviewed_registry.document,
+                "The component registry is not the reviewed default registry.",
+            ),
+        ]
+        for predicate, message in checks:
+            if predicate():
+                raise self._validation_error(message)
+
         input_type: ArtifactType = (
             "paired_fastq" if spec.input.layout == "paired_end" else "single_fastq"
         )
@@ -509,6 +538,8 @@ class NextflowCompiler:
     @staticmethod
     def _reject_latest_tokens(artifacts: Mapping[str, bytes]) -> None:
         for name, payload in artifacts.items():
+            if name in PATH_DATA_ARTIFACTS:
+                continue
             try:
                 text = payload.decode("utf-8")
             except UnicodeDecodeError as exc:

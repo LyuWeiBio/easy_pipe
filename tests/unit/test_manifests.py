@@ -23,6 +23,7 @@ from biopipe.manifests import (
     sanitize_manifest,
     verify_manifest,
 )
+from biopipe.manifests.overrides import _retain_issue
 from biopipe.models import (
     DatasetClassification,
     DatasetManifest,
@@ -694,6 +695,22 @@ def test_manifest_store_is_create_only_and_rejects_symlink_reads(tmp_path: Path)
     assert parsed["integrity"]["manifest_sha256"] == manifest.integrity.manifest_sha256
 
 
+def test_manifest_store_rejects_nonfinite_json_number_deterministically(
+    tmp_path: Path,
+) -> None:
+    store = ManifestArtifactStore(tmp_path / "manifests")
+
+    path = store.create_text("poisoned.manifest.json", '{"confidence": NaN}\n')
+    with pytest.raises(BioPipeError) as nan_read:
+        store.read_manifest(path.name)
+    assert nan_read.value.code is ErrorCode.MANIFEST_STORAGE_FAILED
+
+    path = store.create_text("poisoned2.manifest.json", '{"confidence": Infinity}\n')
+    with pytest.raises(BioPipeError) as inf_read:
+        store.read_manifest(path.name)
+    assert inf_read.value.code is ErrorCode.MANIFEST_STORAGE_FAILED
+
+
 def test_manifest_store_preflights_complete_bundle_before_creating_first(
     tmp_path: Path,
 ) -> None:
@@ -741,3 +758,127 @@ def test_manifest_store_rolls_back_own_links_after_late_create_race(
     assert not (store.directory / "first.json").exists()
     assert not (store.directory / "second.json").exists()
     assert list(store.directory.iterdir()) == []
+
+
+def _manifest_with_warning(path: str) -> DatasetManifest:
+    original = _manifest().model_copy(
+        update={
+            "warnings": [
+                ManifestIssue(
+                    code="SENSITIVE_FILENAME",
+                    severity="warning",
+                    message="Synthetic warning with a path context.",
+                    context={"path": path},
+                )
+            ]
+        }
+    )
+    return finalize_manifest(original)
+
+
+def test_override_exclude_accepts_denormalized_issue_path() -> None:
+    original = _manifest_with_warning(f"{ROOT}//odd_R1.fastq.gz")
+    overrides = ManifestOverrides(
+        exclude_files=[f"{ROOT}/odd_R1.fastq.gz"],
+        reason="Reviewed.",
+        approved_by="pytest",
+    )
+
+    application = apply_overrides(original, overrides)
+
+    assert application.diff.excluded_files == [f"{ROOT}/odd_R1.fastq.gz"]
+    assert not application.resolved_manifest.warnings
+
+
+def test_override_rejects_issue_path_outside_scan_root() -> None:
+    original = _manifest_with_warning("/elsewhere/evil.fastq.gz")
+    overrides = ManifestOverrides(
+        rename_samples={"Patient-A": "control_01"},
+        reason="Reviewed.",
+        approved_by="pytest",
+    )
+
+    with pytest.raises(BioPipeError) as captured:
+        apply_overrides(original, overrides)
+
+    assert captured.value.code is ErrorCode.MANIFEST_OVERRIDE_CONFLICT
+    assert "outside the scan root" in captured.value.message
+
+
+def test_retain_issue_compares_normalized_paths() -> None:
+    denormalized_issue = ManifestIssue(
+        code="SOME_CODE",
+        severity="warning",
+        message="m",
+        context={"path": f"{ROOT}//a.fastq.gz"},
+    )
+    assert (
+        _retain_issue(denormalized_issue, [], excluded={f"{ROOT}/a.fastq.gz"}, addressed=set())
+        is False
+    )
+
+    normalized_issue = ManifestIssue(
+        code="SOME_CODE",
+        severity="warning",
+        message="m",
+        context={"path": f"{ROOT}/a.fastq.gz"},
+    )
+    assert (
+        _retain_issue(normalized_issue, [], excluded={f"{ROOT}//a.fastq.gz"}, addressed=set())
+        is False
+    )
+
+
+def _renamed(manifest: DatasetManifest, names: list[str]) -> DatasetManifest:
+    renamed = manifest.model_copy(deep=True)
+    renamed_samples = [
+        sample.model_copy(update={"original_sample_name": name})
+        for sample, name in zip(renamed.samples, names, strict=True)
+    ]
+    # Renaming changes the content: re-seal the integrity digest so the
+    # manifest stays valid for sanitize_manifest's require_valid_manifest.
+    return finalize_manifest(renamed.model_copy(update={"samples": renamed_samples}))
+
+
+def test_sanitized_sample_order_is_deterministic() -> None:
+    first = sanitize_manifest(_manifest())
+    second = sanitize_manifest(_manifest())
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+def test_sanitized_sample_order_is_independent_of_original_names() -> None:
+    """P3 #2: the sanitized order must not be a function of the secret names.
+
+    Two manifests with identical structures and identical input order, but
+    different original sample names, must sanitize to byte-identical outputs.
+    Sorting by original name (the old behavior) fails this property.
+    """
+    base_names = [sample.original_sample_name for sample in _manifest().samples]
+    assert len(base_names) == 2
+    # "apple" < "Zebra" in byte order, so name-sorting the renamed manifest
+    # reverses the sample order relative to the base manifest (whose names
+    # are already sorted). The structures stay attached to their positions.
+    renamed = _renamed(_manifest(), ["apple", "Zebra"])
+
+    base_sanitized = sanitize_manifest(_manifest()).model_dump(mode="json")
+    renamed_sanitized = sanitize_manifest(renamed).model_dump(mode="json")
+    assert renamed_sanitized == base_sanitized
+
+
+def test_ensure_private_directory_defeats_umask(tmp_path: Path) -> None:
+    """P3 #33: the leaf gets exactly 0o700 even under a permissive umask."""
+    import os as os_module
+    import stat as stat_module
+
+    from biopipe._pathutil import ensure_private_directory
+
+    previous_umask = os_module.umask(0o022)
+    try:
+        target = tmp_path / "a" / "b" / "store"
+        ensure_private_directory(target)
+    finally:
+        os_module.umask(previous_umask)
+
+    assert stat_module.S_IMODE(target.stat().st_mode) == 0o700
+    # Pre-existing parents are untouched.
+    assert stat_module.S_IMODE((tmp_path / "a").stat().st_mode) != 0o700
