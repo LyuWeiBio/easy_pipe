@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -683,3 +686,194 @@ def test_real_subprocess_runner_uses_shell_false_timeout_and_output_bound(
     )
     assert bounded.output_limit_exceeded is True
     assert len(bounded.stdout.encode("utf-8")) <= 128
+
+
+class _StuckPopen:
+    """Simulates a D-state child: alive, unkillable, and unreapable."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.pid = 2**22
+        self.returncode: int | None = None
+        self.stdout: object = io.BytesIO()
+        self.stderr: object = io.BytesIO()
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self, timeout: float | None = None) -> int:
+        raise subprocess.TimeoutExpired(self.args, timeout)
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+
+def test_kill_wait_timeout_raises_process_stuck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import biopipe.workflow_test.subprocess_runner as runner_module
+    from biopipe.workflow_test.subprocess_runner import ProcessStuckError
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", _StuckPopen)
+    monkeypatch.setattr(runner_module, "_TERMINATE_KILL_WAIT_SECONDS", 0.15)
+
+    runner = SubprocessCommandRunner()
+    started = time.monotonic()
+    with pytest.raises(ProcessStuckError):
+        runner.run(
+            (sys.executable, "-c", "pass"),
+            cwd=tmp_path,
+            env={"PATH": os.defpath, "LANG": "C"},
+            timeout_seconds=0.3,
+            output_limit_bytes=1_024,
+        )
+    elapsed = time.monotonic() - started
+
+    # Must give up promptly instead of blocking in wait() forever,
+    # and never fabricate a CommandResult for the unreaped child.
+    assert elapsed < 5
+
+
+# --- P3 #8: PR_SET_PDEATHSIG orphan protection (Linux) -------------------------
+
+def _pdeathsig_available() -> bool:
+    from biopipe.workflow_test import subprocess_runner
+
+    return subprocess_runner._prctl is not None
+
+
+def test_pdeathsig_hook_refuses_when_parent_already_dead() -> None:
+    """The fork->prctl race guard: a stale parent pid must not run."""
+    if not _pdeathsig_available():
+        pytest.skip("prctl(PR_SET_PDEATHSIG) unavailable on this platform")
+    from biopipe.workflow_test.subprocess_runner import _preexec_arm_pdeathsig
+
+    child = os.fork()
+    if child == 0:
+        try:
+            _preexec_arm_pdeathsig(2**31 - 1)
+        except RuntimeError:
+            os._exit(0)
+        except BaseException:
+            os._exit(2)
+        os._exit(1)
+    _, status = os.waitpid(child, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+
+
+def test_pdeathsig_kills_orphan_when_parent_dies() -> None:
+    """Kernel mechanism: the orphaned grandchild must die with its parent."""
+    if not _pdeathsig_available():
+        pytest.skip("prctl(PR_SET_PDEATHSIG) unavailable on this platform")
+    from biopipe.workflow_test.subprocess_runner import (
+        _PR_SET_CHILD_SUBREAPER,
+        _prctl,
+        _preexec_arm_pdeathsig,
+    )
+
+    assert _prctl is not None
+    # Become a sub-reaper so the orphaned grandchild reparents to us and can
+    # be waitpid()'ed deterministically.
+    if _prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        pytest.skip("PR_SET_CHILD_SUBREAPER unavailable")
+    try:
+        pid_pipe_read, pid_pipe_write = os.pipe()
+        middle = os.fork()
+        if middle == 0:
+            os.close(pid_pipe_read)
+            armed_read, armed_write = os.pipe()
+            leaf = os.fork()
+            if leaf == 0:
+                os.close(armed_read)
+                try:
+                    _preexec_arm_pdeathsig(os.getppid())
+                    os.write(armed_write, b"1")
+                except BaseException:
+                    os.write(armed_write, b"0")
+                    os._exit(99)
+                finally:
+                    os.close(armed_write)
+                time.sleep(30)
+                os._exit(42)  # must never reach here: SIGKILL expected
+            os.close(armed_write)
+            os.write(pid_pipe_write, str(leaf).encode())
+            armed = os.read(armed_read, 1)
+            os.close(armed_read)
+            os.close(pid_pipe_write)
+            # Exit only after the leaf armed its death signal, so the test
+            # observes exactly the orphan path.
+            os._exit(0 if armed == b"1" else 2)
+        os.close(pid_pipe_write)
+        leaf_pid = int(os.read(pid_pipe_read, 32).decode())
+        os.close(pid_pipe_read)
+        _, middle_status = os.waitpid(middle, 0)
+        assert os.waitstatus_to_exitcode(middle_status) == 0
+        deadline = time.monotonic() + 10.0
+        leaf_status = None
+        while leaf_status is None and time.monotonic() < deadline:
+            done_pid, status = os.waitpid(leaf_pid, os.WNOHANG)
+            if done_pid == 0:
+                time.sleep(0.05)
+            else:
+                leaf_status = status
+        assert leaf_status is not None, "orphaned child survived its parent"
+        assert os.WIFSIGNALED(leaf_status), f"child exited: {leaf_status}"
+        assert os.WTERMSIG(leaf_status) == signal.SIGKILL
+    finally:
+        _prctl(_PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
+
+
+def test_bounded_runner_passes_pdeathsig_preexec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SubprocessCommandRunner wires the preexec hook on Linux."""
+    import biopipe.workflow_test.subprocess_runner as runner_module
+
+    captured: dict = {}
+    real_popen = runner_module.subprocess.Popen
+
+    def _spy_popen(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", _spy_popen)
+    runner = SubprocessCommandRunner()
+    result = runner.run(
+        (sys.executable, "-c", "pass"),
+        cwd=tmp_path,
+        env={"PATH": os.defpath, "LANG": "C"},
+        timeout_seconds=10,
+        output_limit_bytes=1_024,
+    )
+    assert result.return_code == 0
+    if runner_module._prctl is None:
+        assert captured.get("preexec_fn") is None
+    else:
+        assert callable(captured.get("preexec_fn"))
+
+
+def test_assert_trace_matches_first_name_token_not_substring(tmp_path: Path) -> None:
+    """P3 #4: a required process must match the first name token exactly."""
+    from biopipe.workflow_test.outputs import OutputAssertionError, _assert_trace
+
+    trace = tmp_path / "execution_trace.txt"
+    # "FASTQC_RAW" is a substring of "FASTQC_RAWX" but not its first token.
+    trace.write_text(
+        "task_id\tname\tstatus\n1\tFASTQC_RAWX (s1)\tCOMPLETED\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(OutputAssertionError, match="missing a required process"):
+        _assert_trace(trace, {"FASTQC_RAW"})
+
+    # The real Nextflow form "NAME (tag)" matches on its first token.
+    trace.write_text(
+        "task_id\tname\tstatus\n1\tFASTQC_RAW (s1)\tCOMPLETED\n",
+        encoding="utf-8",
+    )
+    _assert_trace(trace, {"FASTQC_RAW"})

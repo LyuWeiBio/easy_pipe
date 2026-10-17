@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from biopipe._jsonutil import unique_object as _unique_json_object
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.models import ProbeError, ProbePolicy, ProbeRequest, ProbeResponse, SourceProfile
 from biopipe.probe.bounded import run_bounded
@@ -160,6 +161,13 @@ class OpenSSHProbeClient:
         max_stdout_bytes: int | None = None,
         max_stderr_bytes: int | None = None,
     ) -> None:
+        """Create a probe client.
+
+        The ``runner`` hook is **test-only**: it bypasses :func:`run_bounded`
+        (which enforces timeouts, output byte limits, and process-group
+        cleanup). Production code must leave it as ``None`` so every probe
+        goes through the bounded path. There are zero production callers.
+        """
         self._runner = runner
         self._max_stdout_bytes = _positive_optional_limit(max_stdout_bytes, "max_stdout_bytes")
         self._max_stderr_bytes = _positive_optional_limit(max_stderr_bytes, "max_stderr_bytes")
@@ -189,6 +197,8 @@ class OpenSSHProbeClient:
                     stderr_limit=stderr_limit,
                 )
             else:
+                # Test-only hook (see __init__): the custom runner bypasses
+                # run_bounded's timeout/output/process-group enforcement.
                 completed = self._runner(
                     arguments,
                     input=request_jsonl,
@@ -588,15 +598,6 @@ def _captured_text(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
 
 
 def _reject_json_constant(value: str) -> Any:

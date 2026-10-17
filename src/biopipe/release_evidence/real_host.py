@@ -39,6 +39,7 @@ from biopipe.release_evidence.generator import (
     verify_release_evidence,
 )
 from biopipe.release_evidence.models import ReleaseCandidate
+from biopipe.release_evidence.sanitize import find_forbidden_material
 from biopipe.release_evidence.store import EvidenceBundleStore
 from biopipe.report_models import TestCommandReport, ValidationCommandReport
 
@@ -748,17 +749,12 @@ def _assert_sanitized(
     output_directory: Path,
     inputs: RealHostEvidenceInputs,
 ) -> None:
-    forbidden = (
-        b"/Users/",
-        b"/home/",
-        b"file://",
-        b"PRIVATE KEY",
-        b"Authorization:",
-        b"Bearer ",
-        b"approval.key",
-        b".fastq",
-        b".fq",
-    )
+    """Reject a payload leaking paths, secrets, or raw dataset references.
+
+    Detection is unified in ``biopipe.release_evidence.sanitize``; this
+    wrapper only maps the finding to the real-host evidence error type.
+    """
+
     paths = (
         repository,
         candidate_evidence,
@@ -768,9 +764,8 @@ def _assert_sanitized(
     fragments = tuple(
         os.fsencode(path.absolute()) for path in paths if len(os.fspath(path.absolute())) >= 4
     )
-    if any(marker in payload for marker in forbidden) or any(
-        fragment in payload for fragment in fragments
-    ):
+    reason = find_forbidden_material(payload, path_fragments=fragments)
+    if reason is not None:
         raise _validation_error("sanitized_output")
 
 
