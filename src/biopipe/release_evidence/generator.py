@@ -18,8 +18,14 @@ from typing import Any, Final, cast
 from pydantic import ValidationError
 
 from biopipe.errors import BioPipeError, ErrorCode
+from biopipe.execution.models import ApprovalSigner
 from biopipe.probe.bounded import run_bounded
 from biopipe.registry import RegistryValidationError, load_default_registry
+from biopipe.release_evidence.attestation import (
+    ATTESTATION_NAME,
+    create_attestation,
+    verify_attestation,
+)
 from biopipe.release_evidence.checksums import (
     ARTIFACT_LOGICAL_NAMES,
     checksum_payloads,
@@ -114,8 +120,16 @@ def create_release_evidence(
     created_at: str,
     created_by: str,
     artifact_paths: ReleaseArtifactPaths,
+    approval_signer: ApprovalSigner | None = None,
 ) -> EvidenceVerification:
-    """Build and atomically publish one sealed, explicitly unsigned bundle."""
+    """Build and atomically publish one sealed bundle.
+
+    When ``approval_signer`` is provided, the bundle is sealed with an
+    HMAC-SHA256 attestation over the aggregate checksum manifest, proving the
+    bundle was sealed by a holder of the controller approval key.  Bundles
+    sealed without a signer remain structurally verifiable and are reported as
+    ``unsigned-legacy``.
+    """
 
     repository_path = Path(repository).absolute()
     output_path = Path(output_directory).absolute()
@@ -210,9 +224,14 @@ def create_release_evidence(
     )
     _require_repository_unchanged(repository_path, commit)
     payloads[EVIDENCE_MANIFEST_NAME] = checksum_payloads(payloads)
-    _verify_payloads(payloads)
+    if approval_signer is not None:
+        payloads[ATTESTATION_NAME] = create_attestation(
+            manifest_bytes=payloads[EVIDENCE_MANIFEST_NAME],
+            signer=approval_signer,
+        )
+    _verify_payloads(payloads, approval_signer=approval_signer)
     EvidenceBundleStore(output_path).create(payloads)
-    return verify_release_evidence(output_path)
+    return verify_release_evidence(output_path, approval_signer=approval_signer)
 
 
 def instantiate_release_checklist_file(
@@ -328,25 +347,45 @@ def instantiate_release_checklist(
     return rendered
 
 
-def seal_release_evidence(directory: str | Path) -> EvidenceVerification:
-    """Create the aggregate checksum once for an exact unsealed evidence tree."""
+def seal_release_evidence(
+    directory: str | Path, *, approval_signer: ApprovalSigner | None = None
+) -> EvidenceVerification:
+    """Create the aggregate checksum once for an exact unsealed evidence tree.
+
+    When ``approval_signer`` is provided, an HMAC attestation over the checksum
+    manifest is sealed alongside it.
+    """
 
     root = Path(directory).absolute()
     payloads = _read_evidence_directory(root, expected_names=_GENERATED_NAMES)
     _validate_unsealed_payloads(payloads)
     manifest = checksum_payloads(payloads)
     EvidenceBundleStore.create_file(root / EVIDENCE_MANIFEST_NAME, manifest)
-    return verify_release_evidence(root)
+    if approval_signer is not None:
+        EvidenceBundleStore.create_file(
+            root / ATTESTATION_NAME,
+            create_attestation(manifest_bytes=manifest, signer=approval_signer),
+        )
+    return verify_release_evidence(root, approval_signer=approval_signer)
 
 
-def verify_release_evidence(directory: str | Path) -> EvidenceVerification:
-    """Verify a sealed bundle without subprocess, network, or repository access."""
+def verify_release_evidence(
+    directory: str | Path, *, approval_signer: ApprovalSigner | None = None
+) -> EvidenceVerification:
+    """Verify a sealed bundle without subprocess, network, or repository access.
+
+    A bundle carrying ``attestation.json`` requires ``approval_signer`` to
+    verify the HMAC; without the key the verification fails closed.  Bundles
+    sealed without a signer verify structurally and report
+    ``signature_status="unsigned-legacy"``.
+    """
 
     payloads = _read_evidence_directory(
         Path(directory).absolute(),
         expected_names=EXPECTED_BUNDLE_NAMES,
+        optional_names=frozenset({ATTESTATION_NAME}),
     )
-    return _verify_payloads(payloads)
+    return _verify_payloads(payloads, approval_signer=approval_signer)
 
 
 def resolve_clean_repository_commit(
@@ -847,10 +886,18 @@ def _validate_unsealed_payloads(payloads: Mapping[str, bytes]) -> None:
     _assert_no_sensitive_material(payloads, path_fragments=())
 
 
-def _verify_payloads(payloads: Mapping[str, bytes]) -> EvidenceVerification:
-    if frozenset(payloads) != EXPECTED_BUNDLE_NAMES:
+def _verify_payloads(
+    payloads: Mapping[str, bytes], *, approval_signer: ApprovalSigner | None = None
+) -> EvidenceVerification:
+    attestation = payloads.get(ATTESTATION_NAME)
+    names = frozenset(payloads) - ({ATTESTATION_NAME} if attestation is not None else frozenset())
+    if names != EXPECTED_BUNDLE_NAMES:
         raise _validation_error("sealed release evidence file set is incomplete")
-    core = {name: payload for name, payload in payloads.items() if name != EVIDENCE_MANIFEST_NAME}
+    core = {
+        name: payload
+        for name, payload in payloads.items()
+        if name not in (EVIDENCE_MANIFEST_NAME, ATTESTATION_NAME)
+    }
     _validate_unsealed_payloads(core)
     expected = parse_checksum_manifest(
         payloads[EVIDENCE_MANIFEST_NAME],
@@ -860,11 +907,23 @@ def _verify_payloads(payloads: Mapping[str, bytes]) -> EvidenceVerification:
     if expected != observed:
         raise _validation_error("release evidence aggregate checksum does not match")
     candidate = _candidate_from_payload(payloads["candidate.json"])
+    if attestation is not None:
+        if approval_signer is None:
+            raise _validation_error("signed release evidence requires the approval key to verify")
+        verify_attestation(
+            manifest_bytes=payloads[EVIDENCE_MANIFEST_NAME],
+            attestation=attestation,
+            signer=approval_signer,
+        )
+        signature_status = "signed"
+    else:
+        signature_status = "unsigned-legacy"
     return EvidenceVerification(
         release_id=candidate.release_id,
         git_commit=candidate.git_commit,
         evidence_manifest_sha256=hashlib.sha256(payloads[EVIDENCE_MANIFEST_NAME]).hexdigest(),
         file_count=len(payloads),
+        signature_status=signature_status,
     )
 
 
@@ -872,6 +931,7 @@ def _read_evidence_directory(
     directory: Path,
     *,
     expected_names: frozenset[str],
+    optional_names: frozenset[str] = frozenset(),
 ) -> dict[str, bytes]:
     descriptor: int | None = None
     try:
@@ -887,11 +947,13 @@ def _read_evidence_directory(
             | getattr(os, "O_NOFOLLOW", 0),
         )
         observed_names = frozenset(os.listdir(descriptor))
-        if observed_names != expected_names:
+        if observed_names != expected_names and observed_names != (expected_names | optional_names):
             raise OSError("evidence directory file set mismatch")
         payloads: dict[str, bytes] = {}
         total = 0
-        for name in sorted(expected_names):
+        # Read the observed set (already validated above): optional members such
+        # as the attestation must be loaded too, not just the expected names.
+        for name in sorted(observed_names):
             file_descriptor = os.open(
                 name,
                 os.O_RDONLY

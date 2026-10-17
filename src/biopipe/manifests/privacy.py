@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from biopipe.manifests.integrity import finalize_manifest, require_valid_manifest
 from biopipe.models import (
     DatasetManifest,
@@ -17,6 +20,57 @@ from biopipe.models import (
 
 _REDACTED_ISSUE_MESSAGE = "Details are available only in the local full manifest."
 _REDACTED_REMEDIATION = ["Review the local full manifest before resolving this issue."]
+
+# Domain separation for the sanitized sample-order seed.
+_ORDER_SEED_DOMAIN = b"biopipe-sanitized-sample-order/v1"
+
+
+def _sample_structure_key(sample: DatasetSample) -> str:
+    """Name-independent structural fingerprint of one sample.
+
+    Only facts that remain visible in the sanitized manifest are used: lane
+    identifiers, chunk presence, and read pairing. Original names, sample ids,
+    and file paths never enter the key.
+    """
+
+    lanes = sorted(
+        (lane.lane, lane.chunk is not None, lane.read2 is not None)
+        for lane in sample.lanes
+    )
+    return json.dumps(
+        {"lane_count": len(sample.lanes), "lanes": lanes},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _order_samples_name_independent(
+    samples: list[DatasetSample],
+) -> list[DatasetSample]:
+    """Permute samples deterministically without using original names.
+
+    Sorting the sanitized samples by original name would let anyone holding
+    the candidate name set recover the name<->sample_NNN mapping by sorting
+    the candidates. Instead the order is a Fisher-Yates shuffle driven by a
+    SHA-256 counter DRBG seeded over the *sorted* structural fingerprints:
+    the seed (and therefore the permutation) is a pure function of the
+    multiset of visible structures, revealing nothing about the names. The
+    DRBG is implemented explicitly so the permutation does not depend on
+    ``random`` module internals.
+    """
+
+    seed = hashlib.sha256(
+        _ORDER_SEED_DOMAIN
+        + b"\x00".join(
+            key.encode("utf-8") for key in sorted(_sample_structure_key(s) for s in samples)
+        )
+    ).digest()
+    ordered = list(samples)
+    for i in range(len(ordered) - 1, 0, -1):
+        digest = hashlib.sha256(seed + i.to_bytes(4, "big")).digest()
+        j = int.from_bytes(digest, "big") % (i + 1)
+        ordered[i], ordered[j] = ordered[j], ordered[i]
+    return ordered
 _SAFE_HEADER_FAMILIES = {
     "generic",
     "illumina_casava_1_8",
@@ -64,10 +118,7 @@ def sanitize_manifest(manifest: DatasetManifest) -> DatasetManifest:
     """Create a stable manifest that contains no original sample names or paths."""
 
     require_valid_manifest(manifest)
-    ordered_samples = sorted(
-        manifest.samples,
-        key=lambda sample: (sample.original_sample_name or sample.sample_id, sample.sample_id),
-    )
+    ordered_samples = _order_samples_name_independent(manifest.samples)
     sanitized_samples = [
         _sanitize_sample(sample, index, manifest)
         for index, sample in enumerate(ordered_samples, start=1)

@@ -458,6 +458,26 @@ def _write_canonical(path: Path, value: dict[str, Any]) -> None:
             + "\n"
         ).encode("ascii")
     )
+
+
+def _reseal_journal_macs(fixture: StateFixture) -> None:
+    """Recompute every revision's journal MAC after deliberate tampering.
+
+    Tamper tests that target layers *above* the MAC (hash-chain links, replay
+    semantics) must reseal the chain first; otherwise the MAC layer (added for
+    M-B) masks the layer under test and the expected reason code changes.
+    """
+    key = fixture.config.contract.approval_hmac_key
+    assert key is not None
+    attempt = fixture.attempt
+    identity_sha256 = hashlib.sha256((attempt / "identity.json").read_bytes()).hexdigest()
+    mac = state_module._journal_genesis_mac(key, identity_sha256)
+    for path in sorted((attempt / "revisions").glob("*.json"), key=lambda p: p.name):
+        value = json.loads(path.read_text(encoding="ascii"))
+        value.pop("journal_mac", None)
+        mac = state_module._journal_revision_mac(key, mac, value)
+        value["journal_mac"] = mac
+        _write_canonical(path, value)
     path.chmod(0o600)
 
 
@@ -552,7 +572,7 @@ def test_namespace_attempt_intent_and_lock_permissions_are_owner_only(
         assert metadata.st_nlink == 1
 
     submit_intent = json.loads(files[-1].read_text(encoding="ascii"))
-    assert submit_intent["schema_version"] == SCHEDULER_STATE_SCHEMA_VERSION == "1.4"
+    assert submit_intent["schema_version"] == SCHEDULER_STATE_SCHEMA_VERSION == "1.5"
     assert isinstance(submit_intent["clock_epoch_id"], str)
     assert type(submit_intent["clock_started_boottime_ns"]) is int
 
@@ -1136,6 +1156,9 @@ def test_compute_evidence_revision_digest_tampering_fails_closed(
     revision = json.loads(revision_path.read_text(encoding="ascii"))
     revision["event"]["evidence_sha256"] = "0" * 64
     _write_canonical(revision_path, revision)
+    # Reseal so the tamper reaches the replay layer (the MAC layer must not
+    # mask the semantic inconsistency under test).
+    _reseal_journal_macs(state_fixture)
 
     with pytest.raises(SchedulerStateInvalidError) as captured:
         _new_store(state_fixture).load(
@@ -1973,6 +1996,9 @@ def test_capability_issuance_event_tampering_fails_replay(
     revision = json.loads(revision_path.read_text(encoding="ascii"))
     revision["event"][field] = revision["event"][field] + 1 if field == "expires_at" else "f" * 64
     _write_canonical(revision_path, revision)
+    # Reseal so the tamper reaches the replay layer (the MAC layer must not
+    # mask the semantic inconsistency under test).
+    _reseal_journal_macs(state_fixture)
 
     with pytest.raises(SchedulerStateInvalidError) as captured:
         _new_store(state_fixture).load(

@@ -55,6 +55,20 @@ _REQUIRED_PRODUCTION_FILES: Final[frozenset[str]] = frozenset(
         "modules/multiqc/main.nf",
     }
 )
+# Explicit module path allowlist. This MUST stay identical to
+# remote_executor/src/bioexec/deployment.py::_MODULE_FILES (each package
+# keeps its own copy; cross-package imports are forbidden because the
+# remote executor bundle is self-contained). The cross-end consistency
+# test remote_executor/tests/test_deploy_allowlist_consistency.py locks
+# the two copies together.
+_MODULE_FILES: Final[frozenset[str]] = frozenset(
+    {
+        "modules/fastp/main.nf",
+        "modules/fastqc/post_trim.nf",
+        "modules/fastqc/raw.nf",
+        "modules/multiqc/main.nf",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,12 +259,16 @@ def _validate_production_selection(
 
 
 def _is_production_file(relative: str) -> bool:
+    # Same rule as the remote executor's bioexec.deployment._is_production_file:
+    # fixed files by exact match, module files by explicit allowlist only.
+    # (The two copies are locked together by
+    # remote_executor/tests/test_deploy_allowlist_consistency.py.)
     path = PurePosixPath(relative)
     if path.is_absolute() or ".." in path.parts:
         return False
     if relative in _FIXED_FILES:
         return True
-    return len(path.parts) >= 2 and path.parts[0] == "modules" and path.suffix == ".nf"
+    return relative in _MODULE_FILES
 
 
 def _looks_like_raw_data(relative: str) -> bool:

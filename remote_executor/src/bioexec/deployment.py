@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass
@@ -66,6 +67,10 @@ _MODULE_FILES = frozenset(
         "modules/multiqc/main.nf",
     }
 )
+# NOTE: _FIXED_FILES / _MODULE_FILES must stay identical to the copies in
+# src/biopipe/execution/deploy.py (each package keeps its own copy; the
+# remote executor bundle must not import from the controller package).
+# remote_executor/tests/test_deploy_allowlist_consistency.py locks them.
 _RAW_SUFFIXES = (
     ".fastq",
     ".fastq.gz",
@@ -115,8 +120,19 @@ def deploy_bundle(
             "bundle_hash",
             "deployment_dir",
             "files",
+            "approval",
         },
     )
+    # Controller attestation is verified before any deployment state is read
+    # or mutated, exactly like submit/resume/abandon.  The lazy import keeps
+    # the module graph acyclic (runner imports deployment at module level).
+    approval = payload.get("approval")
+    if not isinstance(approval, dict):
+        raise _schema("approval must be an object")
+    require_exact_fields(approval, required={"key_id", "signature"})
+    from .runner import _verify_controller_attestation
+
+    _verify_controller_attestation("deploy", payload, config)
     deployment_id = require_identifier(payload["deployment_id"], "deployment_id")
     preflight_id = require_identifier(payload["preflight_id"], "preflight_id")
     profile_id = require_identifier(payload["profile_id"], "profile_id")
@@ -134,6 +150,7 @@ def deploy_bundle(
     bundle_hash = _canonical_hash(metadata)
     if bundle_hash != requested_bundle_hash:
         raise _deployment_failure("BUNDLE_HASH_MISMATCH")
+    _reject_conflicting_executor_profile(files)
     reservation = {
         "record_version": "1.0",
         "deployment_id": deployment_id,
@@ -193,6 +210,77 @@ def deploy_bundle(
         "bundle_hash": bundle_hash,
         "file_count": len(files),
     }
+
+
+def _reject_conflicting_executor_profile(files: tuple[DeploymentFile, ...]) -> None:
+    """Fail closed when the bundle tries to override the agent's executor.
+
+    The agent launches Nextflow with ``-profile local`` and an overlay config
+    that pins ``process.executor = 'local'`` *after* including the bundle's
+    ``nextflow.config``.  Because the selected profile is applied after the
+    overlay's top-level statements, a bundle-side ``process.executor``
+    assignment reachable through the profile (``conf/local.config`` or a
+    ``profiles.local`` block) would silently win over the overlay.
+
+    Bundles are controller-generated and must keep ``process.executor`` at
+    ``'local'`` everywhere; any other value -- in any bundle config file --
+    is rejected here at deploy time.  The deployment is then sealed read-only
+    and hash-verified before every run, so no later re-check is needed.
+    """
+
+    by_path = {item.path: item for item in files}
+    for name in ("nextflow.config", "conf/base.config", "conf/local.config"):
+        item = by_path.get(name)
+        if item is None:
+            continue
+        try:
+            text = item.content.decode("utf-8")
+        except UnicodeError:
+            raise _deployment_failure("CONFLICTING_EXECUTOR_PROFILE") from None
+        for match in _EXECUTOR_ASSIGNMENT.finditer(_strip_groovy_comments(text)):
+            if match.group("value") != "local":
+                raise _deployment_failure("CONFLICTING_EXECUTOR_PROFILE")
+
+
+_EXECUTOR_ASSIGNMENT = re.compile(r"process\s*\.\s*executor\s*=\s*(['\"])(?P<value>[^'\"]*)\1")
+
+
+def _strip_groovy_comments(text: str) -> str:
+    """Remove /* */ blocks and // line comments outside string literals."""
+
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    out: list[str] = []
+    index = 0
+    end = len(text)
+    in_single = False
+    in_double = False
+    while index < end:
+        char = text[index]
+        if in_single:
+            out.append(char)
+            if char == "'":
+                in_single = False
+            index += 1
+        elif in_double:
+            out.append(char)
+            if char == '"':
+                in_double = False
+            index += 1
+        elif char == "'":
+            in_single = True
+            out.append(char)
+            index += 1
+        elif char == '"':
+            in_double = True
+            out.append(char)
+            index += 1
+        elif char == "/" and index + 1 < end and text[index + 1] == "/":
+            while index < end and text[index] != "\n":
+                index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
 
 
 def _optional_deployment(state: StateStore, deployment_id: str) -> dict[str, Any] | None:

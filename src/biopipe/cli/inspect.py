@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import typer
@@ -19,6 +20,9 @@ from biopipe.probe import (
 )
 from biopipe.sources import SourceRegistry
 
+# Keep in sync with biopipe.sources.registry._SOURCE_ID_PATTERN.
+_SOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
 
 def _split_target(target: str) -> tuple[str, str]:
     source_id, separator, root = target.partition(":")
@@ -26,6 +30,19 @@ def _split_target(target: str) -> tuple[str, str]:
         raise BioPipeError(
             ErrorCode.VALIDATION_FAILED,
             "Inspection target must use SOURCE_ID:/absolute/path syntax.",
+            remediation=["Example: hpc01:/data/raw/run42"],
+        )
+    if not _SOURCE_ID_PATTERN.fullmatch(source_id):
+        raise BioPipeError(
+            ErrorCode.VALIDATION_FAILED,
+            "Inspection target has an invalid source identifier.",
+            context={"source_id": source_id},
+            remediation=["Use SOURCE_ID:/absolute/path with a safe source identifier."],
+        )
+    if not root.startswith("/"):
+        raise BioPipeError(
+            ErrorCode.VALIDATION_FAILED,
+            "Inspection target root must be an absolute path.",
             remediation=["Example: hpc01:/data/raw/run42"],
         )
     return source_id, root
@@ -106,6 +123,10 @@ def inspect_command(
                 as_json=as_json,
             )
             return
+        # Normalize once for the real path: a literal "~" directory must never
+        # be created under the working directory.
+        if output is not None:
+            output = output.expanduser()
         client = OpenSSHProbeClient(
             max_stdout_bytes=profile.probe.max_response_bytes,
             max_stderr_bytes=profile.probe.stderr_limit_bytes,

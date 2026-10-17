@@ -954,6 +954,12 @@ class SchedulerRunStore:
             selected,
             current_preflight,
         )
+        # The bootstrap verifier is read-only and expensive (it rehashes
+        # pinned artifacts). Run it before acquiring the start lock so a slow
+        # verifier does not serialize concurrent claim attempts; the
+        # preflight revision is re-checked under the lock below, so a
+        # concurrent claim that burns the intent first is still detected.
+        verifier()
         root = namespace = run = lock = -1
         session: _StartSession | None = None
         try:
@@ -985,7 +991,6 @@ class SchedulerRunStore:
                     "SCHEDULER_RUN_START_ALREADY_CLAIMED",
                     "the run start intent is already burned",
                 )
-            verifier()
             refreshed = self.load_consumed_preflight(selected)
             if (
                 refreshed.revision != current_preflight.revision

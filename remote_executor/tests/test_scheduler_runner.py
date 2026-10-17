@@ -444,7 +444,7 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
     popen_kwargs: dict[str, Any] = {}
     real_config = runner_module.verify_scheduler_config_file
     real_root = runner_module.verify_scheduler_root
-    real_executable = runner_module.verify_scheduler_executable
+    real_executable = runner_module.open_verified_scheduler_executable
     real_popen = runner_module.subprocess.Popen
     captured_results: list[runner_module.SchedulerCommandResult] = []
     real_execute = runner_module._execute_invocation
@@ -457,9 +457,9 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
         events.append("root")
         real_root(config, role, index)  # type: ignore[arg-type]
 
-    def checked_executable(config: TrustedSchedulerConfig, role: str) -> None:
+    def checked_executable(config: TrustedSchedulerConfig, role: str) -> int:
         events.append("executable")
-        real_executable(config, role)  # type: ignore[arg-type]
+        return real_executable(config, role)  # type: ignore[arg-type]
 
     def checked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
         events.append("popen")
@@ -476,7 +476,7 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
 
     monkeypatch.setattr(runner_module, "verify_scheduler_config_file", checked_config)
     monkeypatch.setattr(runner_module, "verify_scheduler_root", checked_root)
-    monkeypatch.setattr(runner_module, "verify_scheduler_executable", checked_executable)
+    monkeypatch.setattr(runner_module, "open_verified_scheduler_executable", checked_executable)
     monkeypatch.setattr(runner_module.subprocess, "Popen", checked_popen)
     monkeypatch.setattr(runner_module, "_execute_invocation", capture_result)
 
@@ -511,6 +511,95 @@ def test_submit_uses_exact_template_fixed_argv_minimal_env_and_adjacent_rechecks
     assert result.stdin_size == len(state.template_bytes)
     assert result.stdin_bytes_written == result.stdin_size
     assert result.transport_complete is True
+
+
+_needs_proc_fd = pytest.mark.skipif(
+    not os.path.isdir("/proc/self/fd"),
+    reason="descriptor-backed exec needs Linux /proc/self/fd",
+)
+
+
+@_needs_proc_fd
+def test_open_verified_executable_pins_descriptor_to_verified_bytes(
+    runner_fixture: RunnerFixture,
+) -> None:
+    from bioexec.scheduler_config_loader import open_verified_scheduler_executable
+
+    config = runner_fixture.config
+    target = config.executables["sbatch"].path
+    original = target.read_bytes()
+    descriptor = open_verified_scheduler_executable(config, "sbatch")  # type: ignore[arg-type]
+    try:
+        # Attacker atomically swaps the path to a NEW inode after verification
+        # (rename swap: the classic TOCTOU; in-place writes by the file's own
+        # uid are outside this fix's threat model, see ADR-0006 section 4).
+        evil = target.with_name(target.name + ".evil")
+        evil.write_bytes(b"#!/bin/sh\nprintf 'PWNED\\n'\n")
+        evil.chmod(0o755)
+        os.rename(evil, target)
+        # Hashing left the descriptor offset at EOF; rewind to read it.
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        observed = b""
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            observed += chunk
+        # The verified descriptor still reads the pre-swap bytes.
+        assert observed == original
+    finally:
+        os.close(descriptor)
+
+
+@_needs_proc_fd
+def test_descriptor_exec_runs_verified_bytes_despite_path_swap(
+    runner_fixture: RunnerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bioexec.scheduler_config_loader import (
+        open_verified_scheduler_executable as real_open,
+    )
+
+    fixture = runner_fixture
+    fixture.scenario(stdout_hex=_hex(f"{_JOB_ID}\n".encode("ascii")))
+    popen_argv: list[list[str]] = []
+    popen_kwargs: dict[str, Any] = {}
+    real_popen = runner_module.subprocess.Popen
+    swapped: list[str] = []
+
+    def swap_after_verify(config: TrustedSchedulerConfig, role: str) -> int:
+        descriptor = real_open(config, role)  # type: ignore[arg-type]
+        if role == "sbatch" and not swapped:
+            # Attacker atomically replaces the executable AFTER it was
+            # verified (rename swap to a new inode: the classic TOCTOU).
+            target = config.executables[role].path  # type: ignore[arg-type]
+            evil = target.with_name(target.name + ".evil")
+            evil.write_bytes(b"#!/bin/sh\nprintf 'PWNED\\n'\n")
+            evil.chmod(0o755)
+            os.rename(evil, target)
+            swapped.append(role)
+        return descriptor
+
+    def capturing_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        popen_argv.append(list(args[0]))
+        popen_kwargs.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "open_verified_scheduler_executable", swap_after_verify)
+    monkeypatch.setattr(runner_module.subprocess, "Popen", capturing_popen)
+
+    with _submit_claim(fixture) as (_store, _snapshot, permit):
+        job = fixture.adapter.submit_held(permit.state, permit=permit)
+
+    assert swapped == ["sbatch"]
+    # The verified (pre-swap) executable ran, not the swapped path.
+    assert job.job_id == _JOB_ID
+    # The spawn executed the verified descriptor, not the path.
+    assert popen_argv
+    argv0 = popen_argv[0][0]
+    assert argv0.startswith("/proc/self/fd/")
+    assert popen_kwargs["pass_fds"] == (int(argv0.rsplit("/", 1)[1]),)
+    assert popen_kwargs["shell"] is False
+    assert popen_kwargs["close_fds"] is True
 
 
 def test_all_six_operations_parse_only_strict_successful_transport(

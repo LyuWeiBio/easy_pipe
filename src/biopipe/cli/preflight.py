@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import typer
 from pydantic import ValidationError
 
 from biopipe.cli.common import ExitCode, dry_run_result, emit, fail, validation_error
-from biopipe.errors import BioPipeError
+from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution.models import ExecutionProfile
 from biopipe.execution.preflight import run_preflight
 from biopipe.io import read_model
 from biopipe.validation import validate_generated_project
+
+# Keep in sync with biopipe.cli.run._RUN_ID.
+_RUN_ID = re.compile(r"^run-[0-9a-f]{32}$")
 
 
 def preflight_command(
@@ -40,6 +44,12 @@ def preflight_command(
     """Check the execution host without deploying or running raw data."""
 
     try:
+        if resume_run_id is not None and not _RUN_ID.fullmatch(resume_run_id):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "The --resume run ID is invalid.",
+                remediation=["Use the exact locally recorded run-<32 lowercase hex> identifier."],
+            )
         if dry_run:
             profile = read_model(execution_profile, ExecutionProfile)
             static_report = validate_generated_project(

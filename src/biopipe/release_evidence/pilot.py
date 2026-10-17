@@ -36,6 +36,7 @@ from biopipe.release_evidence.generator import (
 )
 from biopipe.release_evidence.models import ReleaseCandidate
 from biopipe.release_evidence.real_host import verify_real_host_acceptance_evidence
+from biopipe.release_evidence.sanitize import find_forbidden_material
 from biopipe.release_evidence.store import EvidenceBundleStore
 
 PILOT_SUMMARY_NAME: Final[str] = "internal-pilot-summary.json"
@@ -1662,28 +1663,21 @@ def _render_json(value: dict[str, Any]) -> bytes:
 
 
 def _assert_sanitized(payloads: dict[str, bytes], *, private_paths: tuple[Path, ...]) -> None:
-    forbidden = (
-        b"/Users/",
-        b"/home/",
-        b"file://",
-        b"\\\\",
-        b"PRIVATE KEY",
-        b"Authorization:",
-        b"Bearer ",
-        b"approval.key",
-        b".fastq",
-        b".fq",
-        b"@A0",
-    )
+    """Reject payloads leaking paths, secrets, or raw dataset references.
+
+    Detection is unified in ``biopipe.release_evidence.sanitize``; this
+    wrapper only maps the finding to the pilot evidence error type.
+    """
+
     fragments = tuple(
         os.fsencode(path.absolute())
         for path in private_paths
         if len(os.fspath(path.absolute())) >= 4
     )
-    if any(marker in payload for payload in payloads.values() for marker in forbidden) or any(
-        fragment in payload for payload in payloads.values() for fragment in fragments
-    ):
-        raise _validation_error("sanitized_output")
+    for payload in payloads.values():
+        reason = find_forbidden_material(payload, path_fragments=fragments)
+        if reason is not None:
+            raise _validation_error("sanitized_output")
 
 
 def _open_directory_no_symlink(directory: Path) -> int:

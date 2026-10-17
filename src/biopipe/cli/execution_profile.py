@@ -32,6 +32,21 @@ execution_profile_app = typer.Typer(
 )
 
 
+def _redacted_profile_dump(profile: ExecutionProfile) -> dict[str, object]:
+    """Return the profile JSON safe for user-visible output.
+
+    The approval HMAC key file path is controller-local secret-adjacent
+    material: it stays in the stored profile (needed to load the key) but is
+    redacted from anything emitted to stdout.
+    """
+
+    dumped = profile.model_dump(mode="json")
+    signer = dumped.get("approval_signer")
+    if isinstance(signer, dict):
+        signer["key_file"] = "<redacted>"
+    return dumped
+
+
 @execution_profile_app.command("create")
 def create_execution_profile(
     profile_id: str = typer.Argument(..., help="Stable execution-profile identifier."),
@@ -163,7 +178,7 @@ def create_execution_profile(
                     "execution-profile create",
                     "would_create",
                     would_write=[str(profile_path)],
-                    details={"profile": profile.model_dump(mode="json")},
+                    details={"profile": _redacted_profile_dump(profile)},
                 ),
                 as_json=as_json,
             )
@@ -178,7 +193,7 @@ def create_execution_profile(
         {
             "status": "created",
             "profile_path": str(path),
-            "profile": profile.model_dump(mode="json"),
+            "profile": _redacted_profile_dump(profile),
         },
         as_json=as_json,
     )
@@ -196,7 +211,7 @@ def show_execution_profile(
         profile = ExecutionProfileRegistry(profile_directory).load(profile_id)
     except BioPipeError as error:
         fail(error)
-    emit(profile, as_json=as_json)
+    emit(_redacted_profile_dump(profile), as_json=as_json)
 
 
 def _assignments(values: list[str], label: str) -> dict[str, str]:

@@ -397,6 +397,15 @@ def render_nextflow_overlay(state: SchedulerPreflightState) -> bytes:
         "conda.enabled = false",
         "spack.enabled = false",
         "apptainer.enabled = true",
+        # autoMounts stays true deliberately: with --containall/--no-home the
+        # container sees no host paths at all, so Nextflow must mount the
+        # per-task work directory and staged inputs itself. Setting this to
+        # false would require generating explicit --bind flags per task and
+        # would break task execution. The residual risk (a host path being
+        # auto-mounted) is contained upstream: every path that can reach a
+        # task command is validated against the profile's allowed_roots
+        # before the workload is built, and the container still runs with
+        # --containall --no-home --cleanenv --net --network none.
         "apptainer.autoMounts = true",
         "singularity.enabled = false",
         f"apptainer.cacheDir = {_groovy_quote(manifest.cache_dir)}",

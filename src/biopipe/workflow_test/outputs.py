@@ -224,7 +224,10 @@ def _assert_trace(path: Path, required_processes: set[str]) -> None:
         process
         for row in rows
         for process in required_processes
-        if process in (row.get("name") or "")
+        # Nextflow trace names look like "FASTQC_RAW (sample_001)": match on
+        # the first whitespace-separated token, not a substring, so that
+        # e.g. "FASTQC" cannot match "FASTQC_RAW".
+        if process == (row.get("name") or "").split(" ", 1)[0]
     }
     if observed != required_processes:
         raise OutputAssertionError("Nextflow trace is missing a required process")

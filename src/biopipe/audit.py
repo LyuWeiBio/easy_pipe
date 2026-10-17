@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path, PurePath
 from typing import Any
 
+from biopipe._jsonutil import unique_object as _unique_json_object
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.models import AuditEvent
 
@@ -39,7 +40,9 @@ class AuditWriter:
         appended = False
         try:
             path = self.path.expanduser().absolute()
-            if not path.name or path.name in {".", ".."}:
+            # Path.name is "" (never "." or "..") for "/a/.", "/a/..", and "/",
+            # so this single check covers all unsafe filenames.
+            if not path.name:
                 raise OSError("audit filename is unsafe")
             directory_descriptor = _open_directory_chain(path.parent)
             descriptor = _open_audit_file(directory_descriptor, path.name)
@@ -209,15 +212,6 @@ def _same_event_semantics(first: AuditEvent, second: AuditEvent) -> bool:
         mode="json",
         exclude={"timestamp"},
     )
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate audit key")
-        result[key] = value
-    return result
 
 
 def _reject_json_constant(value: str) -> Any:

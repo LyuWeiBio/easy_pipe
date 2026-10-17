@@ -257,6 +257,33 @@ def test_invalid_model_duplicate_keys_and_unsafe_symlink_fail_closed(tmp_path: P
     assert FindingCode.UNSAFE_PROJECT_ENTRY in codes
 
 
+def test_nonfinite_json_number_in_model_artifact_is_a_finding_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    project, _output_target = _generate(tmp_path)
+    manifest_path = project / "dataset.manifest.resolved.json"
+    text = manifest_path.read_text(encoding="utf-8")
+    assert "0.99" in text
+    manifest_path.write_text(text.replace("0.99", "Infinity", 1), encoding="utf-8")
+
+    codes = _codes(project)  # must not raise
+
+    assert FindingCode.ARTIFACT_MODEL_INVALID in codes
+
+
+def test_nonfinite_json_number_in_audit_jsonl_is_a_finding_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    project, _output_target = _generate(tmp_path)
+    audit_path = project / "audit" / "events.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text('{"event_type": Infinity}\n', encoding="utf-8")
+
+    codes = _codes(project)  # must not raise
+
+    assert FindingCode.AUDIT_RECORD_INVALID in codes
+
+
 def test_missing_and_unexpected_generated_files_are_detected(tmp_path: Path) -> None:
     project, _output_target = _generate(tmp_path)
     (project / "modules/multiqc/main.nf").unlink()
@@ -280,3 +307,161 @@ def test_missing_project_returns_report_instead_of_raising(tmp_path: Path) -> No
     assert report.status == "invalid"
     assert [finding.code for finding in report.findings] == [FindingCode.PROJECT_NOT_FOUND]
     assert report.artifact_hashes == {}
+
+
+def test_floating_version_detected_in_json_and_markdown_artifacts(
+    tmp_path: Path,
+) -> None:
+    project, _output_target = _generate(tmp_path)
+    (project / "extra.json").write_text('{"image": "tool:latest"}\n', encoding="utf-8")
+    (project / "notes.md").write_text("# Notes\n\nUse image: latest for now.\n", encoding="utf-8")
+
+    codes = _codes(project)
+
+    assert FindingCode.FLOATING_VERSION in codes
+
+
+def test_non_utf8_artifact_is_a_finding_not_silently_skipped(
+    tmp_path: Path,
+) -> None:
+    project, _output_target = _generate(tmp_path)
+    (project / "extra.json").write_bytes(b'{"image": "tool:\xff\xfe"}\n')
+
+    findings = validate_generated_project(project).findings
+    unreadable = {
+        finding.artifact for finding in findings if finding.code == FindingCode.ARTIFACT_UNREADABLE
+    }
+
+    assert "extra.json" in unreadable
+
+
+def test_validator_skips_path_data_artifacts_for_floating_versions(
+    tmp_path: Path,
+) -> None:
+    project, _output_target = _generate(tmp_path)
+    manifest_path = project / "dataset.manifest.resolved.json"
+    text = manifest_path.read_text(encoding="utf-8")
+    assert "/srv/validation-fixture/raw" in text
+    manifest_path.write_text(
+        text.replace("/srv/validation-fixture/raw", "/srv/my latest/raw"),
+        encoding="utf-8",
+    )
+
+    codes = _codes(project)
+
+    assert FindingCode.FLOATING_VERSION not in codes
+
+
+def _read_generation_event(project: Path) -> dict:
+    audit_path = project / "audit" / "events.jsonl"
+    return json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
+
+
+def _write_generation_event(project: Path, event: dict) -> None:
+    audit_path = project / "audit" / "events.jsonl"
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    lines[0] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_audit_event_id_must_match_recomputed_fingerprint(tmp_path: Path) -> None:
+    """P3 #3: a forged generation event_id is detected."""
+    project, _output_target = _generate(tmp_path)
+    assert _codes(project) == set()
+
+    event = _read_generation_event(project)
+    event["event_id"] = "00000000-0000-0000-0000-000000000000"
+    _write_generation_event(project, event)
+
+    assert FindingCode.AUDIT_RECORD_INVALID in _codes(project)
+
+
+def test_audit_event_hash_tampering_breaks_event_id_binding(tmp_path: Path) -> None:
+    """P3 #3: editing a claimed artifact hash invalidates the event_id binding."""
+    project, _output_target = _generate(tmp_path)
+    assert _codes(project) == set()
+
+    event = _read_generation_event(project)
+    first_output = sorted(event["output_hashes"])[0]
+    event["output_hashes"][first_output] = "0" * 64
+    _write_generation_event(project, event)
+
+    assert FindingCode.AUDIT_RECORD_INVALID in _codes(project)
+
+
+def _append_runtime_event(project: Path, event: dict) -> None:
+    audit_path = project / "audit" / "events.jsonl"
+    with audit_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def _runtime_event(project: Path, generation_event: dict, **overrides: object) -> dict:
+    base = {
+        "schema_version": "1.0",
+        "event_id": "11111111-2222-4333-8444-555555555555",
+        "timestamp": generation_event["timestamp"],
+        "event_type": "REAL_DATA_APPROVED",
+        "project_id": generation_event["project_id"],
+        "actor": "pytest-operator",
+        "input_hashes": {
+            "dataset_manifest": generation_event["input_hashes"][
+                "dataset.manifest.resolved.json"
+            ],
+            "pipeline_spec": generation_event["input_hashes"]["pipeline.spec.yaml"],
+            "execution_plan": generation_event["input_hashes"]["execution.plan.yaml"],
+            "software_lock": generation_event["input_hashes"]["software.lock.yaml"],
+        },
+        "output_hashes": {},
+        "status": "success",
+        "summary": "synthetic runtime event",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_runtime_event_with_matching_hashes_is_accepted(tmp_path: Path) -> None:
+    project, _output_target = _generate(tmp_path)
+    generation_event = _read_generation_event(project)
+    _append_runtime_event(project, _runtime_event(project, generation_event))
+
+    assert _codes(project) == set()
+
+
+def test_runtime_event_with_divergent_artifact_hash_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """P3 #3: a runtime event referencing other artifacts is tampering."""
+    project, _output_target = _generate(tmp_path)
+    generation_event = _read_generation_event(project)
+    tampered = _runtime_event(project, generation_event)
+    tampered["input_hashes"]["dataset_manifest"] = "f" * 64
+    _append_runtime_event(project, tampered)
+
+    assert FindingCode.AUDIT_RECORD_INVALID in _codes(project)
+
+
+def test_duplicate_runtime_event_id_is_rejected(tmp_path: Path) -> None:
+    """P3 #3: duplicated event ids indicate log tampering."""
+    project, _output_target = _generate(tmp_path)
+    generation_event = _read_generation_event(project)
+    first = _runtime_event(project, generation_event)
+    second = _runtime_event(project, generation_event)
+    second["event_id"] = first["event_id"]
+    _append_runtime_event(project, first)
+    _append_runtime_event(project, second)
+
+    assert FindingCode.AUDIT_RECORD_INVALID in _codes(project)
+
+
+def test_finding_text_covers_every_finding_code() -> None:
+    """P3 #36: FindingCode and _FINDING_TEXT stay in lockstep."""
+    from biopipe.validation.models import FindingCode
+    from biopipe.validation.validator import _FINDING_TEXT
+
+    assert set(_FINDING_TEXT) == set(FindingCode), (
+        f"missing text: {set(FindingCode) - set(_FINDING_TEXT)}; "
+        f"orphan text: {set(_FINDING_TEXT) - set(FindingCode)}"
+    )
+    for code, (message, remediation) in _FINDING_TEXT.items():
+        assert message and message.strip(), f"{code} has an empty message"
+        assert remediation, f"{code} has no remediation guidance"

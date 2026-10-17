@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from biopipe._jsonutil import unique_object as _unique_json_object
 from biopipe.errors import BioPipeError, ErrorCode
 
 _REPORT_NAMES = frozenset(
@@ -407,15 +408,6 @@ def _assert_child_binding(
 
 def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
     return first.st_dev == second.st_dev and first.st_ino == second.st_ino
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate JSON object key")
-        value[key] = item
-    return value
 
 
 def _reject_json_constant(value: str) -> Any:

@@ -75,6 +75,7 @@ _RUN_STATE_KEYS = frozenset(
         "previous_state",
         "preflight_id",
         "acceptance_report",
+        "abandon_intent",
     }
 )
 
@@ -253,11 +254,14 @@ def submit_approved_run(
 
     if previous_state is None:
         try:
-            deployment = selected_client.invoke(
-                context.connection,
-                agent_path=context.profile.bioexec_path,
-                operation="deploy",
-                payload={
+            # Authenticate the deploy request exactly like submit/resume/abandon:
+            # the remote agent verifies the controller attestation before
+            # reading or mutating any deployment state.  A missing or unsafe
+            # controller key must not leave an orphaned deployment behind.
+            deploy_payload = sign_run_payload(
+                context.profile,
+                "deploy",
+                {
                     "deployment_id": deployment_id,
                     "preflight_id": preflight_state["preflight_id"],
                     "profile_id": context.profile.profile_id,
@@ -266,7 +270,14 @@ def submit_approved_run(
                     "bundle_hash": context.bundle.bundle_hash,
                     "deployment_dir": preflight_state["deployment_dir"],
                     "files": context.bundle.protocol_files(),
+                    "approval": {},
                 },
+            )
+            deployment = selected_client.invoke(
+                context.connection,
+                agent_path=context.profile.bioexec_path,
+                operation="deploy",
+                payload=deploy_payload,
             )
             _validate_deployment_result(
                 deployment,
@@ -465,10 +476,21 @@ def abandon_pending_run(
         "deployment_id": state["deployment_id"],
         "resume_run_id": state["resume_run_id"],
         "submitted_at": state["submitted_at"],
+        # Freshness bound for the abandon authorization: the remote agent
+        # rejects authorizations outside a +/-300s window, so a captured
+        # signed payload cannot be replayed later.
+        "abandoned_at": timestamp.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "approval": {},
     }
     signed = sign_run_payload(context.profile, "abandon", request)
     selected_client = client or OpenSSHExecutionClient()
+    intent = {
+        "run_id": run_id,
+        "requested_at": timestamp.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    # Lock 1 (short): verify the pending run is unchanged, then record the
+    # abandon-in-flight intent marker.  The SSH call below runs outside the
+    # lock so a hung remote cannot serialize local submit/status/abandon.
     with _run_state_lock(context.project):
         current = _read_optional_run_state(context)
         if (
@@ -481,6 +503,10 @@ def abandon_pending_run(
                 ErrorCode.RUN_STATUS_FAILED,
                 "The pending run changed during reconciliation.",
             )
+        marked = dict(current)
+        marked["abandon_intent"] = intent
+        write_project_private_state_atomic(context.project, ".run-state.json", marked)
+    try:
         result = selected_client.invoke(
             context.connection,
             agent_path=context.profile.bioexec_path,
@@ -489,6 +515,30 @@ def abandon_pending_run(
         )
         if result != {"run_id": run_id, "status": "abandoned"}:
             raise _protocol_error("abandon")
+    except BaseException:
+        # Clear our own intent marker so a retry is not blocked; never touch
+        # a marker owned by a concurrent abandon operation.
+        with _run_state_lock(context.project):
+            current = _read_optional_run_state(context)
+            if current is not None and current.get("abandon_intent") == intent:
+                cleared = dict(current)
+                cleared["abandon_intent"] = None
+                write_project_private_state_atomic(
+                    context.project, ".run-state.json", cleared
+                )
+        raise
+    # Lock 2 (short): re-verify our intent is still current, then finalize.
+    with _run_state_lock(context.project):
+        current = _read_optional_run_state(context)
+        if (
+            current is None
+            or current.get("abandon_intent") != intent
+            or current.get("submission_state") != "pending"
+        ):
+            raise BioPipeError(
+                ErrorCode.RUN_STATUS_FAILED,
+                "The pending run changed during reconciliation.",
+            )
         _append_audit(
             AuditWriter(context.project / "audit" / "events.jsonl"),
             context,
@@ -502,7 +552,13 @@ def abandon_pending_run(
                 run_id=run_id,
                 event_type="RUN_SUBMISSION_ABANDONED",
                 event_status="blocked",
-                evidence=current,
+                # The transient in-flight marker is not evidence: excluding it
+                # keeps the event id stable across retries (append_once dedup).
+                evidence={
+                    key: value
+                    for key, value in current.items()
+                    if key != "abandon_intent"
+                },
             ),
             append_once=True,
         )
@@ -515,6 +571,7 @@ def abandon_pending_run(
             updated["acceptance_report"] = None
         else:
             updated = dict(previous_state)
+        updated["abandon_intent"] = None
         write_project_private_state_atomic(context.project, ".run-state.json", updated)
     return ReconciliationReport(run_id=run_id, confirmed_at=timestamp)
 
@@ -686,6 +743,10 @@ def _validate_run_state(
     *,
     allow_previous_state: bool = True,
 ) -> dict[str, Any]:
+    # Forward migration: state files written before the abandon-intent marker
+    # existed gain it as None on first read.
+    if "abandon_intent" not in state:
+        state = {**state, "abandon_intent": None}
     submission_state = state.get("submission_state")
     remote_status = state.get("remote_status")
     resume_run_id = state.get("resume_run_id")
@@ -696,6 +757,7 @@ def _validate_run_state(
     return_code = state.get("return_code")
     previous_state = state.get("previous_state")
     acceptance_report = state.get("acceptance_report")
+    abandon_intent = state.get("abandon_intent")
     if (
         set(state) != _RUN_STATE_KEYS
         or state.get("state_version") != "1.0"
@@ -750,6 +812,8 @@ def _validate_run_state(
         )
         or (submission_state != "pending" and previous_state is not None)
         or (submission_state != "pending" and acceptance_report is not None)
+        or not _optional_abandon_intent(abandon_intent)
+        or (abandon_intent is not None and submission_state != "pending")
         or (not allow_previous_state and previous_state is not None)
         or not isinstance(submitted_at, str)
     ):
@@ -805,6 +869,20 @@ def _require_terminal_resume_source(state: dict[str, Any]) -> None:
 
 def _optional_sha256(value: Any) -> bool:
     return value is None or (isinstance(value, str) and _SHA256.fullmatch(value) is not None)
+
+
+def _optional_abandon_intent(value: Any) -> bool:
+    """Validate the abandon-in-flight marker: None or a fixed-shape record."""
+
+    if value is None:
+        return True
+    return (
+        isinstance(value, dict)
+        and set(value) == {"run_id", "requested_at"}
+        and isinstance(value["run_id"], str)
+        and _RUN_ID.fullmatch(value["run_id"]) is not None
+        and isinstance(value["requested_at"], str)
+    )
 
 
 def _state_timestamp(state: dict[str, Any]) -> datetime:
@@ -1146,6 +1224,7 @@ def _persist_status_state(
         updated["environment_hash"] = environment_hash
         updated["return_code"] = report.return_code
         updated["previous_state"] = None
+        updated["abandon_intent"] = None
         write_project_private_state_atomic(
             context.project,
             ".run-state.json",
@@ -1217,6 +1296,7 @@ def _commit_acceptance_locked(
     updated["return_code"] = return_code
     updated["previous_state"] = None
     updated["acceptance_report"] = None
+    updated["abandon_intent"] = None
     write_project_private_state_atomic(context.project, ".run-state.json", updated)
 
 
@@ -1473,6 +1553,7 @@ def _run_state_payload(
         "return_code": return_code,
         "previous_state": previous_state,
         "acceptance_report": acceptance_report,
+        "abandon_intent": None,
     }
 
 

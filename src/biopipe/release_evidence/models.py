@@ -70,6 +70,11 @@ class EvidenceVerification(_StrictEvidenceModel):
     release_signoff_status: Literal["pending"] = "pending"
     evidence_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
     file_count: int = Field(ge=1, le=64)
+    signature_status: Literal["signed", "unsigned-legacy"] = "unsigned-legacy"
+    """Authorship proof: ``signed`` when a valid HMAC attestation over the
+    manifest was verified with the approval key; ``unsigned-legacy`` for
+    bundles sealed without a signer.  Unsigned bundles still prove structural
+    integrity (exact file set + SHA-256 manifest) but not authorship."""
 
 
 __all__ = ["EvidenceVerification", "ReleaseCandidate"]

@@ -100,17 +100,11 @@ def load_config(path: Path | None = None) -> ProbeConfig:
     if path is None:
         return ProbeConfig.fail_closed_default()
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    else:
-        raise _config_error("this host cannot safely open the probe config")
     try:
-        config_fd = os.open(path, flags)
+        config_fd, file_stat = _open_trusted_regular(path)
     except OSError as exc:
-        raise _config_error("probe config is not readable") from exc
+        raise _config_error("probe config cannot be opened safely") from exc
     try:
-        file_stat = os.fstat(config_fd)
         if not stat.S_ISREG(file_stat.st_mode):
             raise _config_error("probe config must be a regular non-symlink file")
         # The config defines the entire trust boundary (allowed_roots).  A
@@ -352,6 +346,81 @@ def _config_error(message: str) -> ProbeFailure:
         message,
         remediation=["Install a valid JSON config in a documented discovery location."],
     )
+
+
+# --- Trusted parent walk (executor-side standard) ---------------------------
+# The probe config defines the entire trust boundary (allowed_roots), so the
+# config file must be opened through a no-follow walk that verifies every
+# parent directory, mirroring bioexec.config._open_trusted_regular. Opening
+# the leaf directly would leave a parent-swap TOCTOU: an attacker who can
+# rename a parent directory could redirect the open at an absolute path.
+
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_FILE_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _require_trusted_directory(metadata: os.stat_result) -> None:
+    sticky_root_anchor = (
+        metadata.st_uid in {0, os.geteuid()}
+        and bool(metadata.st_mode & stat.S_ISVTX)
+        and stat.S_ISDIR(metadata.st_mode)
+    )
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid not in {0, os.geteuid()}
+        or (metadata.st_mode & 0o022 and not sticky_root_anchor)
+    ):
+        raise OSError("trusted path parent has unsafe ownership or permissions")
+
+
+def _open_trusted_regular(path: Path) -> tuple[int, os.stat_result]:
+    """Open an absolute leaf through a no-follow, trusted directory walk."""
+
+    if not path.is_absolute() or len(path.parts) < 2:
+        raise OSError("trusted leaf path must be absolute")
+    directory = os.open(Path(path.anchor), _DIRECTORY_FLAGS)
+    leaf_descriptor = -1
+    try:
+        _require_trusted_directory(os.fstat(directory))
+        for part in path.parts[1:-1]:
+            next_directory = os.open(part, _DIRECTORY_FLAGS, dir_fd=directory)
+            try:
+                opened = os.fstat(next_directory)
+                current = os.stat(part, dir_fd=directory, follow_symlinks=False)
+                if (
+                    stat.S_ISLNK(current.st_mode)
+                    or not stat.S_ISDIR(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                ):
+                    raise OSError("trusted path parent changed")
+                _require_trusted_directory(opened)
+            except BaseException:
+                os.close(next_directory)
+                raise
+            os.close(directory)
+            directory = next_directory
+        leaf = path.parts[-1]
+        leaf_descriptor = os.open(leaf, _FILE_FLAGS, dir_fd=directory)
+        metadata = os.fstat(leaf_descriptor)
+        current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise OSError("trusted leaf changed")
+        result = leaf_descriptor
+        leaf_descriptor = -1
+        return result, metadata
+    finally:
+        if leaf_descriptor >= 0:
+            os.close(leaf_descriptor)
+        os.close(directory)
 
 
 __all__ = [

@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -51,16 +51,7 @@ def _preflight_and_deploy(
     assert record is not None
     state.create("preflights", record["preflight_id"], record)
     contents = deployment_contents()
-    deployment_payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": config.profile_id,
-        "profile_hash": config.profile_hash,
-        "project_hash": project_hash(config),
-        "bundle_hash": bundle_hash(contents),
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    deployment_payload = _signed_deploy_payload(config, record, contents)
     deployed = deploy_bundle(deployment_payload, config, state)
     assert deployed == {
         "deployment_id": "deployment-1",
@@ -121,6 +112,55 @@ def _sign_payload(config: AgentConfig, operation: str, payload: dict[str, Any]) 
     ).hexdigest()
 
 
+def _synthetic_preflight_record(
+    config: AgentConfig, deploy_dir: str, *, preflight_id: str = "preflight-synth"
+) -> dict[str, Any]:
+    """A minimal passed-preflight record for attestation-layer tests (M-C).
+
+    Synthetic so these tests do not need a container engine: the attestation
+    check runs before any preflight/deployment content validation.
+    """
+    return {
+        "preflight_id": preflight_id,
+        "status": "passed",
+        "profile_id": config.profile_id,
+        "profile_hash": config.profile_hash,
+        "project_hash": project_hash(config),
+        "deploy_dir": deploy_dir,
+        "resume_run_id": None,
+        "consumed": False,
+        "expires_at": int(time.time()) + 3600,
+    }
+
+
+def _signed_deploy_payload(
+    config: AgentConfig,
+    record: dict[str, Any],
+    contents: dict[str, bytes],
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Build a controller-authenticated deploy payload (M-C).
+
+    Field overrides are applied *before* signing; callers that mutate the
+    payload afterwards must re-run ``_sign_payload`` to keep the attestation
+    valid for the mutated request.
+    """
+    payload = {
+        "deployment_id": "deployment-1",
+        "preflight_id": record["preflight_id"],
+        "profile_id": config.profile_id,
+        "profile_hash": config.profile_hash,
+        "project_hash": project_hash(config),
+        "bundle_hash": bundle_hash(contents),
+        "deployment_dir": record["deploy_dir"],
+        "files": deployment_files(contents),
+        "approval": {"key_id": config.approval_key_id},
+        **overrides,
+    }
+    _sign_payload(config, "deploy", payload)
+    return payload
+
+
 def _submit_payload(
     config: AgentConfig,
     preflight_result: dict[str, Any],
@@ -159,6 +199,7 @@ def _abandon_payload(
     *,
     run_id: str = "run-1",
     submitted_at: str | None = None,
+    abandoned_at: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "run_id": run_id,
@@ -169,6 +210,8 @@ def _abandon_payload(
         "deployment_id": "deployment-1",
         "resume_run_id": None,
         "submitted_at": submitted_at or datetime.now(timezone.utc).isoformat(),
+        "abandoned_at": abandoned_at
+        or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "approval": {
             "key_id": config.approval_key_id,
             "signature": "0" * 64,
@@ -223,16 +266,7 @@ def test_deployment_rejects_declared_bundle_mismatch_without_creating_target(
     assert result["status"] == "passed" and record is not None
     state.create("preflights", record["preflight_id"], record)
     contents = deployment_contents()
-    payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": agent_config.profile_id,
-        "profile_hash": agent_config.profile_hash,
-        "project_hash": project_hash(agent_config),
-        "bundle_hash": "0" * 64,
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    payload = _signed_deploy_payload(agent_config, record, contents, bundle_hash="0" * 64)
     with pytest.raises(AgentFailure) as raised:
         deploy_bundle(payload, agent_config, state)
     assert raised.value.code == "BUNDLE_HASH_MISMATCH"
@@ -249,16 +283,7 @@ def test_deployment_requires_license_file(
     state.create("preflights", record["preflight_id"], record)
     contents = deployment_contents()
     del contents["LICENSE"]
-    payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": agent_config.profile_id,
-        "profile_hash": agent_config.profile_hash,
-        "project_hash": project_hash(agent_config),
-        "bundle_hash": bundle_hash(contents),
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    payload = _signed_deploy_payload(agent_config, record, contents)
 
     with pytest.raises(AgentFailure) as raised:
         deploy_bundle(payload, agent_config, state)
@@ -272,16 +297,7 @@ def test_completed_deployment_replay_is_verified_and_idempotent(
     make_preflight_payload: Any,
 ) -> None:
     state, _result, record, contents = _preflight_and_deploy(agent_config, make_preflight_payload)
-    payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": agent_config.profile_id,
-        "profile_hash": agent_config.profile_hash,
-        "project_hash": project_hash(agent_config),
-        "bundle_hash": bundle_hash(contents),
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    payload = _signed_deploy_payload(agent_config, record, contents)
 
     assert deploy_bundle(payload, agent_config, state) == {
         "deployment_id": "deployment-1",
@@ -296,16 +312,9 @@ def test_deployment_replay_rejects_changed_or_incomplete_binding(
     make_preflight_payload: Any,
 ) -> None:
     state, _result, record, contents = _preflight_and_deploy(agent_config, make_preflight_payload)
-    payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": agent_config.profile_id,
-        "profile_hash": agent_config.profile_hash,
-        "project_hash": "f" * 64,
-        "bundle_hash": bundle_hash(contents),
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    # A changed binding is re-signed so the replay layer (not the attestation
+    # layer) is the one under test.
+    payload = _signed_deploy_payload(agent_config, record, contents, project_hash="f" * 64)
     with pytest.raises(AgentFailure) as changed:
         deploy_bundle(payload, agent_config, state)
     assert changed.value.code == "DEPLOYMENT_ID_CONFLICT"
@@ -313,6 +322,7 @@ def test_deployment_replay_rejects_changed_or_incomplete_binding(
     complete = state.read("deployments", "deployment-1")
     state.replace("deployments", "deployment-1", {**complete, "status": "reserved"})
     payload["project_hash"] = project_hash(agent_config)
+    _sign_payload(agent_config, "deploy", payload)
     with pytest.raises(AgentFailure) as incomplete:
         deploy_bundle(payload, agent_config, state)
     assert incomplete.value.code == "DEPLOYMENT_ID_CONFLICT"
@@ -329,16 +339,7 @@ def test_deployment_rejects_tests_and_raw_formats(
     assert record is not None
     state.create("preflights", record["preflight_id"], record)
     contents = {**deployment_contents(), forbidden: b"forbidden\n"}
-    payload = {
-        "deployment_id": "deployment-1",
-        "preflight_id": record["preflight_id"],
-        "profile_id": agent_config.profile_id,
-        "profile_hash": agent_config.profile_hash,
-        "project_hash": project_hash(agent_config),
-        "bundle_hash": bundle_hash(contents),
-        "deployment_dir": record["deploy_dir"],
-        "files": deployment_files(contents),
-    }
+    payload = _signed_deploy_payload(agent_config, record, contents)
     with pytest.raises(AgentFailure):
         deploy_bundle(payload, agent_config, state)
     assert not Path(record["deploy_dir"]).exists()
@@ -387,6 +388,100 @@ def test_submit_rejects_forged_controller_attestation_before_state_or_token_use(
     with pytest.raises(AgentFailure) as absent:
         state.read("runs", "run-1")
     assert absent.value.code == "STATE_NOT_FOUND"
+
+
+def test_deploy_rejects_missing_or_forged_controller_attestation(
+    agent_config: AgentConfig,
+    tmp_path: Path,
+) -> None:
+    """M-C: deploy requires a valid controller attestation.
+
+    The attestation is verified before any deployment state is read or
+    mutated: an unsigned or forged request must not create a deployment
+    record or touch the target directory.
+    """
+    state = StateStore(agent_config.state_root)
+    deploy_dir = agent_config.deploy_roots[0].path / "deployment-1"
+    record = _synthetic_preflight_record(agent_config, str(deploy_dir))
+    state.create("preflights", record["preflight_id"], record)
+    contents = deployment_contents()
+
+    unsigned = _signed_deploy_payload(agent_config, record, contents)
+    del unsigned["approval"]
+    with pytest.raises(AgentFailure) as missing:
+        deploy_bundle(unsigned, agent_config, state)
+    assert missing.value.code == "SCHEMA_ERROR"
+
+    forged = _signed_deploy_payload(agent_config, record, contents)
+    forged["deployment_dir"] = str(Path(record["deploy_dir"]).parent / "evil")
+    with pytest.raises(AgentFailure) as tampered:
+        deploy_bundle(forged, agent_config, state)
+    assert tampered.value.code == "APPROVAL_ATTESTATION_INVALID"
+
+    wrong_key = _signed_deploy_payload(agent_config, record, contents)
+    wrong_key["approval"]["key_id"] = "unknown-key"
+    with pytest.raises(AgentFailure) as keyed:
+        deploy_bundle(wrong_key, agent_config, state)
+    assert keyed.value.code == "APPROVAL_ATTESTATION_INVALID"
+
+    with pytest.raises(AgentFailure) as absent:
+        state.read("deployments", "deployment-1")
+    assert absent.value.code == "STATE_NOT_FOUND"
+    assert not Path(record["deploy_dir"]).exists()
+
+
+def test_controller_signer_deploy_envelope_reaches_real_service_entrypoint(
+    agent_config: AgentConfig,
+    tmp_path: Path,
+) -> None:
+    """M-C: the real controller signer produces deploy payloads the agent accepts."""
+    from biopipe.execution.signing import sign_run_payload
+
+    state = StateStore(agent_config.state_root)
+    deploy_dir = agent_config.deploy_roots[0].path / "deployment-controller"
+    record = _synthetic_preflight_record(
+        agent_config, str(deploy_dir), preflight_id="preflight-controller"
+    )
+    state.create("preflights", record["preflight_id"], record)
+    contents = deployment_contents()
+
+    key_file = tmp_path / "controller-hmac.key"
+    key_file.write_text("d" * 64 + "\n", encoding="ascii")
+    key_file.chmod(0o600)
+    profile = SimpleNamespace(
+        approval_signer=SimpleNamespace(
+            key_id=agent_config.approval_key_id,
+            key_file=str(key_file),
+        )
+    )
+    unsigned: dict[str, Any] = {
+        "deployment_id": "deployment-controller",
+        "preflight_id": record["preflight_id"],
+        "profile_id": agent_config.profile_id,
+        "profile_hash": agent_config.profile_hash,
+        "project_hash": project_hash(agent_config),
+        "bundle_hash": bundle_hash(contents),
+        "deployment_dir": record["deploy_dir"],
+        "files": deployment_files(contents),
+        "approval": {},
+    }
+    signed = sign_run_payload(profile, "deploy", unsigned)  # type: ignore[arg-type]
+    request = {
+        "protocol_version": "1.0",
+        "request_id": "controller-deploy-1",
+        "operation": "deploy",
+        "payload": signed,
+    }
+    frame = json.dumps(request, separators=(",", ":")).encode("ascii") + b"\n"
+
+    response = serve_once(io.BytesIO(frame), agent_config)
+    assert response["success"] is True
+    assert response["result"] == {
+        "status": "deployed",
+        "deployment_id": "deployment-controller",
+        "bundle_hash": bundle_hash(contents),
+        "file_count": len(contents),
+    }
 
 
 def test_submit_runs_fixed_offline_nextflow_and_status_discloses_no_paths(
@@ -711,6 +806,10 @@ def test_controller_signer_abandon_envelope_reaches_real_service_entrypoint(
         "deployment_id": "deployment-controller",
         "resume_run_id": None,
         "submitted_at": "2026-07-18T00:00:00Z",
+        "abandoned_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
         "approval": {},
     }
     signed = sign_run_payload(profile, "abandon", unsigned)  # type: ignore[arg-type]
@@ -774,6 +873,75 @@ def test_abandon_rejects_forgery_changed_replay_and_existing_run(
             state,
         )
     assert existing.value.code == "RUN_ALREADY_EXISTS"
+
+
+def _utc_z(offset_seconds: int) -> str:
+    return (
+        (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _fresh_state(agent_config: AgentConfig) -> StateStore:
+    # _abandon only needs the config and the state store; no preflight or
+    # deployment records are required to exercise the authorization window.
+    return StateStore(agent_config.state_root)
+
+
+def test_abandon_rejects_expired_authorization(agent_config: AgentConfig) -> None:
+    state = _fresh_state(agent_config)
+    expired = _abandon_payload(
+        agent_config, "b" * 64, run_id="run-expired", abandoned_at=_utc_z(-400)
+    )
+    with pytest.raises(AgentFailure) as exc_info:
+        handle_run_operation("abandon", expired, agent_config, state)
+    assert exc_info.value.code == "APPROVAL_TIME_INVALID"
+    assert exc_info.value.remediation
+
+
+def test_abandon_rejects_future_authorization(agent_config: AgentConfig) -> None:
+    state = _fresh_state(agent_config)
+    future = _abandon_payload(agent_config, "b" * 64, run_id="run-future", abandoned_at=_utc_z(400))
+    with pytest.raises(AgentFailure) as exc_info:
+        handle_run_operation("abandon", future, agent_config, state)
+    assert exc_info.value.code == "APPROVAL_TIME_INVALID"
+
+
+def test_abandon_accepts_fresh_authorization_at_window_edges(
+    agent_config: AgentConfig,
+) -> None:
+    state = _fresh_state(agent_config)
+    for offset in (-299, 0, 299):
+        payload = _abandon_payload(
+            agent_config,
+            "b" * 64,
+            run_id=f"run-edge-{offset}",
+            abandoned_at=_utc_z(offset),
+        )
+        result = handle_run_operation("abandon", payload, agent_config, state)
+        assert result == {"run_id": f"run-edge-{offset}", "status": "abandoned"}
+
+
+def test_abandon_retry_with_fresh_timestamp_stays_idempotent(
+    agent_config: AgentConfig,
+) -> None:
+    state = _fresh_state(agent_config)
+    submitted_at = _utc_z(0)
+    first = _abandon_payload(agent_config, "b" * 64, run_id="run-retry", submitted_at=submitted_at)
+    assert handle_run_operation("abandon", first, agent_config, state) == {
+        "run_id": "run-retry",
+        "status": "abandoned",
+    }
+    # A network retry re-signs with a fresh timestamp but the same submission
+    # identity; the tombstone must not treat the new abandoned_at as a
+    # conflicting mutation.
+    second = _abandon_payload(agent_config, "b" * 64, run_id="run-retry", submitted_at=submitted_at)
+    assert handle_run_operation("abandon", second, agent_config, state) == {
+        "run_id": "run-retry",
+        "status": "abandoned",
+    }
 
 
 def test_resume_preflight_rejects_replaced_private_directory_identity(
@@ -1036,3 +1204,30 @@ def test_status_rejects_corrupt_terminal_state(
             state,
         )
     assert raised.value.code == "RUN_STATE_INVALID"
+
+
+def test_supervisor_lease_acquire_times_out_on_wedged_holder(
+    agent_config: AgentConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 #18: a wedged lease holder cannot block acquisition forever."""
+    import bioexec.state as state_module
+    from bioexec.errors import ReturnCode
+
+    monkeypatch.setattr(state_module, "_LEASE_ACQUIRE_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(state_module, "_LEASE_ACQUIRE_RETRY_SECONDS", 0.05)
+    state = StateStore(agent_config.state_root)
+    run_id = "run-lease-timeout"
+    state.create_run_directory(run_id)
+    state.create_supervisor_lease(run_id)
+    holder = state.acquire_supervisor_lease(run_id)
+    try:
+        started = time.monotonic()
+        with pytest.raises(AgentFailure) as caught:
+            state.acquire_supervisor_lease(run_id)
+        elapsed = time.monotonic() - started
+    finally:
+        os.close(holder)
+    assert caught.value.return_code == ReturnCode.TIMEOUT
+    assert caught.value.code == "SUPERVISOR_LEASE_TIMEOUT"
+    assert elapsed >= 0.3
+    assert elapsed < 10

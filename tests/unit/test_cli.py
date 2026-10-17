@@ -163,3 +163,13 @@ def test_every_write_or_remote_command_has_dry_run(
 
     assert result.exit_code == 0, result.output
     assert "--dry-run" in Text.from_ansi(result.output).plain
+
+
+def test_run_invalid_run_id_remediation_names_hex_format() -> None:
+    result = runner.invoke(
+        app, ["run", ".", "--status", "run-xyz", "--execution-profile", "local"]
+    )
+
+    assert result.exit_code != 0
+    assert "run-<32 lowercase hex>" in result.output
+    assert "run-NNN" not in result.output

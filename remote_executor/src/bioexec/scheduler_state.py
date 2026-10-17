@@ -89,7 +89,68 @@ from .slurm import SlurmContractError, SlurmHeldJob, SlurmJobRef, SlurmObservati
 
 SchedulerMutationOperation = Literal["submit_held", "release_held"]
 
-SCHEDULER_STATE_SCHEMA_VERSION = "1.4"
+SCHEDULER_STATE_SCHEMA_VERSION = "1.5"
+
+# Journal integrity chain (ADR 0014): every revision carries an HMAC chained to
+# its predecessor, keyed by the approval HMAC key.  Compute nodes never hold
+# this key (see ADR 0013), so a same-uid compute job cannot forge the chain,
+# and any full-tail rewrite is rejected on replay.  mac_{-1} (genesis) is
+# derived from the attempt identity; mac_n = HMAC(key, mac_{n-1} || canonical
+# bytes of revision n excluding its own journal_mac field).
+_JOURNAL_MAC_DOMAIN = b"easy-pipe:scheduler-journal:v1\x00"
+
+
+def _journal_key(config: TrustedSchedulerConfig) -> bytes:
+    """Return the journal-chain HMAC key, fail-closed.
+
+    The scheduler state directory is server-side; the approval HMAC key is the
+    only secret the server holds that compute nodes never see (ADR 0013).  A
+    config without the key cannot authenticate the journal chain, so loading or
+    appending is refused rather than silently downgrading to hash-only checks.
+    """
+    key = config.contract.approval_hmac_key
+    if key is None:
+        raise _invalid("SCHEDULER_JOURNAL_KEY_UNAVAILABLE")
+    return key
+
+
+def _journal_genesis_mac(key: bytes, identity_sha256: str) -> str:
+    """Derive mac_{-1}: binds the chain to this attempt's identity."""
+    material = _JOURNAL_MAC_DOMAIN + bytes.fromhex(identity_sha256)
+    return hmac.new(key, material, hashlib.sha256).hexdigest()
+
+
+def _journal_revision_mac(
+    key: bytes,
+    previous_mac: str,
+    revision: Mapping[str, Any],
+) -> str:
+    """Compute mac_n = HMAC(key, mac_{n-1} || canonical(revision \\ journal_mac)).
+
+    The revision mapping passed here must not contain ``journal_mac`` yet;
+    callers strip it before verification to avoid a self-referential MAC.
+    """
+    if "journal_mac" in revision:
+        raise SchedulerStateContractError("journal MAC must be computed over the unsealed revision")
+    body = _canonical_json_bytes(revision)
+    material = bytes.fromhex(previous_mac) + body
+    return hmac.new(key, material, hashlib.sha256).hexdigest()
+
+
+def _verify_journal_mac(
+    key: bytes,
+    previous_mac: str,
+    revision: Mapping[str, Any],
+) -> str:
+    """Verify one revision's chained MAC; return it as the new chain head."""
+    sealed = _digest(revision.get("journal_mac"), "journal_mac")
+    unsealed = {name: value for name, value in revision.items() if name != "journal_mac"}
+    expected = _journal_revision_mac(key, previous_mac, unsealed)
+    if not hmac.compare_digest(sealed, expected):
+        raise _invalid("SCHEDULER_REVISION_MAC_INVALID")
+    return sealed
+
+
 _NAMESPACE = SCHEDULER_PREFLIGHT_NAMESPACE
 _CREATE_LOCK = ".create.lock"
 _ATTEMPT_LOCK = "lease.lock"
@@ -141,6 +202,7 @@ _IDENTITY_FIELDS = frozenset(
         "template_sha256",
         "submission_marker",
         "manifest",
+        "journal_key_id",
     }
 )
 _REVISION_FIELDS = frozenset(
@@ -150,6 +212,7 @@ _REVISION_FIELDS = frozenset(
         "revision",
         "previous_sha256",
         "event",
+        "journal_mac",
     }
 )
 _SUBMIT_INTENT_FIELDS = frozenset(
@@ -282,6 +345,9 @@ class SchedulerStateSnapshot:
     request_sha256: str
     revision: int
     journal_sha256: str
+    # Verified MAC chain head, or None when loaded under a key-less config
+    # (compute node): the MACs cannot be verified without the key.
+    journal_mac: str | None
     submit_intent_sha256: str | None
     release_intent_sha256: str | None
     _store_token: object = field(repr=False, compare=False)
@@ -294,6 +360,8 @@ class SchedulerStateSnapshot:
         _digest(self.request_sha256, "request_sha256")
         _strict_int(self.revision, "revision", 0, _MAX_REVISIONS)
         _digest(self.journal_sha256, "journal_sha256")
+        if self.journal_mac is not None:
+            _digest(self.journal_mac, "journal_mac")
         for value in (self.submit_intent_sha256, self.release_intent_sha256):
             if value is not None:
                 _digest(value, "intent_sha256")
@@ -400,6 +468,7 @@ class _LoadedAttempt:
     request_sha256: str
     revision: int
     journal_sha256: str
+    journal_mac: str | None
     submit_intent: Mapping[str, Any] | None
     submit_intent_sha256: str | None
     release_intent: Mapping[str, Any] | None
@@ -1199,6 +1268,7 @@ class SchedulerPreflightStore:
             request_sha256=loaded.request_sha256,
             revision=loaded.revision,
             journal_sha256=loaded.journal_sha256,
+            journal_mac=loaded.journal_mac,
             submit_intent_sha256=loaded.submit_intent_sha256,
             release_intent_sha256=loaded.release_intent_sha256,
             _store_token=self._store_token,
@@ -1241,6 +1311,11 @@ class SchedulerPreflightStore:
         prepared: SchedulerPreflightState,
         request_sha256: str,
     ) -> int:
+        # Only the service node (key holder) creates attempts: the genesis
+        # revision's MAC must be sealed at creation, and a key-less config
+        # can never do that. Refuse before writing anything.
+        if self.config.contract.approval_hmac_key is None:
+            raise _invalid("SCHEDULER_JOURNAL_KEY_UNAVAILABLE")
         preflight_id = prepared.manifest.preflight_id
         try:
             os.mkdir(preflight_id, 0o700, dir_fd=namespace)
@@ -1871,6 +1946,11 @@ def _load_attempt(
         maximum_identity,
     )
     _exact_fields(identity, _IDENTITY_FIELDS, "scheduler identity")
+    # Key rotation is fail-closed: a journal sealed under a different approval
+    # key id is refused with an explicit reason code.  Rotating the approval
+    # key retires in-flight journals; see ADR 0014 for the rotation procedure.
+    if identity["journal_key_id"] != config.contract.approval_key_id:
+        raise _invalid("SCHEDULER_JOURNAL_KEY_MISMATCH")
     _validate_identity(config, identity, preflight_id)
     manifest_payload = _read_private_bytes(
         opened.attempt_fd,
@@ -1900,6 +1980,18 @@ def _load_attempt(
     revisions: list[Mapping[str, Any]] = []
     hashes: list[str] = [identity_sha256]
     previous = identity_sha256
+    journal_key = config.contract.approval_hmac_key
+    journal_mac: str | None
+    if journal_key is None:
+        # Key-less compute-node projection (ADR 0013): the MAC chain cannot
+        # be verified without the key, so only the unkeyed hash-chain links
+        # are checked below. The compute node never appends journal
+        # revisions (_append_revision still requires the key), and the
+        # service node re-verifies the full MAC chain on its own loads, so
+        # a forged tail is still detected fail-closed where it matters.
+        journal_mac = None
+    else:
+        journal_mac = _journal_genesis_mac(journal_key, identity_sha256)
     for number, name in enumerate(ordered, start=1):
         revision, revision_sha256 = _read_record(
             opened.revisions_fd,
@@ -1917,6 +2009,12 @@ def _load_attempt(
             raise _invalid("SCHEDULER_REVISION_CHAIN_INVALID")
         if not isinstance(revision["event"], dict):
             raise _invalid("SCHEDULER_REVISION_EVENT_INVALID")
+        # Chained HMAC: catches same-uid full-tail rewrites that keep the
+        # hash chain intact (the key never reaches compute nodes). Key-less
+        # configs skip this: they cannot verify MACs, and they never append.
+        # (journal_key is not None implies journal_mac is not None here.)
+        if journal_key is not None and journal_mac is not None:
+            journal_mac = _verify_journal_mac(journal_key, journal_mac, revision)
         revisions.append(MappingProxyType(revision))
         hashes.append(revision_sha256)
         previous = revision_sha256
@@ -1955,6 +2053,7 @@ def _load_attempt(
         request_sha256=cast(str, identity["request_sha256"]),
         revision=len(revisions),
         journal_sha256=previous,
+        journal_mac=journal_mac,
         submit_intent=(MappingProxyType(submit_intent) if submit_intent is not None else None),
         submit_intent_sha256=submit_sha256,
         release_intent=(MappingProxyType(release_intent) if release_intent is not None else None),
@@ -2279,6 +2378,11 @@ def _append_revision(
         "previous_sha256": loaded.journal_sha256,
         "event": dict(event),
     }
+    # Seal the journal chain: the MAC is computed over the unsealed revision so
+    # verification can strip journal_mac and recompute the identical bytes.
+    revision["journal_mac"] = _journal_revision_mac(
+        _journal_key(config), loaded.journal_mac, revision
+    )
     name = f"{revision_number:020d}.json"
     _create_record(
         opened.revisions_fd,
@@ -2319,6 +2423,9 @@ def _identity_mapping(
         "template_sha256": prepared.template_sha256,
         "submission_marker": prepared.submission_marker,
         "manifest": prepared.manifest.as_mapping(),
+        # Non-secret key identifier the journal MAC chain is sealed with.
+        # A key rotation retires in-flight journals (ADR 0014).
+        "journal_key_id": config.contract.approval_key_id,
     }
 
 
@@ -2609,6 +2716,8 @@ def _validate_identity(
             raise ValueError("schema")
         if identity["preflight_id"] != preflight_id:
             raise ValueError("preflight")
+        if identity["journal_key_id"] != config.contract.approval_key_id:
+            raise ValueError("journal key")
         request_sha256 = _digest(identity["request_sha256"], "request_sha256")
         if not request_sha256:
             raise ValueError("request")

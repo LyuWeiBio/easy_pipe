@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import importlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -152,10 +154,12 @@ class _FakeExecutionClient:
                     "deployment_id",
                     "resume_run_id",
                     "submitted_at",
+                    "abandoned_at",
                     "approval",
                 }
                 assert set(approval) == {"key_id", "signature"}
                 assert payload["submitted_at"].endswith("Z")
+                assert payload["abandoned_at"].endswith("Z")
                 assert payload["deployment_id"].startswith("deployment-")
                 return {"run_id": payload["run_id"], "status": "abandoned"}
             assert approval["approved"] is True
@@ -1200,26 +1204,29 @@ def test_pending_run_requires_delay_and_signed_remote_abandonment(
 
     execution_runner = importlib.import_module("biopipe.execution.runner")
     original_write_state = execution_runner.write_project_private_state_atomic
-    failed_once = False
+    run_state_writes = 0
 
-    def fail_first_local_release(
+    def fail_finalize_local_release(
         project: Path,
         filename: str,
         payload: dict[str, Any],
     ) -> Path:
-        nonlocal failed_once
-        if filename == ".run-state.json" and not failed_once:
-            failed_once = True
-            raise BioPipeError(
-                ErrorCode.ARTIFACT_WRITE_FAILED,
-                "Synthetic local release failure after remote abandonment.",
-            )
+        # Fail the finalize write (lock 2), i.e. after the remote abandonment
+        # succeeded and the intent marker was recorded.
+        nonlocal run_state_writes
+        if filename == ".run-state.json":
+            run_state_writes += 1
+            if run_state_writes == 2:
+                raise BioPipeError(
+                    ErrorCode.ARTIFACT_WRITE_FAILED,
+                    "Synthetic local release failure after remote abandonment.",
+                )
         return original_write_state(project, filename, payload)
 
     monkeypatch.setattr(
         execution_runner,
         "write_project_private_state_atomic",
-        fail_first_local_release,
+        fail_finalize_local_release,
     )
     with pytest.raises(BioPipeError) as local_failure:
         abandon_pending_run(
@@ -1230,7 +1237,14 @@ def test_pending_run_requires_delay_and_signed_remote_abandonment(
             confirmed_at=submitted_at + timedelta(minutes=6),
         )
     assert local_failure.value.code is ErrorCode.ARTIFACT_WRITE_FAILED
-    assert read_project_private_state(fixture.project, ".run-state.json") == state
+    # The finalize failed: the intent marker is still set and the run is still
+    # pending, so a retry can complete the abandonment.
+    wedged = read_project_private_state(fixture.project, ".run-state.json")
+    assert wedged["submission_state"] == "pending"
+    assert wedged["abandon_intent"] == {
+        "run_id": run_id,
+        "requested_at": wedged["abandon_intent"]["requested_at"],
+    }
 
     reconciled = abandon_pending_run(
         fixture.project,
@@ -1250,6 +1264,136 @@ def test_pending_run_requires_delay_and_signed_remote_abandonment(
     ]
     assert sum(event["event_type"] == "RUN_SUBMISSION_ABANDONED" for event in events) == 1
     assert validate_generated_project(fixture.project).status == "valid"
+
+
+@dataclass(slots=True)
+class _LockObservingAbandonClient(_FakeExecutionClient):
+    """Records whether the run-state lock is held while the SSH call runs."""
+
+    project: Path = Path(".")
+    lock_was_free: bool | None = None
+    intent_during_ssh: Any = None
+
+    def invoke(
+        self,
+        source: SourceProfile,
+        *,
+        agent_path: str,
+        operation: ExecutionOperation,
+        payload: dict[str, Any],
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if operation == "abandon":
+            reports = self.project / "reports"
+            descriptor = os.open(
+                reports, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+            try:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    self.lock_was_free = False
+                else:
+                    self.lock_was_free = True
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+            state = read_project_private_state(self.project, ".run-state.json")
+            self.intent_during_ssh = state.get("abandon_intent")
+        return _FakeExecutionClient.invoke(
+            self,
+            source,
+            agent_path=agent_path,
+            operation=operation,
+            payload=payload,
+            request_id=request_id,
+        )
+
+
+def test_abandon_ssh_runs_outside_the_run_state_lock(
+    tmp_path: Path,
+) -> None:
+    fixture = _setup(tmp_path)
+    timeout_client = _TimeoutAfterSubmitClient()
+    preflight_at = datetime.now(UTC) - timedelta(seconds=2)
+    run_preflight(
+        fixture.project,
+        fixture.profile_path,
+        client=timeout_client,
+        checked_at=preflight_at,
+    )
+    with pytest.raises(BioPipeError) as caught:
+        submit_approved_run(
+            fixture.project,
+            fixture.profile_path,
+            actor="pytest-operator",
+            approve_real_data=True,
+            client=timeout_client,
+            approved_at=preflight_at + timedelta(seconds=1),
+        )
+    run_id = str(caught.value.context["run_id"])
+    state = read_project_private_state(fixture.project, ".run-state.json")
+    submitted_at = datetime.fromisoformat(str(state["submitted_at"]).replace("Z", "+00:00"))
+
+    client = _LockObservingAbandonClient(project=fixture.project)
+    reconciled = abandon_pending_run(
+        fixture.project,
+        fixture.profile_path,
+        run_id=run_id,
+        client=client,
+        confirmed_at=submitted_at + timedelta(minutes=6),
+    )
+    assert reconciled.status == "abandoned"
+    # The network call ran without holding the local run-state lock...
+    assert client.lock_was_free is True
+    # ...after the intent marker had been recorded...
+    assert client.intent_during_ssh == {
+        "run_id": run_id,
+        "requested_at": client.intent_during_ssh["requested_at"],
+    }
+    # ...and the marker is cleared once the abandonment finalizes.
+    final = read_project_private_state(fixture.project, ".run-state.json")
+    assert final["abandon_intent"] is None
+    assert final["submission_state"] == "abandoned"
+
+
+def test_abandon_clears_intent_when_the_remote_call_fails(
+    tmp_path: Path,
+) -> None:
+    fixture = _setup(tmp_path)
+    timeout_client = _TimeoutAfterSubmitClient()
+    preflight_at = datetime.now(UTC) - timedelta(seconds=2)
+    run_preflight(
+        fixture.project,
+        fixture.profile_path,
+        client=timeout_client,
+        checked_at=preflight_at,
+    )
+    with pytest.raises(BioPipeError) as caught:
+        submit_approved_run(
+            fixture.project,
+            fixture.profile_path,
+            actor="pytest-operator",
+            approve_real_data=True,
+            client=timeout_client,
+            approved_at=preflight_at + timedelta(seconds=1),
+        )
+    run_id = str(caught.value.context["run_id"])
+    state = read_project_private_state(fixture.project, ".run-state.json")
+    submitted_at = datetime.fromisoformat(str(state["submitted_at"]).replace("Z", "+00:00"))
+
+    rejected = _RejectAbandonClient()
+    with pytest.raises(BioPipeError):
+        abandon_pending_run(
+            fixture.project,
+            fixture.profile_path,
+            run_id=run_id,
+            client=rejected,
+            confirmed_at=submitted_at + timedelta(minutes=6),
+        )
+    # The failed attempt leaves no residue: the intent marker is cleared and
+    # the pre-attempt state is restored byte-for-byte.
+    assert read_project_private_state(fixture.project, ".run-state.json") == state
 
 
 @pytest.mark.parametrize(

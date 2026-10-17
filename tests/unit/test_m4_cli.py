@@ -402,3 +402,146 @@ def test_report_writer_rejects_project_root_swap_without_escaping(
     assert raised.value.code == ErrorCode.ARTIFACT_WRITE_FAILED
     assert not (external / "validation.json").exists()
     assert not list((detached / "reports").glob(".*.tmp"))
+
+
+class _BoomTempModule:
+    """Stand-in for the tempfile module whose directory creation always fails."""
+
+    @staticmethod
+    def TemporaryDirectory(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated temporary-directory creation failure")
+
+
+def test_validate_tempdir_failure_reports_runtime_not_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(validate_cli, "tempfile", _BoomTempModule())
+
+    with pytest.raises(BioPipeError) as captured:
+        validate_cli._run_runtime_validation(
+            tmp_path,
+            fixture_root=tmp_path,
+            timeout_seconds=1.0,
+            output_limit_bytes=1024,
+        )
+
+    assert captured.value.code is ErrorCode.ARTIFACT_WRITE_FAILED
+    assert "could not be created" in captured.value.message
+
+
+def test_validate_runner_oserror_is_not_masked_as_tempdir_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FailingRunner:
+        def validate(self, *args: object, **kwargs: object) -> object:
+            raise OSError("simulated runner-internal failure")
+
+    monkeypatch.setattr(validate_cli, "WorkflowTestRunner", lambda: _FailingRunner())
+
+    with pytest.raises(OSError, match="simulated runner-internal failure"):
+        validate_cli._run_runtime_validation(
+            tmp_path,
+            fixture_root=tmp_path,
+            timeout_seconds=1.0,
+            output_limit_bytes=1024,
+        )
+
+
+def test_test_tempdir_failure_reports_runtime_not_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(test_cli, "tempfile", _BoomTempModule())
+
+    with pytest.raises(BioPipeError) as captured:
+        test_cli._run_synthetic_tests(
+            tmp_path,
+            fixture_root=tmp_path,
+            timeout_seconds=1.0,
+            output_limit_bytes=1024,
+        )
+
+    assert captured.value.code is ErrorCode.ARTIFACT_WRITE_FAILED
+    assert "could not be created" in captured.value.message
+
+
+def test_test_runner_oserror_is_not_masked_as_tempdir_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FailingRunner:
+        def stub_run(self, *args: object, **kwargs: object) -> object:
+            raise OSError("simulated stub-run failure")
+
+        def e2e_run(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("must not reach e2e")
+
+    monkeypatch.setattr(test_cli, "WorkflowTestRunner", lambda: _FailingRunner())
+
+    with pytest.raises(OSError, match="simulated stub-run failure"):
+        test_cli._run_synthetic_tests(
+            tmp_path,
+            fixture_root=tmp_path,
+            timeout_seconds=1.0,
+            output_limit_bytes=1024,
+        )
+
+
+class _BuggyRunner:
+    """Simulates an unexpected non-BioPipeError escaping the workflow runner."""
+
+    def validate(self, *args: object, **kwargs: object) -> object:
+        raise RuntimeError("simulated bug leaking /secret/local/path")
+
+    def stub_run(self, *args: object, **kwargs: object) -> object:
+        raise RuntimeError("simulated bug leaking /secret/local/path")
+
+    def e2e_run(self, *args: object, **kwargs: object) -> object:
+        raise RuntimeError("simulated bug leaking /secret/local/path")
+
+
+def _invoke_with_buggy_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: list[str],
+    cli_module: object,
+) -> object:
+    project = tmp_path / "generated"
+    project.mkdir()
+    monkeypatch.setattr(
+        cli_module,
+        "validate_generated_project",
+        lambda _project: _static_report(project),
+    )
+    monkeypatch.setattr(cli_module, "_project_layout", lambda _project: "single_end")
+    monkeypatch.setattr(cli_module, "WorkflowTestRunner", lambda: _BuggyRunner())
+    return runner.invoke(app, [*command, str(project), "--json"])
+
+
+def test_validate_unexpected_error_emits_stable_json_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 #30: non-BioPipeError from validate's runtime phase -> JSON, no traceback."""
+    result = _invoke_with_buggy_runner(
+        tmp_path, monkeypatch, ["validate"], validate_cli
+    )
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert payload["error"]["context"] == {"exception_type": "RuntimeError"}
+    # The exception message (which may carry local paths) must not leak.
+    assert "/secret/local/path" not in result.stderr
+
+
+def test_test_unexpected_error_emits_stable_json_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 #30: non-BioPipeError from test's synthetic phase -> JSON, no traceback."""
+    result = _invoke_with_buggy_runner(tmp_path, monkeypatch, ["test"], test_cli)
+
+    assert result.exit_code == 2
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert payload["error"]["context"] == {"exception_type": "RuntimeError"}
+    assert "/secret/local/path" not in result.stderr

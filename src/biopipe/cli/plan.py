@@ -58,8 +58,7 @@ def plan_command(
         "apptainer",
         "--container-engine",
         help="apptainer or docker.",
-    ),
-    source_host: str | None = typer.Option(None, "--source-host"),
+    ),    source_host: str | None = typer.Option(None, "--source-host"),
     execution_host: str | None = typer.Option(None, "--execution-host"),
     execution_root: str | None = typer.Option(
         None,
@@ -87,6 +86,20 @@ def plan_command(
                 "Only the fixed fastq-qc planning goal is supported.",
                 context={"goal": goal},
                 remediation=["Use --goal fastq-qc."],
+            )
+        if executor not in {"local", "slurm"}:
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "Unsupported execution backend.",
+                context={"executor": executor},
+                remediation=["Use --executor local or --executor slurm."],
+            )
+        if container_engine not in {"apptainer", "docker"}:
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "Unsupported container engine.",
+                context={"container_engine": container_engine},
+                remediation=["Use --container-engine apptainer or --container-engine docker."],
             )
         _validate_spec_destination(output)
         manifest = read_model(manifest_path, DatasetManifest)

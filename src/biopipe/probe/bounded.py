@@ -14,7 +14,21 @@ from typing import IO, Final
 _READ_CHUNK_BYTES: Final[int] = 64 * 1024
 _WAIT_SLICE_SECONDS: Final[float] = 0.05
 _TERMINATE_GRACE_SECONDS: Final[float] = 0.25
+# Bound on the final wait() after SIGKILL. A process that cannot be reaped
+# after SIGKILL is stuck in uninterruptible sleep (D-state); waiting forever
+# would pin the caller, so the wait is bounded and the stuck condition is
+# reported loudly instead of blocking.
+_TERMINATE_KILL_WAIT_SECONDS: Final[float] = 5.0
 _TRUNCATION_MARKER: Final[bytes] = b"...[truncated]"
+
+
+class ProcessStuckError(Exception):
+    """A process survived SIGKILL and could not be reaped.
+
+    The child is still alive (typically stuck in D-state). Callers must
+    treat this as fatal: never fabricate a result for a process whose
+    termination could not be observed.
+    """
 
 
 @dataclass(slots=True)
@@ -169,6 +183,12 @@ def _drain_output(pipe: IO[bytes], capture: _CaptureBuffer) -> None:
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
+    """Terminate the child, escalating to SIGKILL.
+
+    Raises ProcessStuckError when the child survives SIGKILL and cannot be
+    reaped within _TERMINATE_KILL_WAIT_SECONDS: it is stuck (for example in
+    uninterruptible D-state sleep) and waiting longer would block forever.
+    """
     if process.poll() is not None:
         return
     with suppress(ProcessLookupError):
@@ -178,7 +198,13 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         with suppress(ProcessLookupError):
             process.kill()
-        process.wait()
+        try:
+            process.wait(timeout=_TERMINATE_KILL_WAIT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise ProcessStuckError(
+                "the process survived SIGKILL and could not be reaped; "
+                "it is stuck (for example in uninterruptible D-state sleep)"
+            ) from exc
 
 
 def _bounded_with_marker(data: bytes, limit: int) -> bytes:
@@ -192,4 +218,4 @@ def _close_pipe(pipe: IO[bytes]) -> None:
         pipe.close()
 
 
-__all__ = ["run_bounded"]
+__all__ = ["ProcessStuckError", "run_bounded"]

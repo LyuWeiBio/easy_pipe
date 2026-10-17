@@ -389,6 +389,13 @@ class DetectionEvidence(StrictModel):
     def validate_rule(cls, value: str) -> str:
         return _safe_identifier(value, "rule")
 
+    @field_validator("detail")
+    @classmethod
+    def validate_detail(cls, value: str | None) -> str | None:
+        # Free text surfaces in terminal reports: reject control characters
+        # to block terminal escape-sequence injection.
+        return None if value is None else _safe_text(value, "detail")
+
 
 class ManifestIssue(StrictModel):
     """A stable actionable warning or blocking manifest error."""
@@ -403,6 +410,18 @@ class ManifestIssue(StrictModel):
     @classmethod
     def validate_code(cls, value: str) -> str:
         return _safe_identifier(value, "manifest issue code")
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        # Free text surfaces in terminal reports: reject control characters
+        # to block terminal escape-sequence injection.
+        return _safe_text(value, "message")
+
+    @field_validator("remediation")
+    @classmethod
+    def validate_remediation(cls, value: list[str]) -> list[str]:
+        return [_safe_text(item, "remediation") for item in value]
 
 
 class ManifestPrivacy(StrictModel):

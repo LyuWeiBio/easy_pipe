@@ -54,7 +54,10 @@ _COMMAND_READ_BYTES = 64 * 1024
 _PROCESS_EXIT_DRAIN_SECONDS = 0.50
 _TERMINATE_GRACE_SECONDS = 0.25
 _SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
-_JOB_ID = re.compile(r"[1-9][0-9]{0,127}", re.ASCII)
+# Keep in sync with bioexec.slurm._JOB_ID: one canonical positive ASCII
+# decimal Slurm job ID (uint32 range; slurm.py additionally range-checks
+# against _MAX_JOB_ID).
+_JOB_ID = re.compile(r"[1-9][0-9]{0,9}", re.ASCII)
 _VERSION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", re.ASCII)
 _TIME_LIMIT = re.compile(
     r"(?:(?P<days>[1-9][0-9]?)-)?"
@@ -1309,7 +1312,12 @@ def _observe_regular(
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(before.st_mode)
             or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
-            or before.st_nlink != 1
+            # NOTE: no st_nlink == 1 requirement here. Hard-link-deduplicated
+            # datasets legitimately have nlink > 1; concurrent modification
+            # through another link is caught by the _file_identity
+            # before/after comparison below (nlink, size, mtime, ctime are
+            # all part of the identity). The link count is reported as an
+            # observation instead of a rejection.
             or before.st_size < 0
             or before.st_size > maximum_bytes
             or (trusted_owner and before.st_uid not in {0, os.geteuid()})
@@ -1347,6 +1355,7 @@ def _observe_regular(
             "mtime_ns": before.st_mtime_ns,
             "ctime_ns": before.st_ctime_ns,
             "mode": mode,
+            "nlink": before.st_nlink,
         }
         if hash_contents:
             result["sha256"] = digest.hexdigest()

@@ -30,6 +30,7 @@ from biopipe.release_evidence.generator import (
     resolve_clean_repository_commit,
     validate_runtime_repository_binding,
 )
+from biopipe.release_evidence.sanitize import find_forbidden_material
 from biopipe.release_evidence.store import EvidenceBundleStore
 from biopipe.version import CONTROLLER_VERSION
 
@@ -223,7 +224,10 @@ def create_release_acceptance_evidence(
         "test-summary.txt": _render_test_summary(summary),
     }
     _validate_core_payloads(payloads)
-    _assert_sanitized(payloads)
+    _assert_sanitized(
+        payloads,
+        path_fragments=_path_fragments(repository_path, Path(output_directory).absolute()),
+    )
     payloads["SHA256SUMS"] = checksum_payloads(payloads)
     if _resolve_acceptance_commit(repository_path) != commit:
         raise _validation_error("candidate repository changed during evidence collection")
@@ -238,10 +242,11 @@ def create_release_acceptance_evidence(
 def verify_release_acceptance_evidence(directory: str | Path) -> dict[str, object]:
     """Verify one CI evidence bundle without repository or network access."""
 
-    payloads = _read_acceptance_directory(Path(directory).absolute())
+    root = Path(directory).absolute()
+    payloads = _read_acceptance_directory(root)
     core = {name: payload for name, payload in payloads.items() if name != "SHA256SUMS"}
     _validate_core_payloads(core)
-    _assert_sanitized(core)
+    _assert_sanitized(core, path_fragments=_path_fragments(root))
     try:
         expected = parse_checksum_manifest(
             payloads["SHA256SUMS"],
@@ -687,20 +692,30 @@ def _render_json(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _assert_sanitized(payloads: Mapping[str, bytes]) -> None:
-    forbidden = (
-        b"/Users/",
-        b"/home/",
-        b"file://",
-        b"PRIVATE KEY",
-        b"Authorization:",
-        b"Bearer ",
-        b"approval.key",
-        b".fastq",
-        b".fq",
+def _path_fragments(*paths: Path) -> tuple[bytes, ...]:
+    """Encode absolute paths as byte fragments for the sanitization gate."""
+
+    return tuple(
+        os.fsencode(path.absolute()) for path in paths if len(os.fspath(path.absolute())) >= 4
     )
-    if any(marker in payload for payload in payloads.values() for marker in forbidden):
-        raise _validation_error("release acceptance evidence contains forbidden material")
+
+
+def _assert_sanitized(
+    payloads: Mapping[str, bytes], *, path_fragments: tuple[bytes, ...] = ()
+) -> None:
+    """Reject payloads leaking paths, secrets, or raw dataset references.
+
+    Marker set, secret patterns, and fragment matching are unified in
+    ``biopipe.release_evidence.sanitize``; this wrapper only maps the finding
+    to the acceptance evidence error type.
+    """
+
+    for payload in payloads.values():
+        reason = find_forbidden_material(payload, path_fragments=path_fragments)
+        if reason is not None:
+            raise _validation_error(
+                f"release acceptance evidence contains forbidden material ({reason})"
+            )
 
 
 def _read_error() -> BioPipeError:
