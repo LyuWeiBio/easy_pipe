@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.execution._fsutil import open_without_symlinks as _open_without_symlinks
-from biopipe.execution.models import ExecutionProfile
+from biopipe.execution.models import ApprovalSigner, ExecutionProfile
 
 _HEX_KEY = re.compile(rb"[0-9a-f]{64}\n?")
 _MAX_KEY_BYTES = 65
@@ -21,7 +21,7 @@ _MAX_KEY_BYTES = 65
 
 def sign_run_payload(
     profile: ExecutionProfile,
-    operation: Literal["submit", "resume", "abandon"],
+    operation: Literal["submit", "resume", "abandon", "deploy"],
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Return a copied request payload carrying one exact HMAC attestation.
@@ -48,7 +48,7 @@ def sign_run_payload(
 
 
 def canonical_attestation_bytes(
-    operation: Literal["submit", "resume", "abandon"], payload: dict[str, Any]
+    operation: Literal["submit", "resume", "abandon", "deploy"], payload: dict[str, Any]
 ) -> bytes:
     """Serialize the versioned envelope shared with the dependency-free agent."""
 
@@ -75,6 +75,16 @@ def validate_approval_key(profile: ExecutionProfile) -> None:
     """Fail closed while registering a profile whose local signer is unsafe."""
 
     _read_key(Path(profile.approval_signer.key_file), profile.approval_signer.key_id)
+
+
+def load_approval_key(signer: ApprovalSigner) -> bytes:
+    """Return the raw approval key bytes after the standard safety checks.
+
+    The same private-file checks used for run authorizations apply wherever
+    the controller attests to an artifact (run mutations, release evidence).
+    """
+
+    return _read_key(Path(signer.key_file), signer.key_id)
 
 
 def _read_key(path: Path, key_id: str) -> bytes:
@@ -117,4 +127,9 @@ def _signing_error(key_id: str) -> BioPipeError:
     )
 
 
-__all__ = ["canonical_attestation_bytes", "sign_run_payload", "validate_approval_key"]
+__all__ = [
+    "canonical_attestation_bytes",
+    "load_approval_key",
+    "sign_run_payload",
+    "validate_approval_key",
+]

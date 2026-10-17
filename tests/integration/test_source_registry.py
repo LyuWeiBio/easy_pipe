@@ -55,3 +55,19 @@ def test_source_registry_persists_strict_json_without_temp_files(tmp_path: Path)
     payload = json.loads(files[0].read_text(encoding="utf-8"))
     assert "password" not in payload
     assert "private_key" not in payload
+
+
+def test_registry_tightens_permissions_of_preexisting_directory(tmp_path: Path) -> None:
+    """P3 #32: an existing registry directory with loose perms is fixed to 0o700."""
+    import stat as stat_module
+
+    directory = tmp_path / "sources"
+    directory.mkdir(mode=0o755)
+    # Sanity: the directory is currently more permissive than 0o700
+    # (umask may have masked some bits, but group/other still have access).
+    assert stat_module.S_IMODE(directory.stat().st_mode) & 0o077
+
+    registry = SourceRegistry(directory)
+    registry.add(_profile("source-a", "/srv/raw-a"))
+
+    assert stat_module.S_IMODE(directory.stat().st_mode) == 0o700

@@ -125,3 +125,19 @@ def test_concurrent_append_once_creates_one_durable_event(
     lines = audit_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert AuditEvent.model_validate_json(lines[0]) == event
+
+
+def test_audit_rejects_root_path(
+    tmp_path: Path,
+    audit_event_factory: Callable[[str], AuditEvent],
+) -> None:
+    """P3 #38: the dead {'.','..'} branch is gone; not path.name still guards '/'."""
+    from biopipe.audit import AuditWriter
+
+    event = audit_event_factory("00000000-0000-0000-0000-000000000001")
+    log = AuditWriter(Path("/"))
+    with pytest.raises(BioPipeError) as caught:
+        log._append(event, once=True)
+    assert caught.value.code is ErrorCode.AUDIT_WRITE_FAILED
+    assert isinstance(caught.value.__cause__, OSError)
+    assert "audit filename is unsafe" in str(caught.value.__cause__)

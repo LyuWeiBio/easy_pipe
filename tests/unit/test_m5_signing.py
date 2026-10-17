@@ -99,3 +99,44 @@ def test_run_attestation_rejects_symlink_key(tmp_path: Path) -> None:
         sign_run_payload(_profile(linked), "submit", {"approval": {"approved": True}})
 
     assert exc_info.value.code is ErrorCode.APPROVAL_REQUIRED
+
+
+def test_deploy_attestation_is_signed_and_operation_bound(tmp_path: Path) -> None:
+    """M-C: deploy payloads carry a controller attestation like submit/resume/abandon."""
+    key_file = tmp_path / "approval.key"
+    key_file.write_text("9" * 64 + "\n", encoding="ascii")
+    key_file.chmod(0o600)
+    payload = {
+        "deployment_id": "deployment-1",
+        "preflight_id": "preflight-1",
+        "profile_id": "remote-local",
+        "profile_hash": "a" * 64,
+        "project_hash": "b" * 64,
+        "bundle_hash": "c" * 64,
+        "deployment_dir": "/remote/deploy/deployment-1",
+        "files": [{"path": "main.nf", "sha256": "d" * 64, "size": 12}],
+        "approval": {},
+    }
+
+    signed = sign_run_payload(_profile(key_file), "deploy", payload)
+
+    # The input is not mutated and the approval carries key_id + signature.
+    assert payload["approval"] == {}
+    assert signed["approval"]["key_id"] == "controller-1"
+    signature = signed["approval"]["signature"]
+    assert len(signature) == 64
+    unsigned = {
+        **signed,
+        "approval": {key: value for key, value in signed["approval"].items() if key != "signature"},
+    }
+    expected = hmac.new(
+        bytes.fromhex("9" * 64),
+        canonical_attestation_bytes("deploy", unsigned),
+        hashlib.sha256,
+    ).hexdigest()
+    assert signature == expected
+    # The attestation is bound to the operation: a deploy envelope is not a
+    # valid submit envelope and vice versa.
+    assert canonical_attestation_bytes("deploy", unsigned) != canonical_attestation_bytes(
+        "submit", unsigned
+    )

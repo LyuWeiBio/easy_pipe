@@ -50,6 +50,29 @@ def fail(error: BioPipeError) -> NoReturn:
     raise typer.Exit(code=ExitCode.COMMAND_FAILED)
 
 
+def fail_unexpected(error: BaseException, *, command: str) -> NoReturn:
+    """Emit the stable JSON envelope for a non-BioPipeError (no traceback).
+
+    Unexpected exceptions (bugs; KeyboardInterrupt and SystemExit are not
+    caught by callers) must never reach the CLI surface as a raw traceback:
+    they are reported as INTERNAL_ERROR carrying only the exception type,
+    never the message, so local paths or data that slipped into an exception
+    string cannot leak into machine-readable output.
+    """
+
+    wrapped = BioPipeError(
+        ErrorCode.INTERNAL_ERROR,
+        f"An unexpected {type(error).__name__} interrupted the '{command}' command.",
+        context={"exception_type": type(error).__name__},
+        remediation=[
+            "Re-run the command to see whether the failure reproduces.",
+            "Report this as a bug with the exception type above.",
+        ],
+    )
+    wrapped.__cause__ = error
+    fail(wrapped)
+
+
 def dry_run_result(
     command: str,
     status: str,
