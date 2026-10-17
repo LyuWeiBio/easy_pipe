@@ -1278,3 +1278,141 @@ def test_schema_export_dry_run_does_not_create_output(tmp_path: Path) -> None:
     payload = _assert_dry_run(result)
     assert payload["status"] == "would_export"
     assert not output.exists()
+
+
+def test_redacted_profile_dump_hides_approval_key_file(tmp_path: Path) -> None:
+    """P3 #26: the HMAC key file path must not appear in CLI output."""
+    from biopipe.cli.execution_profile import _redacted_profile_dump
+    from biopipe.execution.models import (
+        AllowedExecutionRoots,
+        ApprovalSigner,
+        ContainerArtifact,
+        ExecutionProfile,
+        LocalExecutionRuntime,
+    )
+
+    key_file = tmp_path / "approval.key"
+    key_file.write_text("9" * 64 + "\n", encoding="ascii")
+    profile = ExecutionProfile(
+        profile_id="redact-me",
+        source_host="source-a",
+        execution_host="source-a",
+        ssh_alias="source-a",
+        username="runner",
+        approval_signer=ApprovalSigner(key_id="controller-1", key_file=str(key_file)),
+        allowed_roots=AllowedExecutionRoots(
+            deploy=("/remote/deploy",),
+            work=("/remote/work",),
+            output=("/remote/results",),
+            cache=("/remote/cache",),
+        ),
+        runtime=LocalExecutionRuntime(container_engine="docker"),
+        containers={
+            "fastqc": ContainerArtifact(
+                image="quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0",
+                digest="sha256:" + "a" * 64,
+            )
+        },
+    )
+
+    dumped = _redacted_profile_dump(profile)
+
+    assert dumped["approval_signer"]["key_file"] == "<redacted>"
+    assert dumped["approval_signer"]["key_id"] == "controller-1"
+    assert str(key_file) not in json.dumps(dumped)
+    # The stored profile itself is untouched: redaction is output-only.
+    assert profile.approval_signer.key_file == str(key_file)
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--executor", "kubernetes"),
+        ("--executor", "LOCAL"),
+        ("--container-engine", "podman"),
+        ("--container-engine", "Docker"),
+    ],
+)
+def test_plan_rejects_unknown_executor_or_engine(
+    tmp_path: Path, option: str, value: str
+) -> None:
+    """P3 #24: --executor/--container-engine are validated up front."""
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    output = tmp_path / "planning" / "pipeline.spec.yaml"
+
+    result = runner.invoke(
+        app,
+        [
+            "plan",
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output),
+            option,
+            value,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.parametrize("name", ["../evil", "a/b", "", "name with spaces", "x" * 300])
+def test_manifest_apply_overrides_rejects_unsafe_name(
+    tmp_path: Path, name: str
+) -> None:
+    """P3 #28: --name is pre-validated with _SAFE_NAME, not just downstream."""
+    manifest_path = tmp_path / "manifest.json"
+    overrides_path = tmp_path / "overrides.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    overrides_path.write_text("{}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "manifest",
+            "apply-overrides",
+            str(manifest_path),
+            "--overrides",
+            str(overrides_path),
+            "--name",
+            name,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.parametrize(
+    "resume_id",
+    ["run-xyz", "run-ABCDEF1234567890ABCDEF1234567890", "../evil", ""],
+)
+def test_preflight_rejects_invalid_resume_run_id(
+    tmp_path: Path, resume_id: str
+) -> None:
+    """P3 #29: --resume run ID uses the same regex as run.py."""
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "preflight",
+            str(project),
+            "--execution-profile",
+            str(tmp_path / "profile.json"),
+            "--resume",
+            resume_id,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "VALIDATION_FAILED"

@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import PROTOCOL_VERSION
-from .commands import minimal_environment, run_to_logs
+from .commands import ProcessStuckError, minimal_environment, run_to_logs
 from .config import AgentConfig, verify_executable, verify_nextflow_jar
 from .deployment import verify_deployment
 from .errors import AgentFailure, ReturnCode
@@ -44,6 +44,10 @@ _ARTIFACT_KEYS = frozenset(
     }
 )
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
+# Freshness window for controller authorizations (submit/resume/abandon): an
+# authorization timestamp must fall within +/- this many seconds of the agent
+# clock.  Bounds replay of a captured signed payload.
+_APPROVAL_TIME_WINDOW_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -369,6 +373,7 @@ def _abandon(
         "deployment_id",
         "resume_run_id",
         "submitted_at",
+        "abandoned_at",
         "approval",
     }
     require_exact_fields(payload, required=required)
@@ -377,6 +382,22 @@ def _abandon(
         raise _schema("approval must be an object")
     require_exact_fields(approval, required={"key_id", "signature"})
     _verify_controller_attestation("abandon", payload, config)
+    abandoned_at = require_string(payload["abandoned_at"], "abandoned_at", maximum_bytes=64)
+    abandoned_time = int(_parse_utc_timestamp(abandoned_at).timestamp())
+    now = int(time.time())
+    if (
+        abandoned_time < now - _APPROVAL_TIME_WINDOW_SECONDS
+        or abandoned_time > now + _APPROVAL_TIME_WINDOW_SECONDS
+    ):
+        raise AgentFailure(
+            ReturnCode.APPROVAL_REQUIRED,
+            "APPROVAL_TIME_INVALID",
+            "abandonment authorization is outside the accepted 300s window",
+            remediation=[
+                "Re-issue the abandon command; abandon authorizations expire "
+                "300 seconds after signing and cannot be replayed."
+            ],
+        )
     run_id = require_identifier(payload["run_id"], "run_id")
     profile_id = require_identifier(payload["profile_id"], "profile_id")
     profile_hash = require_sha256(payload["profile_hash"], "profile_hash")
@@ -650,7 +671,10 @@ def _validate_run_bindings(
             "preflight does not bind the exact approved artifacts",
         )
     approved_time = int(_parse_utc_timestamp(request.approval["approved_at"]).timestamp())
-    if approved_time < issued_at - 300 or approved_time > now + 300:
+    if (
+        approved_time < issued_at - _APPROVAL_TIME_WINDOW_SECONDS
+        or approved_time > now + _APPROVAL_TIME_WINDOW_SECONDS
+    ):
         raise AgentFailure(
             ReturnCode.APPROVAL_REQUIRED,
             "APPROVAL_TIME_INVALID",
@@ -1174,6 +1198,24 @@ def _execute_run(
                 "updated_at": int(time.time()),
             }
             state.replace("runs", run_id, final)
+        except ProcessStuckError:
+            # The job survived SIGKILL and could not be reaped (stuck, e.g.
+            # D-state). Mark the run explicitly instead of leaving it
+            # "running" forever, then fall through to the finally below:
+            # the supervisor closes its own lease descriptor and exits, so
+            # the recovery path is not pinned by this supervisor.
+            with suppress(BaseException):
+                state.replace(
+                    "runs",
+                    run_id,
+                    {
+                        **running,
+                        "status": "failed",
+                        "return_code": int(ReturnCode.RUN_FAILED),
+                        "failure_code": "RUN_SUPERVISOR_STUCK",
+                        "updated_at": int(time.time()),
+                    },
+                )
         except BaseException:
             with suppress(BaseException):
                 state.replace(
