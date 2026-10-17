@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,8 @@ import stat
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any, TypeVar, cast
+from typing import Final, TypeVar, cast
+from uuid import NAMESPACE_URL, uuid5
 
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -17,10 +19,20 @@ from pydantic import BaseModel, ValidationError
 from biopipe._jsonutil import (
     UniqueSafeLoader as _UniqueSafeLoader,
 )
+from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
+    unique_object as _unique_json_object,
+)
 from biopipe._pathutil import paths_overlap as _paths_overlap
 from biopipe.artifacts import sha256_bytes as _sha256
+from biopipe.compiler.compiler import (
+    COMPILER_VERSION as _COMPILER_VERSION,
+)
 from biopipe.compiler.compiler import LATEST_TOKEN as _LATEST_TOKEN
-from biopipe.compiler.compiler import NextflowCompiler, _generation_fingerprint
+from biopipe.compiler.compiler import PATH_DATA_ARTIFACTS as _PATH_DATA_ARTIFACTS
+from biopipe.compiler.compiler import NextflowCompiler, _generation_fingerprint, _json_model
 from biopipe.errors import BioPipeError
 from biopipe.manifests.integrity import verify_manifest
 from biopipe.models import (
@@ -472,7 +484,11 @@ class StaticProjectValidator:
         try:
             text = payload.decode("utf-8")
             if artifact.endswith(".json"):
-                data = json.loads(text, object_pairs_hook=_unique_json_object)
+                data = json.loads(
+                    text,
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_reject_constant,
+                )
             else:
                 data = yaml.load(text, Loader=_UniqueSafeLoader)
             return model_type.model_validate(data)
@@ -685,13 +701,21 @@ class StaticProjectValidator:
             self._collector.add(FindingCode.CROSS_ARTIFACT_MISMATCH)
 
     def _validate_floating_versions(self, payloads: Mapping[str, bytes]) -> None:
-        relevant_suffixes = (".nf", ".config", ".yaml", ".yml")
+        relevant_suffixes = (".nf", ".config", ".yaml", ".yml", ".json", ".jsonl", ".csv", ".md")
         for artifact, payload in sorted(payloads.items()):
-            if artifact in _ALLOWED_REPORT_ARTIFACTS or not artifact.endswith(relevant_suffixes):
+            if (
+                artifact in _ALLOWED_REPORT_ARTIFACTS
+                or artifact in _PATH_DATA_ARTIFACTS
+                or not artifact.endswith(relevant_suffixes)
+            ):
                 continue
             try:
                 text = payload.decode("utf-8")
             except UnicodeError:
+                self._collector.add(
+                    FindingCode.ARTIFACT_UNREADABLE,
+                    artifact=artifact,
+                )
                 continue
             if _LATEST_TOKEN.search(text):
                 self._collector.add(
@@ -840,7 +864,13 @@ class StaticProjectValidator:
             if not lines or any(not line for line in lines):
                 raise ValueError("audit must contain complete non-empty JSONL events")
             events = [
-                AuditEvent.model_validate(json.loads(line, object_pairs_hook=_unique_json_object))
+                AuditEvent.model_validate(
+                    json.loads(
+                        line,
+                        object_pairs_hook=_unique_json_object,
+                        parse_constant=_reject_constant,
+                    )
+                )
                 for line in lines
             ]
             event = events[0]
@@ -865,6 +895,9 @@ class StaticProjectValidator:
         if metadata_invalid:
             self._collector.add(FindingCode.AUDIT_RECORD_INVALID, artifact=_AUDIT_ARTIFACT)
 
+        self._validate_generation_event_binding(event, registry)
+
+        seen_event_ids = {event.event_id}
         previous_timestamp = event.timestamp
         for runtime_event in events[1:]:
             if (
@@ -878,6 +911,14 @@ class StaticProjectValidator:
                 )
                 break
             previous_timestamp = runtime_event.timestamp
+            if runtime_event.event_id in seen_event_ids:
+                self._collector.add(
+                    FindingCode.AUDIT_RECORD_INVALID,
+                    artifact=_AUDIT_ARTIFACT,
+                )
+                break
+            seen_event_ids.add(runtime_event.event_id)
+            self._validate_runtime_event_hashes(event, runtime_event)
 
         if expected is not None:
             core = set(_CORE_ARTIFACTS)
@@ -885,9 +926,7 @@ class StaticProjectValidator:
                 name: _sha256(payloads[name]) for name in sorted(core) if name in payloads
             }
             if registry is not None:
-                expected_inputs["component.registry.json"] = _sha256(
-                    _json_model_bytes(registry.document)
-                )
+                expected_inputs["component.registry.json"] = _sha256(_json_model(registry.document))
             expected_outputs = {
                 name: _sha256(payloads[name])
                 for name in sorted(set(expected) - core - {_AUDIT_ARTIFACT})
@@ -898,6 +937,84 @@ class StaticProjectValidator:
                     FindingCode.GENERATED_HASH_MISMATCH,
                     artifact=_AUDIT_ARTIFACT,
                 )
+
+    def _validate_generation_event_binding(
+        self,
+        event: AuditEvent,
+        registry: ComponentRegistry | None,
+    ) -> None:
+        """Recompute the generation fingerprint and compare with the event_id.
+
+        The PIPELINE_GENERATED event_id is uuid5(NAMESPACE_URL,
+        "easy-pipe/compiler/v1/{fingerprint}"); recomputing the fingerprint
+        from the event's own claimed artifact hashes binds the event to the
+        exact artifact set. A mismatch means the audit record was forged or
+        corrupted after generation. Mirrors
+        ``biopipe.compiler.compiler._generation_fingerprint``; the canonical
+        implementation lives there.
+        """
+
+        if registry is None:
+            return
+        claimed = {**event.input_hashes, **event.output_hashes}
+        registry_hash = claimed.pop("component.registry.json", None)
+        if registry_hash is None:
+            self._collector.add(FindingCode.AUDIT_RECORD_INVALID, artifact=_AUDIT_ARTIFACT)
+            return
+        if _sha256(_json_model(registry.document)) != registry_hash:
+            # A different registry than the generation-time one: the binding
+            # cannot be verified, so skip rather than false-positive.
+            return
+        digest = hashlib.sha256()
+        digest.update(
+            f"compiler/{_COMPILER_VERSION}\x00registry/{registry.version}\x00".encode()
+        )
+        digest.update(registry_hash.encode("ascii"))
+        digest.update(b"\x00")
+        for name, artifact_hash in sorted(claimed.items()):
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\x00")
+            digest.update(artifact_hash.encode("ascii"))
+            digest.update(b"\x00")
+        expected_event_id = uuid5(
+            NAMESPACE_URL, f"easy-pipe/compiler/v1/{digest.hexdigest()}"
+        )
+        if event.event_id != expected_event_id:
+            self._collector.add(FindingCode.AUDIT_RECORD_INVALID, artifact=_AUDIT_ARTIFACT)
+
+    # Runtime audit events carry approval-time artifact hashes under logical
+    # names; these must agree with the generation event's file-name hashes.
+    _RUNTIME_HASH_ALIASES: Final[dict[str, str]] = {
+        "dataset_manifest": "dataset.manifest.resolved.json",
+        "pipeline_spec": "pipeline.spec.yaml",
+        "execution_plan": "execution.plan.yaml",
+        "software_lock": "software.lock.yaml",
+    }
+
+    def _validate_runtime_event_hashes(
+        self,
+        generation_event: AuditEvent,
+        runtime_event: AuditEvent,
+    ) -> None:
+        """Verify a runtime event's content hashes against the generation event.
+
+        A runtime event that references different core artifacts than the ones
+        the pipeline was generated from indicates audit-log tampering (or a
+        log mixed across projects); only aliases with a known file mapping
+        are checked.
+        """
+
+        for logical_name, file_name in self._RUNTIME_HASH_ALIASES.items():
+            runtime_hash = runtime_event.input_hashes.get(logical_name)
+            if runtime_hash is None:
+                continue
+            expected_hash = generation_event.input_hashes.get(file_name)
+            if expected_hash is not None and runtime_hash != expected_hash:
+                self._collector.add(
+                    FindingCode.AUDIT_RECORD_INVALID,
+                    artifact=_AUDIT_ARTIFACT,
+                )
+                return
 
     def _report(
         self,
@@ -955,15 +1072,6 @@ def validate_generated_project(
     ).validate()
 
 
-def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
-
-
 def _parent_directories(files: set[str]) -> set[str]:
     directories: set[str] = set()
     for artifact in files:
@@ -972,20 +1080,6 @@ def _parent_directories(files: set[str]) -> set[str]:
             directories.add(parent.as_posix())
             parent = parent.parent
     return directories
-
-
-def _json_model_bytes(model: BaseModel) -> bytes:
-    data: Any = model.model_dump(mode="json", exclude_none=False)
-    return (
-        json.dumps(
-            data,
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
 
 
 __all__ = ["StaticProjectValidator", "validate_generated_project"]

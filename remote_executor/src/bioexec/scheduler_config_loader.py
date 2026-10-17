@@ -380,6 +380,42 @@ def verify_scheduler_executable(config: TrustedSchedulerConfig, role: Executable
             os.close(descriptor)
 
 
+def open_verified_scheduler_executable(config: TrustedSchedulerConfig, role: ExecutableRole) -> int:
+    """Open one fixed executable and return the verified open descriptor.
+
+    This performs the same checks as verify_scheduler_executable, but the
+    descriptor is returned open instead of closed: the caller must execute
+    the exact bytes that were hashed via the descriptor (``/proc/self/fd/N``,
+    the fexecve equivalent) so a path swap after verification cannot race
+    the exec. The caller takes ownership and must close the descriptor.
+    """
+    if not isinstance(config, TrustedSchedulerConfig) or role not in _EXECUTABLE_ROLES:
+        raise SchedulerConfigLoadError("trusted fixed executable role is required")
+    binding = config.executables[role]
+    descriptor = -1
+    try:
+        descriptor, metadata = _open_trusted_regular(binding.path)
+        _require_executable(metadata)
+        _require_same_file(binding, metadata)
+        observed, after = _sha256_stable_descriptor(
+            descriptor,
+            metadata,
+            MAX_EXECUTABLE_BYTES,
+        )
+        _require_same_file(binding, after)
+        if binding.sha256 is None or observed != binding.sha256:
+            raise SchedulerConfigLoadError("configured executable hash changed after startup")
+        verified, descriptor = descriptor, -1
+        return verified
+    except SchedulerConfigLoadError:
+        raise
+    except OSError as exc:
+        raise SchedulerConfigLoadError("configured executable changed after startup") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def verify_scheduler_nextflow_jar(config: TrustedSchedulerConfig) -> None:
     """Re-open and fully hash the bounded pinned Nextflow JAR."""
 
@@ -951,6 +987,7 @@ __all__ = [
     "TrustedFileBinding",
     "TrustedSchedulerConfig",
     "load_trusted_scheduler_config",
+    "open_verified_scheduler_executable",
     "scheduler_config_binding_matches",
     "verify_scheduler_config_file",
     "verify_scheduler_executable",
