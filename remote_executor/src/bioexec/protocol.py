@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from dataclasses import dataclass
 from typing import Any, cast
@@ -231,7 +230,7 @@ def _reject_excessive_nesting(text: str) -> None:
             depth -= 1
             if depth < 0:
                 raise ValueError("JSON delimiters are unbalanced")
-    if not math.isfinite(float(depth)) or depth != 0 or in_string:
+    if depth != 0 or in_string:
         raise ValueError("JSON structure is incomplete")
 
 

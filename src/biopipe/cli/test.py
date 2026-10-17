@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from biopipe.cli.common import ExitCode, dry_run_result, emit, fail
+from biopipe.cli.common import ExitCode, dry_run_result, emit, fail, fail_unexpected
 from biopipe.cli.reports import reportable_project_root, write_project_report_atomic
 from biopipe.cli.validate import (
     _default_fixture_root,
@@ -115,6 +115,8 @@ def test_command(
             )
         except BioPipeError as error:
             fail(error)
+        except Exception as error:
+            fail_unexpected(error, command="test")
 
     result = _persist_if_possible(project_directory, _test_result(static_report, runs))
     emit(result, as_json=as_json)
@@ -130,34 +132,35 @@ def _run_synthetic_tests(
     output_limit_bytes: int,
 ) -> list[WorkflowTestReport]:
     try:
-        with tempfile.TemporaryDirectory(prefix="biopipe-m4-test-") as temporary:
-            runtime_parent = Path(temporary)
-            runner = WorkflowTestRunner()
-            stub = runner.stub_run(
-                project_directory,
-                fixture_root=fixture_root,
-                runtime_directory=runtime_parent / "stub",
-                timeout_seconds=timeout_seconds,
-                output_limit_bytes=output_limit_bytes,
-            )
-            runs = [stub]
-            if stub.status in {WorkflowTestStatus.PASSED, WorkflowTestStatus.DEGRADED}:
-                runs.append(
-                    runner.e2e_run(
-                        project_directory,
-                        fixture_root=fixture_root,
-                        runtime_directory=runtime_parent / "e2e",
-                        timeout_seconds=timeout_seconds,
-                        output_limit_bytes=output_limit_bytes,
-                    )
-                )
-            return runs
+        temporary = tempfile.TemporaryDirectory(prefix="biopipe-m4-test-")
     except OSError as exc:
         raise BioPipeError(
             ErrorCode.ARTIFACT_WRITE_FAILED,
             "An isolated synthetic-test runtime could not be created.",
             remediation=["Check local temporary-directory permissions and retry."],
         ) from exc
+    with temporary:
+        runtime_parent = Path(temporary.name)
+        runner = WorkflowTestRunner()
+        stub = runner.stub_run(
+            project_directory,
+            fixture_root=fixture_root,
+            runtime_directory=runtime_parent / "stub",
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+        )
+        runs = [stub]
+        if stub.status in {WorkflowTestStatus.PASSED, WorkflowTestStatus.DEGRADED}:
+            runs.append(
+                runner.e2e_run(
+                    project_directory,
+                    fixture_root=fixture_root,
+                    runtime_directory=runtime_parent / "e2e",
+                    timeout_seconds=timeout_seconds,
+                    output_limit_bytes=output_limit_bytes,
+                )
+            )
+        return runs
 
 
 def _test_result(

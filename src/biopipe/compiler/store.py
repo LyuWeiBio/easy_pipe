@@ -10,8 +10,9 @@ import tempfile
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import Any, Final
 
+from biopipe._pathutil import ensure_private_directory
 from biopipe.errors import BioPipeError, ErrorCode
 
 _MAX_FILE_BYTES: Final[int] = 16 * 1024 * 1024
@@ -42,7 +43,7 @@ class ProjectBundleStore:
         staged_root: Path | None = None
         active_path = "<bundle>"
         try:
-            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            ensure_private_directory(parent)
             self._reject_existing_destination()
             staged_root = Path(
                 tempfile.mkdtemp(
@@ -128,7 +129,7 @@ class ProjectBundleStore:
     def _stage(root: Path, artifacts: list[tuple[str, bytes]]) -> None:
         for relative, payload in artifacts:
             destination = root / relative
-            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            ensure_private_directory(destination.parent)
             descriptor = os.open(
                 destination,
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
@@ -153,7 +154,7 @@ class ProjectBundleStore:
         source_bytes = os.fsencode(source)
         destination_bytes = os.fsencode(destination)
         library = ctypes.CDLL(None, use_errno=True)
-        function: object | None
+        function: Any | None
         arguments: tuple[object, ...]
         if sys.platform.startswith("linux"):
             function = getattr(library, "renameat2", None)
@@ -164,9 +165,23 @@ class ProjectBundleStore:
                 destination_bytes,
                 _RENAME_NOREPLACE,
             )
+            if function is not None:
+                function.argtypes = (
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_uint,
+                )
         elif sys.platform == "darwin":
             function = getattr(library, "renamex_np", None)
             arguments = (source_bytes, destination_bytes, _RENAME_EXCL)
+            if function is not None:
+                function.argtypes = (
+                    ctypes.c_char_p,
+                    ctypes.c_char_p,
+                    ctypes.c_uint,
+                )
         elif os.name == "nt":
             os.rename(source, destination)
             return

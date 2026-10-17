@@ -9,7 +9,7 @@ from typing import Literal
 
 import typer
 
-from biopipe.cli.common import ExitCode, dry_run_result, emit, fail
+from biopipe.cli.common import ExitCode, dry_run_result, emit, fail, fail_unexpected
 from biopipe.cli.reports import reportable_project_root, write_project_report_atomic
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.io import read_model
@@ -96,6 +96,8 @@ def validate_command(
             )
         except BioPipeError as error:
             fail(error)
+        except Exception as error:
+            fail_unexpected(error, command="validate")
 
     result = _persist_if_possible(
         project_directory,
@@ -115,20 +117,21 @@ def _run_runtime_validation(
     output_limit_bytes: int,
 ) -> WorkflowTestReport:
     try:
-        with tempfile.TemporaryDirectory(prefix="biopipe-m4-validate-") as temporary:
-            return WorkflowTestRunner().validate(
-                project_directory,
-                fixture_root=fixture_root,
-                runtime_directory=Path(temporary) / "runtime",
-                timeout_seconds=timeout_seconds,
-                output_limit_bytes=output_limit_bytes,
-            )
+        temporary = tempfile.TemporaryDirectory(prefix="biopipe-m4-validate-")
     except OSError as exc:
         raise BioPipeError(
             ErrorCode.ARTIFACT_WRITE_FAILED,
             "An isolated validation runtime could not be created.",
             remediation=["Check local temporary-directory permissions and retry."],
         ) from exc
+    with temporary:
+        return WorkflowTestRunner().validate(
+            project_directory,
+            fixture_root=fixture_root,
+            runtime_directory=Path(temporary.name) / "runtime",
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+        )
 
 
 def _project_layout(project_directory: Path) -> Literal["single_end", "paired_end"]:

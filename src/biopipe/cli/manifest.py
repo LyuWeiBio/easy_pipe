@@ -8,7 +8,7 @@ import typer
 from pydantic import BaseModel
 
 from biopipe.cli.common import dry_run_result, emit, fail
-from biopipe.errors import BioPipeError
+from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.io import read_model
 from biopipe.manifests import (
     ManifestArtifactStore,
@@ -17,6 +17,7 @@ from biopipe.manifests import (
     require_valid_manifest,
     sanitize_manifest,
 )
+from biopipe.manifests.store import _SAFE_NAME
 from biopipe.models import DatasetManifest, ManifestOverrides
 
 manifest_app = typer.Typer(help="Inspect and resolve dataset manifests.", no_args_is_help=True)
@@ -81,6 +82,13 @@ def manifest_apply_overrides(
     """Apply an attributable override without modifying the original manifest."""
 
     try:
+        if not _SAFE_NAME.fullmatch(name):
+            raise BioPipeError(
+                ErrorCode.VALIDATION_FAILED,
+                "The --name value is not a safe artifact name.",
+                context={"name": name},
+                remediation=["Use letters, numbers, dot, underscore, or hyphen."],
+            )
         original = require_valid_manifest(read_model(manifest_path, DatasetManifest))
         overrides = read_model(overrides_path, ManifestOverrides)
         application = apply_overrides(original, overrides)

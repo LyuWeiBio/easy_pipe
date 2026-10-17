@@ -16,8 +16,12 @@ from typing import Final, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from biopipe._jsonutil import (
+    reject_constant as _reject_constant,
+)
+from biopipe._jsonutil import (
     unique_object as _unique_object,
 )
+from biopipe._pathutil import ensure_private_directory
 from biopipe.errors import BioPipeError, ErrorCode
 from biopipe.models import DatasetManifest, ManifestOverrides
 
@@ -162,7 +166,11 @@ class ManifestArtifactStore:
                 raw = stream.read(_MAX_ARTIFACT_BYTES + 1)
             if len(raw) > _MAX_ARTIFACT_BYTES:
                 raise OSError(errno.EFBIG, "manifest artifact is too large")
-            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+            data = json.loads(
+                raw.decode("utf-8"),
+                object_pairs_hook=_unique_object,
+                parse_constant=_reject_constant,
+            )
             return model_type.model_validate(data)
         except (OSError, UnicodeError, ValueError, TypeError, ValidationError) as exc:
             error_number = exc.errno if isinstance(exc, OSError) else None
@@ -173,7 +181,7 @@ class ManifestArtifactStore:
 
     def _ensure_directory(self) -> None:
         try:
-            self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            ensure_private_directory(self._directory)
             if not stat.S_ISDIR(self._directory.lstat().st_mode):
                 raise NotADirectoryError(errno.ENOTDIR, "manifest store is not a directory")
         except OSError as exc:

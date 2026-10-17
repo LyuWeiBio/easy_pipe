@@ -176,3 +176,56 @@ def test_scandir_child_swap_to_symlink_is_rejected(
     assert response["success"] is False
     assert response["return_code"] == ReturnCode.SYMLINK_OR_ESCAPE
     assert b"must-not-appear" not in encode_response_line(response)
+
+
+def test_config_parent_symlink_is_rejected_by_trusted_walk(tmp_path: Path) -> None:
+    """P3 #22: the trusted parent walk refuses symlinked parent directories."""
+    root = tmp_path / "allowed"
+    root.mkdir()
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    config_path = real_dir / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "allowed_roots": [str(root)],
+                "follow_symlinks": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    linked_dir = tmp_path / "linked-dir"
+    linked_dir.symlink_to(real_dir)
+
+    with pytest.raises(ProbeFailure) as captured:
+        load_config(linked_dir / "config.json")
+
+    assert captured.value.code == "CONFIG_INVALID"
+
+
+def test_config_parent_with_unsafe_permissions_is_rejected(tmp_path: Path) -> None:
+    """P3 #22: the trusted parent walk refuses group/world-writable parents."""
+    root = tmp_path / "allowed"
+    root.mkdir()
+    loose_dir = tmp_path / "loose"
+    loose_dir.mkdir()
+    config_path = loose_dir / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "allowed_roots": [str(root)],
+                "follow_symlinks": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+    loose_dir.chmod(0o777)
+
+    with pytest.raises(ProbeFailure) as captured:
+        load_config(loose_dir / "config.json")
+
+    assert captured.value.code == "CONFIG_INVALID"
