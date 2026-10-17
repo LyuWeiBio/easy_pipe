@@ -44,8 +44,8 @@ from .scheduler_config_loader import (
     SchedulerConfigLoadError,
     TrustedDirectoryBinding,
     TrustedSchedulerConfig,
+    open_verified_scheduler_executable,
     verify_scheduler_config_file,
-    verify_scheduler_executable,
     verify_scheduler_root,
 )
 from .scheduler_preflight import (
@@ -883,6 +883,22 @@ def _root_binding(
         raise SchedulerRunnerContractError("scheduler root check is invalid") from exc
 
 
+def _proc_fd_exec_path(descriptor: int) -> str:
+    """Return the path that executes an already-open descriptor.
+
+    Linux-specific by deployment contract (non-POSIX is rejected in
+    _execute_invocation): execve("/proc/self/fd/N") re-resolves to the same
+    open file description — the exact bytes that were hashed — instead of
+    re-resolving the filesystem path. This is the fexecve-equivalent
+    descriptor-backed exec: verification and execution operate on the same
+    fd, so no TOCTOU window exists between them. The descriptor must be
+    kept open across the spawn (pass_fds).
+    """
+    if not isinstance(descriptor, int) or descriptor < 0:
+        raise SchedulerRunnerContractError("descriptor exec requires an open descriptor")
+    return f"/proc/self/fd/{descriptor}"
+
+
 def _execute_invocation(
     config: TrustedSchedulerConfig,
     invocation: _Invocation,
@@ -896,7 +912,13 @@ def _execute_invocation(
         for role, index in invocation.root_checks:
             verify_scheduler_root(config, role, index)
             _require_pre_start_time(invocation)
-        verify_scheduler_executable(config, invocation.role)
+        # Descriptor-backed exec (Linux-specific by deployment contract; see
+        # ADR-0006 section 4). The executable is opened O_NOFOLLOW and
+        # hash-verified, and the SAME descriptor is executed via
+        # /proc/self/fd/N (the fexecve equivalent), so a path swap after
+        # verification cannot race the exec. The parent's descriptor copy is
+        # closed after the spawn below; the child keeps its own via pass_fds.
+        executable_fd = open_verified_scheduler_executable(config, invocation.role)
         _require_pre_start_time(invocation)
     except SchedulerConfigLoadError:
         raise SchedulerRunnerPreconditionError(
@@ -908,7 +930,7 @@ def _execute_invocation(
     process: subprocess.Popen[bytes]
     try:
         process = subprocess.Popen(
-            list(invocation.argv),
+            [_proc_fd_exec_path(executable_fd), *invocation.argv[1:]],
             stdin=subprocess.PIPE if invocation.stdin_bytes is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -918,6 +940,7 @@ def _execute_invocation(
             text=False,
             bufsize=0,
             close_fds=True,
+            pass_fds=(executable_fd,),
             start_new_session=True,
             umask=0o077,
         )
@@ -936,6 +959,11 @@ def _execute_invocation(
                 reason_code="SCHEDULER_MUTATION_START_UNCERTAIN",
             ) from None
         raise
+    finally:
+        # The child inherited its own copy via pass_fds; the parent's copy
+        # must not leak. This also runs when Popen itself raises, so the
+        # verified descriptor is never left open on a failed start.
+        os.close(executable_fd)
 
     try:
         return _communicate_bounded(process, invocation, io_state)
